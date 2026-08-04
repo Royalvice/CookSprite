@@ -14,7 +14,14 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from .tool import Tool, ToolRegistry, RunContext
-from .schema import WorkflowSpec, topo_order, validate_workflow
+from .schema import (
+    TaskSpec,
+    WorkflowSpec,
+    topo_order,
+    topo_order_task,
+    validate_task,
+    validate_workflow,
+)
 from .types import Artifact
 
 
@@ -46,9 +53,10 @@ class _Ctx(RunContext):
 
 
 def resolve_params(
-    spec: WorkflowSpec, overrides: dict[str, Any], config_defaults: dict[str, Any]
+    spec: WorkflowSpec | TaskSpec, overrides: dict[str, Any], config_defaults: dict[str, Any]
 ) -> dict[str, Any]:
-    """Workflow params, layered: schema default < workspace config < caller."""
+    """Params, layered: schema default < workspace config < caller. Works for a
+    workflow or a task (both declare `.params`)."""
     resolved: dict[str, Any] = {}
     for name, decl in spec.params.items():
         if name in overrides:
@@ -83,11 +91,16 @@ def run_workflow(
     client: InferenceClient,
     *,
     params: dict[str, Any] | None = None,
+    inputs: dict[str, Artifact] | None = None,
     config_defaults: dict[str, Any] | None = None,
     on_progress: ProgressFn | None = None,
 ) -> Artifact:
     validate_workflow(spec, registry)
     wf_params = resolve_params(spec, params or {}, config_defaults or {})
+    ext_inputs = inputs or {}
+    missing = [name for name in spec.inputs if name not in ext_inputs]
+    if missing:
+        raise KeyError(f"workflow {spec.id}: missing external inputs {missing}")
     report: ProgressFn = on_progress or (lambda f, m: None)
 
     order = topo_order(spec)
@@ -99,11 +112,14 @@ def run_workflow(
         node = node_by_id[nid]
         comp: Tool = registry.get(node.tool)
 
-        # Gather typed inputs from upstream node outputs.
+        # Gather typed inputs: `$in.<name>` = external input, else upstream output.
         node_inputs: dict[str, Artifact] = {}
         for port_name, ref in node.inputs.items():
-            up_id, up_port = ref.split(".", 1)
-            node_inputs[port_name] = outputs[up_id][up_port]
+            if ref.startswith("$in."):
+                node_inputs[port_name] = ext_inputs[ref[len("$in."):]]
+            else:
+                up_id, up_port = ref.split(".", 1)
+                node_inputs[port_name] = outputs[up_id][up_port]
 
         node_params = _substitute(node.params, wf_params)
 
@@ -118,3 +134,54 @@ def run_workflow(
         outputs[nid] = result
 
     return outputs[spec.output_node][spec.output_port]
+
+
+def run_task(
+    task: TaskSpec,
+    workflows: dict[str, WorkflowSpec],
+    registry: ToolRegistry,
+    client: InferenceClient,
+    *,
+    params: dict[str, Any] | None = None,
+    choices: dict[str, str] | None = None,
+    config_defaults: dict[str, Any] | None = None,
+    on_progress: ProgressFn | None = None,
+) -> Artifact:
+    """Run a task: execute each workflow-node in dependency order, wiring one
+    node's workflow output into a downstream node's declared input. `choices`
+    picks a non-default candidate per node id."""
+    validate_task(task, workflows, registry)
+    task_params = resolve_params(task, params or {}, config_defaults or {})
+    picks = choices or {}
+    report: ProgressFn = on_progress or (lambda f, m: None)
+
+    order = topo_order_task(task)
+    node_by_id = {n.id: n for n in task.nodes}
+    node_output: dict[str, Artifact] = {}
+
+    total = len(order)
+    for idx, nid in enumerate(order):
+        node = node_by_id[nid]
+        wf_id = picks.get(nid, node.workflow)
+        if wf_id not in node.candidates:
+            raise KeyError(f"task node {nid}: '{wf_id}' is not a candidate")
+        wf = workflows[wf_id]
+
+        # Feed upstream workflow outputs into this workflow's external inputs.
+        wf_inputs = {name: node_output[up_id] for name, up_id in node.inputs.items()}
+        # Task params flow down to workflow params by name.
+        wf_pass = {k: v for k, v in task_params.items()}
+        wf_pass.update(_substitute(node.params, task_params))
+
+        base, span = idx / total, 1.0 / total
+        node_output[nid] = run_workflow(
+            wf,
+            registry,
+            client,
+            params=wf_pass,
+            inputs=wf_inputs,
+            config_defaults=config_defaults,
+            on_progress=lambda f, m, b=base, s=span: report(b + s * f, m),
+        )
+
+    return node_output[task.output]

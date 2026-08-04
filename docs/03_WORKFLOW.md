@@ -25,25 +25,27 @@ Port typing is exact-match today (a `"any"` port opts out). Subtyping and
 union ports are a deliberate non-feature until a real cross-type tool needs
 them — see `.agent-os/change-decisions.md` CD-026.
 
-## Authoring vs using
+## Tasks
 
-- **Authoring** (developers/agents): wire tools into a graph. Connections
-  are explicit and exported by default.
-- **Using** (humans): the web toolbox never shows the graph. You pick a
-  capability, optionally pick a non-default workflow by name, set exposed
+A **task** is a DAG of workflow-nodes. Each node has a `candidates` list of
+workflows (`candidates[0]` is the default); callers select a non-default
+candidate by name. Node outputs wire into downstream workflow declared
+`inputs`. Example — `single_sprite`:
+
+```
+gen (generate_image) ──► spr (spritify)
+```
+
+`spr` is wired `inputs: {src: gen}`, feeding `gen`'s image output into
+`spritify`'s declared `$in.src` input.
+
+## Authoring
+
+- **Authoring** (developers/agents): wire tools into a workflow graph, wire
+  workflows into a task. Connections are explicit.
+- **Using** (humans): the web toolbox never shows the graph. Pick a task,
+  optionally pick a non-default workflow candidate per node, set exposed
   params, and run.
-
-## Capabilities and routes
-
-A **capability** is the intent (e.g. `single_sprite`, `character_8dir`). It maps
-to one or more named workflows; exactly one is the default. Example, for
-`character_8dir`:
-
-- `turntable_video` — img2vid turntable → frame_extract → pixelize → pack
-- `sheet_crop` — text2img one sheet → crop into 8 → pixel_perfect
-- `batch_ref` — reference img → batch text2img 8 → normal_estimate → pack
-
-Callers select by name; otherwise the default runs.
 
 ## Running
 

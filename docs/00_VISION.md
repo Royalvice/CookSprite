@@ -18,7 +18,7 @@ detailed hand-pixeling round-trips to a dedicated editor via PNG sheets.
 
 - **Agents** — call it fastest, through a CLI + skill. This is the primary
   audience; there is one obvious way to do each thing.
-- **Humans** — a web toolbox: pick a capability, run, preview, light-edit.
+- **Humans** — a web toolbox: pick a task, run, preview, light-edit.
   Never author node graphs.
 - **Contributors** — add a model adapter or a workflow without touching the
   other layers.
@@ -28,7 +28,7 @@ detailed hand-pixeling round-trips to a dedicated editor via PNG sheets.
 - **Lowest usage burden wins.** Every choice is judged by mental load.
 - **Fully general.** No downstream project's assumptions are baked in — canvas
   size, direction count, frame rate, and naming are all config.
-- **Simply First.** One default route per capability, explicit errors, no
+- **Simply First.** One default workflow per task, explicit errors, no
   silent fallbacks or hidden second implementations.
 
 ## Non-goals

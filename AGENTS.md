@@ -8,7 +8,7 @@ CookSprite is a general, open-source tool for producing 2D **sprites** with AI.
 **Lowest usage burden wins.** Design for three audiences, in this priority:
 
 1. **Agents** call it — fast, scriptable, one obvious way to do a thing.
-2. **Humans** use the web toolbox — pick a capability, run, preview, light-edit.
+2. **Humans** use the web toolbox — pick a task, run, preview, light-edit.
    Never author node graphs.
 3. **Contributors** extend it — add a model adapter or a workflow without
    touching the other layers.
@@ -53,31 +53,37 @@ knowing. ComfyUI is **not** a dependency — see the ComfyUI section.
 
 ## The Three Abstractions (the core mental model)
 
+Two composition layers, same DAG shape. A **task** is a DAG of workflow-nodes;
+a **workflow** is a DAG of tool-nodes. Neither nests into itself.
+
 ```text
-Capability  — a semantic intent, e.g. "generate an 8-direction character".
-  └── Workflow — one minimal end-to-end route that satisfies a task; a
-        capability may have many workflows (only one is default).
-        · route A: video model turntable → extract frames
-        · route B: image model → one sheet → crop into N
-        · route C: 1 reference image → batch-infer N frames
-        └── Tool — the smallest unit that satisfies one minimal function,
-              with a typed input/output port (ComfyUI-like). Composed by
-              developers/agents into a graph; the frontend NEVER exposes
-              topology to humans. Every tool has a `kind`:
-              ├── kind="inference"     — calls /infer (text2img, img2img,
-              │     img2vid, frame-extract, upscale …). Each such tool names a
-              │     model op that MANY model_ids can serve behind /infer.
-              └── kind="deterministic" — a local, model-free step
-                    (pixelize, crop, center-align, normal-estimate, pack-sheet …).
+Task  — a user-facing goal, e.g. "reference image → a full sprite animation
+  │      pack". A DAG of workflow-nodes; the unit a frontend triggers. A simple
+  │      goal (text→image) mounts ONE workflow; a big one mounts MANY.
+  └── node — one slot in the task. Runs exactly one Workflow, chosen from
+        │     `candidates` ([0] is the default; callers may pick another).
+        │     Nodes wire one workflow's output into another's declared input.
+        └── Workflow — one minimal end-to-end route; a FLAT graph of tools
+              │        (never contains another workflow). May declare external
+              │        `inputs` a task feeds via `$in.<name>`. Reusable across
+              │        tasks and across nodes.
+              └── Tool — the smallest unit that satisfies one minimal function,
+                    with a typed input/output port (ComfyUI-like). Every tool
+                    has a `kind`:
+                    ├── kind="inference"     — calls /infer (text2img, img2img,
+                    │     img2vid, upscale …). Names a model op that MANY
+                    │     model_ids can serve behind /infer.
+                    └── kind="deterministic" — a local, model-free step
+                          (pixelize, crop, center-align, normal-estimate …).
 ```
 
-Key decoupling: a **Capability** is independent of *which model* or *which
-route* fulfills it. Same "8-direction" capability, multiple workflows, each
-inference tool selectable across multiple model_ids.
+Key decoupling: a **task** is independent of *which model* or *which route*
+fulfills each step. A workflow is task-independent and reusable; the model
+choice is a param on each inference tool.
 
-**Route selection:** every workflow has a name; exactly one is marked default
-per capability. Humans and agents may explicitly pick another by name. No
-hidden auto-ranking.
+**Candidate selection:** each task node lists one or more workflow candidates;
+`candidates[0]` is the default. Humans and agents may pick another candidate by
+node. No hidden auto-ranking.
 
 **Typed I/O:** tools declare typed inputs/outputs (Image, ImageBatch,
 SpriteSheet, FrameSeq, Mask, NormalMap, Palette, …) so they compose safely.

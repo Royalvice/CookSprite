@@ -1,29 +1,45 @@
-"""Declarative workflow schema: parse + validate a YAML workflow into a graph.
+"""Declarative schema for the two composition layers.
 
-A workflow YAML looks like:
+A **workflow** is a flat DAG of tool-nodes — one minimal end-to-end route. It
+never contains another workflow. It may declare external artifact `inputs` so a
+task can feed it upstream results:
 
-    id: single_sprite
-    capability: single_sprite
-    default: true
-    description: One prompt -> a single sprite pair.
-    params:                      # workflow-level params, exposed to callers
-      prompt:   { type: string, default: "" }
-      width:    { type: int,    default: 512 }
-      pixelize: { type: bool,   default: true }
-      normal:   { type: bool,   default: true }
+    id: spritify
+    description: clean a raw image into a sprite pair.
+    inputs:                      # external artifact ports, by kind
+      src: image
+    params:
+      target: { type: int, default: 64 }
     nodes:
-      - id: gen
-        tool: text2img
-        params: { prompt: ${prompt}, width: ${width}, height: ${width} }
       - id: px
         tool: pixelize
-        inputs: { image: gen.image }
-        params: { target_width: 64, target_height: 64 }
-      ...
+        inputs: { image: $in.src }        # $in.<name> = a workflow input
+        params: { target_width: ${target}, target_height: ${target} }
+      - id: pair
+        tool: make_sprite_pair
+        inputs: { diffuse: px.image }     # node.port = an upstream node output
     output: pair.pair            # node_id.port that is the workflow result
 
-Connections are `node_id.port` strings. `${param}` references a workflow param.
-Topology is authored here (by devs/agents), never by end users.
+A **task** is a DAG of workflow-nodes — the unit a frontend triggers. Any goal
+that needs two or more workflows is a task; a simple one mounts a single
+workflow. Each node runs one workflow chosen from `candidates` (default first),
+and nodes wire one workflow's output into another's input:
+
+    id: single_sprite
+    description: one prompt -> a finished sprite pair.
+    params:
+      prompt: { type: string, default: "" }
+    nodes:
+      - id: gen
+        workflow: generate_image          # the chosen (default) workflow
+        params: { prompt: ${prompt} }     # task param -> workflow param
+      - id: spr
+        workflow: spritify
+        inputs: { src: gen }              # feed node `gen`'s output into `src`
+    output: spr                  # task result = a node's workflow output
+
+`${param}` references a param of the enclosing spec. Topology is authored here
+(by devs/agents), never by end users.
 """
 
 from __future__ import annotations
@@ -40,18 +56,17 @@ from .tool import ToolRegistry
 class NodeSpec:
     id: str
     tool: str
-    inputs: dict[str, str] = field(default_factory=dict)  # port -> "node.port"
+    inputs: dict[str, str] = field(default_factory=dict)  # port -> "node.port" | "$in.name"
     params: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class WorkflowSpec:
     id: str
-    capability: str
     nodes: list[NodeSpec]
     output: str  # "node_id.port"
+    inputs: dict[str, str] = field(default_factory=dict)  # external port name -> artifact kind
     params: dict[str, dict[str, Any]] = field(default_factory=dict)
-    default: bool = False
     description: str = ""
 
     @property
@@ -61,6 +76,27 @@ class WorkflowSpec:
     @property
     def output_port(self) -> str:
         return self.output.split(".", 1)[1]
+
+
+@dataclass
+class TaskNodeSpec:
+    id: str
+    candidates: list[str]  # workflow ids; [0] is the default choice
+    inputs: dict[str, str] = field(default_factory=dict)  # workflow-input name -> upstream node id
+    params: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def workflow(self) -> str:
+        return self.candidates[0]
+
+
+@dataclass
+class TaskSpec:
+    id: str
+    nodes: list[TaskNodeSpec]
+    output: str  # a task node id (its workflow's output is the task result)
+    params: dict[str, dict[str, Any]] = field(default_factory=dict)
+    description: str = ""
 
 
 class WorkflowValidationError(ValueError):
@@ -83,11 +119,48 @@ def load_workflow_yaml(text: str) -> WorkflowSpec:
         ]
         spec = WorkflowSpec(
             id=data["id"],
-            capability=data.get("capability", data["id"]),
+            nodes=nodes,
+            output=data["output"],
+            inputs=dict(data.get("inputs", {})),
+            params=dict(data.get("params", {})),
+            description=data.get("description", ""),
+        )
+    except KeyError as e:
+        raise WorkflowValidationError(f"missing required key: {e}") from e
+    return spec
+
+
+def load_task_yaml(text: str) -> TaskSpec:
+    data = yaml.safe_load(text)
+    if not isinstance(data, dict):
+        raise WorkflowValidationError("task must be a mapping")
+    try:
+        nodes = []
+        for n in data["nodes"]:
+            # `workflow:` (one) or `candidates:` (list, [0] default) — one required.
+            if "candidates" in n:
+                cands = list(n["candidates"])
+            elif "workflow" in n:
+                cands = [n["workflow"]]
+            else:
+                raise WorkflowValidationError(
+                    f"task node {n.get('id')}: needs `workflow` or `candidates`"
+                )
+            if not cands:
+                raise WorkflowValidationError(f"task node {n['id']}: empty candidates")
+            nodes.append(
+                TaskNodeSpec(
+                    id=n["id"],
+                    candidates=cands,
+                    inputs=dict(n.get("inputs", {})),
+                    params=dict(n.get("params", {})),
+                )
+            )
+        spec = TaskSpec(
+            id=data["id"],
             nodes=nodes,
             output=data["output"],
             params=dict(data.get("params", {})),
-            default=bool(data.get("default", False)),
             description=data.get("description", ""),
         )
     except KeyError as e:
@@ -114,7 +187,7 @@ def validate_workflow(spec: WorkflowSpec, registry: ToolRegistry) -> None:
                 raise WorkflowValidationError(
                     f"node {node.id}: tool {node.tool} has no input '{port_name}'"
                 )
-            _validate_ref(node, port_name, ref, node_by_id, registry, comp)
+            _validate_ref(spec, node, port_name, ref, node_by_id, registry, comp)
 
         for port in comp.inputs:
             if port.required and port.name not in node.inputs:
@@ -134,9 +207,24 @@ def validate_workflow(spec: WorkflowSpec, registry: ToolRegistry) -> None:
     _check_acyclic(spec, node_by_id)
 
 
-def _validate_ref(node, port_name, ref, node_by_id, registry, comp) -> None:
+def _validate_ref(spec, node, port_name, ref, node_by_id, registry, comp) -> None:
+    want = comp.input_port(port_name)
+    # `$in.<name>` — a workflow external input.
+    if ref.startswith("$in."):
+        in_name = ref[len("$in."):]
+        if in_name not in spec.inputs:
+            raise WorkflowValidationError(
+                f"node {node.id}: '{port_name}' references undeclared workflow input '{in_name}'"
+            )
+        up_kind = spec.inputs[in_name]
+        if want and want.kind != "any" and up_kind != "any" and want.kind != up_kind:
+            raise WorkflowValidationError(
+                f"node {node.id}: type mismatch on '{port_name}': $in.{in_name} ({up_kind}) -> {want.kind}"
+            )
+        return
+    # `<node>.<port>` — an upstream node output.
     if "." not in ref:
-        raise WorkflowValidationError(f"node {node.id}: input ref '{ref}' must be node.port")
+        raise WorkflowValidationError(f"node {node.id}: input ref '{ref}' must be node.port or $in.name")
     up_id, up_port = ref.split(".", 1)
     if up_id not in node_by_id:
         raise WorkflowValidationError(f"node {node.id}: input from unknown node {up_id}")
@@ -144,7 +232,6 @@ def _validate_ref(node, port_name, ref, node_by_id, registry, comp) -> None:
     up = up_comp.output_port(up_port)
     if up is None:
         raise WorkflowValidationError(f"node {node.id}: {up_id} has no output {up_port}")
-    want = comp.input_port(port_name)
     if want and want.kind != "any" and up.kind != "any" and want.kind != up.kind:
         raise WorkflowValidationError(
             f"node {node.id}: type mismatch on '{port_name}': {up.kind} -> {want.kind}"
@@ -157,6 +244,8 @@ def _check_acyclic(spec: WorkflowSpec, node_by_id: dict[str, NodeSpec]) -> None:
     def visit(nid: str) -> None:
         color[nid] = 1
         for ref in node_by_id[nid].inputs.values():
+            if ref.startswith("$in."):
+                continue
             up = ref.split(".", 1)[0]
             if color.get(up, 0) == 1:
                 raise WorkflowValidationError(f"cycle detected at {nid} -> {up}")
@@ -179,6 +268,8 @@ def topo_order(spec: WorkflowSpec) -> list[str]:
         if nid in seen:
             return
         for ref in node_by_id[nid].inputs.values():
+            if ref.startswith("$in."):
+                continue
             visit(ref.split(".", 1)[0])
         seen.add(nid)
         order.append(nid)
@@ -186,3 +277,82 @@ def topo_order(spec: WorkflowSpec) -> list[str]:
     for node in spec.nodes:
         visit(node.id)
     return order
+
+
+def validate_task(
+    task: TaskSpec, workflows: dict[str, WorkflowSpec], registry: ToolRegistry
+) -> None:
+    """Static checks for a task: every candidate workflow exists and validates,
+    node wiring targets declared workflow inputs from real upstream nodes, the
+    graph is a DAG, and the output node exists."""
+    node_by_id = {n.id: n for n in task.nodes}
+    if len(node_by_id) != len(task.nodes):
+        raise WorkflowValidationError(f"task {task.id}: duplicate node id")
+
+    for node in task.nodes:
+        if not node.candidates:
+            raise WorkflowValidationError(f"task node {node.id}: no workflow candidate")
+        for wf_id in node.candidates:
+            if wf_id not in workflows:
+                raise WorkflowValidationError(
+                    f"task node {node.id}: unknown workflow '{wf_id}'"
+                )
+            validate_workflow(workflows[wf_id], registry)
+        wf = workflows[node.workflow]  # wiring is checked against the default choice
+        for in_name, up_id in node.inputs.items():
+            if in_name not in wf.inputs:
+                raise WorkflowValidationError(
+                    f"task node {node.id}: workflow '{wf.id}' has no input '{in_name}'"
+                )
+            if up_id not in node_by_id:
+                raise WorkflowValidationError(
+                    f"task node {node.id}: input '{in_name}' from unknown node '{up_id}'"
+                )
+        # Every workflow input must be wired from an upstream task node.
+        for in_name in wf.inputs:
+            if in_name not in node.inputs:
+                raise WorkflowValidationError(
+                    f"task node {node.id}: workflow input '{in_name}' is not connected"
+                )
+
+    if task.output not in node_by_id:
+        raise WorkflowValidationError(
+            f"task {task.id}: output references unknown node '{task.output}'"
+        )
+    _check_acyclic_task(task, node_by_id)
+
+
+def topo_order_task(task: TaskSpec) -> list[str]:
+    """Task node ids in dependency order (upstream before consumers)."""
+    node_by_id = {n.id: n for n in task.nodes}
+    order: list[str] = []
+    seen: set[str] = set()
+
+    def visit(nid: str) -> None:
+        if nid in seen:
+            return
+        for up_id in node_by_id[nid].inputs.values():
+            visit(up_id)
+        seen.add(nid)
+        order.append(nid)
+
+    for node in task.nodes:
+        visit(node.id)
+    return order
+
+
+def _check_acyclic_task(task: TaskSpec, node_by_id: dict[str, TaskNodeSpec]) -> None:
+    color: dict[str, int] = {}
+
+    def visit(nid: str) -> None:
+        color[nid] = 1
+        for up_id in node_by_id[nid].inputs.values():
+            if color.get(up_id, 0) == 1:
+                raise WorkflowValidationError(f"task cycle detected at {nid} -> {up_id}")
+            if color.get(up_id, 0) == 0:
+                visit(up_id)
+        color[nid] = 2
+
+    for node in task.nodes:
+        if color.get(node.id, 0) == 0:
+            visit(node.id)

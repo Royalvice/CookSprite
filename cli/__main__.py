@@ -1,8 +1,8 @@
 """`cspr` — the agent-facing CLI for CookSprite.
 
 Commands:
-    cspr list [--json]                 introspect capabilities / workflows / tools
-    cspr run  <capability> [opts]      run a workflow, write the sprite pair to --out
+    cspr list [--json]                 introspect tasks / workflows / tools
+    cspr run  <task> [opts]            run a task, write the sprite pair to --out
     cspr workspace init <dir>          create a workspace (folder + config + manifest)
     cspr export <workflow_id> [--out]  export a workflow to ComfyUI API JSON
 
@@ -23,7 +23,7 @@ from workflow import REGISTRY
 from workflow.clients import DirectClient
 from workflow.export.comfyui import export_to_comfyui
 from workflow.library import Library
-from workflow.runner import run_workflow
+from workflow.runner import run_task
 from workflow.types import SpritePair, SpriteSheet
 from workflow.workspace import Workspace
 
@@ -54,15 +54,27 @@ def _coerce(v: str) -> Any:
 
 def cmd_list(args: argparse.Namespace) -> int:
     library = Library.load_builtin()
-    data: dict[str, Any] = {"capabilities": [], "tools": []}
-    for cap in library.capabilities():
-        data["capabilities"].append(
+    data: dict[str, Any] = {"tasks": [], "workflows": [], "tools": []}
+    for task in library.tasks():
+        data["tasks"].append(
             {
-                "id": cap.id,
-                "workflows": [
-                    {"id": wf.id, "default": wf.default, "params": wf.params, "description": wf.description}
-                    for wf in cap.workflows
+                "id": task.id,
+                "description": task.description,
+                "params": task.params,
+                "nodes": [
+                    {"id": n.id, "candidates": n.candidates, "inputs": n.inputs}
+                    for n in task.nodes
                 ],
+            }
+        )
+    for wf in library.workflows():
+        data["workflows"].append(
+            {
+                "id": wf.id,
+                "description": wf.description,
+                "inputs": wf.inputs,
+                "params": wf.params,
+                "nodes": [n.id for n in wf.nodes],
             }
         )
     for t in REGISTRY.all():
@@ -79,12 +91,13 @@ def cmd_list(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(data, indent=2))
     else:
-        for cap in data["capabilities"]:
-            print(f"capability: {cap['id']}")
-            for wf in cap["workflows"]:
-                mark = " (default)" if wf["default"] else ""
-                print(f"  workflow: {wf['id']}{mark} — {wf['description']}")
-        print(f"\n{len(data['tools'])} tools registered "
+        for task in data["tasks"]:
+            print(f"task: {task['id']} — {task['description']}")
+            for n in task["nodes"]:
+                cands = n["candidates"]
+                extra = f" (+{len(cands)-1} alt)" if len(cands) > 1 else ""
+                print(f"  node {n['id']}: {cands[0]}{extra}")
+        print(f"\n{len(data['workflows'])} workflows, {len(data['tools'])} tools "
               f"({sum(1 for c in data['tools'] if c['kind']=='deterministic')} deterministic, "
               f"{sum(1 for c in data['tools'] if c['kind']=='inference')} inference)")
     return 0
@@ -93,7 +106,7 @@ def cmd_list(args: argparse.Namespace) -> int:
 def cmd_run(args: argparse.Namespace) -> int:
     library = Library.load_builtin()
     try:
-        spec = library.resolve(args.capability, args.workflow)
+        task = library.get_task(args.task)
     except KeyError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -101,6 +114,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     params = _parse_params(args.param)
     if args.prompt is not None:
         params["prompt"] = args.prompt
+    # --choose node=workflow picks a non-default candidate for a task node.
+    choices = _parse_params(args.choose)
 
     workspace = Workspace.init(args.out)
     from backend.ops import build_default_router
@@ -111,12 +126,17 @@ def cmd_run(args: argparse.Namespace) -> int:
         if not args.quiet:
             print(f"  [{int(fraction*100):3d}%] {message}", file=sys.stderr)
 
-    artifact = run_workflow(
-        spec, REGISTRY, client,
-        params=params, config_defaults=workspace.param_defaults(), on_progress=on_progress,
-    )
+    try:
+        artifact = run_task(
+            task, library.workflow_map(), REGISTRY, client,
+            params=params, choices={k: str(v) for k, v in choices.items()},
+            config_defaults=workspace.param_defaults(), on_progress=on_progress,
+        )
+    except KeyError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
     entry = workspace.save_artifact(artifact)
-    workspace.record_run({"capability": args.capability, "workflow": spec.id, "params": params, "artifacts": [entry]})
+    workspace.record_run({"task": args.task, "params": params, "choices": choices, "artifacts": [entry]})
 
     kind = "sprite pair" if isinstance(artifact, SpritePair) else (
         "sprite sheet" if isinstance(artifact, SpriteSheet) else artifact.kind)
@@ -157,15 +177,16 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="cspr", description="Cook up sprites with AI.")
     sub = p.add_subparsers(dest="command", required=True)
 
-    lp = sub.add_parser("list", help="introspect capabilities/workflows/tools")
+    lp = sub.add_parser("list", help="introspect tasks/workflows/tools")
     lp.add_argument("--json", action="store_true")
     lp.set_defaults(func=cmd_list)
 
-    rp = sub.add_parser("run", help="run a workflow")
-    rp.add_argument("capability")
-    rp.add_argument("--workflow", default=None, help="named workflow (default: capability default)")
+    rp = sub.add_parser("run", help="run a task")
+    rp.add_argument("task")
     rp.add_argument("--prompt", default=None)
     rp.add_argument("--param", action="append", default=[], help="k=v (repeatable)")
+    rp.add_argument("--choose", action="append", default=[],
+                    help="node=workflow: pick a non-default candidate (repeatable)")
     rp.add_argument("--out", default="./cooksprite_workspace", help="workspace dir")
     rp.add_argument("--quiet", action="store_true")
     rp.set_defaults(func=cmd_run)

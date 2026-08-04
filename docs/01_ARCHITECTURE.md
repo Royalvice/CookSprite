@@ -12,26 +12,23 @@ Frontend           ──[ triggers workflows ]──►  Web GUI (humans) + CLI
 ## The three abstractions
 
 ```text
-Capability  — a semantic intent, e.g. "generate an 8-direction character".
-  └── Workflow  — one minimal end-to-end route to that intent; one default
-        per capability, others opt-in.
-        · route A: video model turntable → extract frames
-        · route B: image model → one sheet → crop into N
-        · route C: 1 reference image → batch-infer N frames
-        └── Tool — the smallest unit satisfying one minimal function, with a
-              typed I/O port. Composed by developers/agents. Each has a `kind`:
+Task      — a DAG of workflow-nodes. Each node runs one workflow chosen from
+              a `candidates` list ([0] is the default); node outputs wire into
+              downstream workflow declared inputs.
+  └── Workflow  — a flat DAG of tool-nodes with typed I/O. Declares external
+        `inputs` (artifact ports); reusable across many tasks.
+        └── Tool — the smallest unit, with typed I/O and a `kind`:
               ├── kind="inference"     — calls a model op via /infer; served by
               │     MANY model_ids.
               └── kind="deterministic" — a local, model-free step.
 ```
 
-- A **Capability** is decoupled from *which model* and *which route* fulfills
-  it. Same capability, many workflows; each inference tool selectable across
-  many models.
-- **Route selection:** each workflow is named, one is default per capability;
-  callers may explicitly pick another. No hidden auto-ranking.
-- **Topology is never shown to humans.** Developers and agents author tool
-  graphs; the web frontend only triggers them.
+- A **Task** composes workflows: each node slot has a default candidate and
+  optional alternates that callers can select by name.
+- A **Workflow** is task-independent and reusable. It never nests another
+  workflow; nesting is the task's job.
+- **Topology is never shown to humans.** Developers and agents author graphs;
+  the web frontend only triggers tasks.
 
 ## Typed I/O
 

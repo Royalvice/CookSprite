@@ -17,7 +17,7 @@ from workflow.library import Library
 # --- ComfyUI export --------------------------------------------------------
 
 def test_comfyui_export_structure():
-    spec = Library.load_builtin().resolve("single_sprite")
+    spec = Library.load_builtin().get_workflow("spritify")
     result = export_to_comfyui(spec)
     assert not result.unmapped
     # Numeric string keys, each with class_type + inputs.
@@ -25,9 +25,10 @@ def test_comfyui_export_structure():
         assert key.isdigit()
         assert "class_type" in node and "inputs" in node
     # A downstream link is encoded as [id, output_index].
-    px = next(n for n in result.graph.values() if n["class_type"] == "CookSpritePixelize")
-    assert isinstance(px["inputs"]["image"], list)
-    assert len(px["inputs"]["image"]) == 2
+    # crop_to_content is fed by pixelize's output — a real intra-graph link.
+    crop = next(n for n in result.graph.values() if n["class_type"] == "CookSpriteCropToContent")
+    assert isinstance(crop["inputs"]["image"], list)
+    assert len(crop["inputs"]["image"]) == 2
 
 
 def test_comfyui_export_reports_unmapped():
@@ -36,7 +37,6 @@ def test_comfyui_export_reports_unmapped():
     spec = load_workflow_yaml(
         """
 id: t
-capability: t
 output: a.image
 nodes:
   - id: a
@@ -95,7 +95,8 @@ def test_cli_list_json(capsys):
     rc = main(["list", "--json"])
     assert rc == 0
     data = json.loads(capsys.readouterr().out)
-    assert any(c["id"] == "single_sprite" for c in data["capabilities"])
+    assert any(t["id"] == "single_sprite" for t in data["tasks"])
+    assert any(w["id"] == "spritify" for w in data["workflows"])
     assert any(t["id"] == "pixelize" for t in data["tools"])
 
 
@@ -118,7 +119,7 @@ def test_cli_export_comfyui(tmp_path, capsys):
     from cli.__main__ import main
 
     out_file = tmp_path / "wf.json"
-    rc = main(["export", "single_sprite", "--out", str(out_file)])
+    rc = main(["export", "spritify", "--out", str(out_file)])
     assert rc == 0
     graph = json.loads(out_file.read_text())
     assert graph and all("class_type" in n for n in graph.values())

@@ -28,8 +28,8 @@ npm run preview  # serve the production build
 
 ## What it does
 
-1. On load, fetches `GET /api/capabilities` and renders the **Toolbox**.
-2. Pick a capability (its default workflow is preselected), fill params
+1. On load, fetches `GET /api/tasks` and renders the **Toolbox**.
+2. Pick a task (its default workflow candidates are preselected), fill params
    (prompt, width, height, pixelize, normal), and click **Run**.
 3. `POST /api/run` returns a `run_id`. The app subscribes to
    `GET /api/runs/{id}/events` (SSE) and shows a progress bar in **RunStatus**.
@@ -48,7 +48,7 @@ npm run preview  # serve the production build
 
 Base path `/api` (proxied to `:8000`):
 
-- `GET /api/capabilities`
+- `GET /api/tasks`
 - `POST /api/run` → `{ run_id }`
 - `GET /api/runs/{run_id}` → status/progress/message/result
 - `GET /api/runs/{run_id}/events` → SSE, each `data:` line is the run state JSON

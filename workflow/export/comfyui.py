@@ -73,7 +73,11 @@ def export_to_comfyui(spec: WorkflowSpec) -> ExportResult:
         for k, v in node.params.items():
             inputs[k] = v
         # Links: port -> ["upstream_numeric_id", output_index].
+        # `$in.<name>` is a workflow external input — it has no upstream node in
+        # this graph, so it's left unconnected for the ComfyUI user to wire.
         for port, ref in node.inputs.items():
+            if ref.startswith("$in."):
+                continue
             up_id, up_port = ref.split(".", 1)
             out_order = TOOL_OUTPUT_ORDER.get(node_by_id[up_id].tool, [])
             out_index = out_order.index(up_port) if up_port in out_order else 0

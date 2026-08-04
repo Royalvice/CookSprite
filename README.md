@@ -34,10 +34,9 @@ Four **ABI-decoupled** layers. 🔌 Swap a model, add a workflow, or replace the
 
 ## 💡 Concepts
 
-- 🎯 **Capability** — what you want (e.g. "an 8-direction character").
-- 🛣️ **Workflow** — a named route to a capability; one default, others opt-in. You never wire nodes by hand.
-- ⚛️ **Op** — an inference atom (`text2img`, `normal-estimate`, …), served by any of several models.
-- 🔧 **Tool** — a deterministic, model-free step (pixelize, crop, center, pack).
+- 🎯 **Task** — what you want (e.g. "a single sprite pair"). A DAG of workflow-nodes; each node runs one workflow from a list of candidates.
+- 🛣️ **Workflow** — a flat tool graph that takes typed inputs and returns one typed artifact. Reusable across tasks; you never wire nodes by hand.
+- 🔧 **Tool** — the smallest unit, with typed I/O. `kind="inference"` calls a model; `kind="deterministic"` runs locally (pixelize, crop, pack…).
 
 ## 🚀 Quick start
 

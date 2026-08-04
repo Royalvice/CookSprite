@@ -3,14 +3,14 @@
 Endpoints (also mounted under /api so a Vite proxy works with or without a
 path rewrite):
 
-    GET  /capabilities            -> capabilities + workflows + param schemas
+    GET  /tasks                   -> tasks + nodes/candidates + param schemas
     POST /run                     -> {run_id}   (async; starts a run thread)
     GET  /runs/{id}               -> status + progress + result-when-done
     GET  /runs/{id}/events        -> SSE stream of the status object
     GET  /runs/{id}/result        -> RunResult
     GET  /artifacts/{id}          -> PNG bytes
 
-Runs execute workflows via the runner using a DirectClient over the backend
+Runs execute tasks via the runner using a DirectClient over the backend
 adapter router (in-process for v1; point COOKSPRITE_BACKEND_URL at a separate
 backend to use HttpClient instead).
 """
@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field
 
 from . import REGISTRY
 from .library import Library
-from .runner import run_workflow
+from .runner import run_task
 from .workspace import Workspace
 
 @dataclass
@@ -46,10 +46,9 @@ class Run:
 
 
 class RunRequest(BaseModel):
-    capability: str
-    workflow: str | None = None
+    task: str
     params: dict[str, Any] = Field(default_factory=dict)
-    inputs: dict[str, Any] = Field(default_factory=dict)
+    choices: dict[str, str] = Field(default_factory=dict)  # node id -> workflow id
 
 
 def _build_client() -> Any:
@@ -93,30 +92,32 @@ def create_app(workspace_root: str | Path | None = None) -> FastAPI:
 
     api = APIRouter()
 
-    @api.get("/capabilities")
-    def capabilities() -> dict[str, Any]:
-        caps = []
-        for cap in library.capabilities():
-            workflows = []
-            for wf in cap.workflows:
-                schema = {
-                    name: {
-                        "type": decl.get("type", "string"),
-                        "default": decl.get("default"),
-                        "label": decl.get("label", name),
-                    }
-                    for name, decl in wf.params.items()
+    @api.get("/tasks")
+    def tasks() -> dict[str, Any]:
+        out = []
+        for task in library.tasks():
+            schema = {
+                name: {
+                    "type": decl.get("type", "string"),
+                    "default": decl.get("default"),
+                    "label": decl.get("label", name),
                 }
-                workflows.append({"name": wf.id, "default": wf.default, "params_schema": schema})
-            caps.append(
-                {"id": cap.id, "description": cap.default_workflow.description, "workflows": workflows}
+                for name, decl in task.params.items()
+            }
+            nodes = [
+                {"id": n.id, "candidates": n.candidates, "inputs": n.inputs}
+                for n in task.nodes
+            ]
+            out.append(
+                {"id": task.id, "description": task.description,
+                 "params_schema": schema, "nodes": nodes}
             )
-        return {"capabilities": caps}
+        return {"tasks": out}
 
     @api.post("/run")
     def run(req: RunRequest) -> dict[str, str]:
         try:
-            spec = library.resolve(req.capability, req.workflow)
+            task = library.get_task(req.task)
         except KeyError as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
 
@@ -132,19 +133,21 @@ def create_app(workspace_root: str | Path | None = None) -> FastAPI:
                 run_obj.message = message
 
             try:
-                artifact = run_workflow(
-                    spec,
+                artifact = run_task(
+                    task,
+                    library.workflow_map(),
                     REGISTRY,
                     client,
                     params=req.params,
+                    choices=req.choices,
                     config_defaults=workspace.param_defaults(),
                     on_progress=on_progress,
                 )
                 entry = workspace.save_artifact(artifact)
                 result = {"artifacts": [_artifact_to_result_entry(entry)]}
                 workspace.record_run(
-                    {"run_id": run_obj.id, "capability": req.capability, "workflow": spec.id,
-                     "params": req.params, "artifacts": [entry]}
+                    {"run_id": run_obj.id, "task": req.task,
+                     "params": req.params, "choices": req.choices, "artifacts": [entry]}
                 )
                 run_obj.result = result
                 run_obj.progress = 1.0

@@ -29,7 +29,10 @@ dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.3"]
 cspr = "cli.__main__:main"
 
 [tool.setuptools]
-packages = ["backend", "backend.adapters", "workflow", "workflow.tools", "workflow.ops", "workflow.export", "cli"]
+packages = ["backend", "backend.adapters", "workflow", "workflow.tools", "workflow.export", "cli"]
+
+[tool.setuptools.package-data]
+workflow = ["workflows/*.yaml", "tasks/*.yaml"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
