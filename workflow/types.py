@@ -9,24 +9,29 @@ the workspace layer, not here.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 
 
+@dataclass
 class Artifact:
-    """Base class for all typed values passed between tools."""
+    """Base class for all typed values passed between tools.
 
-    kind: str = "artifact"
+    `kind` is a class-level type tag (used by schema validation); `meta` is a
+    free-form dict every artifact carries. Both live here so no subclass repeats
+    them."""
+
+    kind: ClassVar[str] = "artifact"
+    meta: dict[str, Any] = field(default_factory=dict, kw_only=True)
 
 
 @dataclass
 class Image(Artifact):
     """A single RGBA image, uint8 (H, W, 4)."""
 
+    kind: ClassVar[str] = "image"
     pixels: np.ndarray
-    meta: dict[str, Any] = field(default_factory=dict)
-    kind: str = "image"
 
     def __post_init__(self) -> None:
         _validate_rgba(self.pixels)
@@ -42,11 +47,20 @@ class Image(Artifact):
 
 @dataclass
 class ImageBatch(Artifact):
-    """An ordered list of images (e.g. batch inference outputs)."""
+    """An UNORDERED set of images (e.g. batch inference candidates for one
+    prompt). Use FrameSeq when order matters (animation / turntable)."""
 
+    kind: ClassVar[str] = "image_batch"
     images: list[Image]
-    meta: dict[str, Any] = field(default_factory=dict)
-    kind: str = "image_batch"
+
+
+@dataclass
+class FrameSeq(Artifact):
+    """An ORDERED sequence of equal-size frames — an animation clip or a
+    turntable/direction sweep. `meta` carries e.g. fps or dir_scheme."""
+
+    kind: ClassVar[str] = "frame_seq"
+    frames: list[Image]
 
 
 @dataclass
@@ -54,9 +68,8 @@ class NormalMap(Artifact):
     """A tangent-space normal map, uint8 RGB (H, W, 3). RGB encodes XYZ in
     [0,1], mapped from normal components in [-1,1]."""
 
+    kind: ClassVar[str] = "normal_map"
     pixels: np.ndarray
-    meta: dict[str, Any] = field(default_factory=dict)
-    kind: str = "normal_map"
 
     def __post_init__(self) -> None:
         if self.pixels.ndim != 3 or self.pixels.shape[2] != 3:
@@ -69,10 +82,9 @@ class NormalMap(Artifact):
 class SpritePair(Artifact):
     """The signature unit: a diffuse image plus an optional same-size normal."""
 
+    kind: ClassVar[str] = "sprite_pair"
     diffuse: Image
     normal: NormalMap | None = None
-    meta: dict[str, Any] = field(default_factory=dict)
-    kind: str = "sprite_pair"
 
     def __post_init__(self) -> None:
         if self.normal is not None:
@@ -88,37 +100,35 @@ class SpriteSheet(Artifact):
     """A packed horizontal strip of equal-size frames, with an optional
     matching normal sheet."""
 
+    kind: ClassVar[str] = "sprite_sheet"
     diffuse: Image
     frames: int
     frame_w: int
     frame_h: int
     normal: NormalMap | None = None
-    meta: dict[str, Any] = field(default_factory=dict)
-    kind: str = "sprite_sheet"
 
 
 @dataclass
 class Mask(Artifact):
     """A single-channel mask, uint8 (H, W)."""
 
+    kind: ClassVar[str] = "mask"
     pixels: np.ndarray
-    meta: dict[str, Any] = field(default_factory=dict)
-    kind: str = "mask"
 
 
 @dataclass
 class Palette(Artifact):
     """An ordered list of RGBA colors."""
 
+    kind: ClassVar[str] = "palette"
     colors: list[tuple[int, int, int, int]]
-    meta: dict[str, Any] = field(default_factory=dict)
-    kind: str = "palette"
 
 
 # The registry of known artifact kinds, used by schema validation.
 ARTIFACT_KINDS: dict[str, type[Artifact]] = {
     Image.kind: Image,
     ImageBatch.kind: ImageBatch,
+    FrameSeq.kind: FrameSeq,
     NormalMap.kind: NormalMap,
     SpritePair.kind: SpritePair,
     SpriteSheet.kind: SpriteSheet,

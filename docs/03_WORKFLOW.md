@@ -15,8 +15,15 @@ declares typed inputs/outputs and has a `kind`:
 - **`kind="deterministic"`** — local, model-free. Examples: `pixelize`,
   `normal_estimate`, `crop`, `center_align`, `pack_sheet`.
 
-Tools declare typed ports (`Image`, `ImageBatch`, `SpriteSheet`,
-`FrameSeq`, `Mask`, `NormalMap`, `Palette`, …) so connections are checked.
+Tools declare typed ports (`Image`, `ImageBatch`, `FrameSeq`, `SpritePair`,
+`SpriteSheet`, `Mask`, `NormalMap`, `Palette`) so connections are checked.
+`ImageBatch` is an **unordered** set (e.g. batch candidates for one prompt);
+`FrameSeq` is an **ordered** sequence (animation / turntable), and is what
+`pack_sheet` consumes.
+
+Port typing is exact-match today (a `"any"` port opts out). Subtyping and
+union ports are a deliberate non-feature until a real cross-type tool needs
+them — see `.agent-os/change-decisions.md` CD-026.
 
 ## Authoring vs using
 

@@ -11,7 +11,7 @@ from typing import Any
 import numpy as np
 
 from ..tool import ParamSpec, Port, RunContext, tool
-from ..types import Artifact, Image, SpriteSheet
+from ..types import Artifact, FrameSeq, Image, SpriteSheet
 from . import imaging
 
 
@@ -91,18 +91,18 @@ def _pivot(anchor: str, cw: int, ch: int, x: int, contw: int) -> list[int]:
 
 @tool(
     id="pack_sheet",
-    inputs=[Port("frames", "image_batch")],
+    inputs=[Port("frames", "frame_seq")],
     outputs=[Port("sheet", "sprite_sheet")],
     params=[],
-    description="Pack a batch of equal-size frames into one horizontal sprite sheet.",
+    description="Pack an ordered frame sequence into one horizontal sprite sheet.",
 )
 def pack_sheet(
     inputs: dict[str, Artifact], params: dict[str, Any], ctx: RunContext
 ) -> dict[str, Artifact]:
-    batch = inputs["frames"]
-    images = getattr(batch, "images", [])
+    seq: FrameSeq = inputs["frames"]  # type: ignore[assignment]
+    images = seq.frames
     if not images:
-        raise ValueError("pack_sheet received an empty batch")
+        raise ValueError("pack_sheet received an empty frame sequence")
     fw, fh = images[0].width, images[0].height
     for im in images:
         if im.width != fw or im.height != fh:
@@ -114,7 +114,7 @@ def pack_sheet(
         frames=len(images),
         frame_w=fw,
         frame_h=fh,
-        meta={"packed": True},
+        meta={**seq.meta, "packed": True},
     )
     ctx.progress(1.0, "packed")
     return {"sheet": sheet}

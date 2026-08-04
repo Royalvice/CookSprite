@@ -6,7 +6,7 @@ import numpy as np
 
 import workflow  # noqa: F401  (registers tools)
 from workflow.tool import REGISTRY
-from workflow.types import Image, ImageBatch, NormalMap, SpriteSheet
+from workflow.types import FrameSeq, Image, NormalMap, SpriteSheet
 
 from .helpers import NullCtx, blob_image, gradient_image
 
@@ -68,17 +68,18 @@ def test_center_align_places_on_canvas_with_pivot():
 
 def test_pack_sheet_concatenates_frames():
     frames = [blob_image(32, 32) for _ in range(4)]
-    out = run_tool("pack_sheet", {"frames": ImageBatch(images=frames)}, {})
+    out = run_tool("pack_sheet", {"frames": FrameSeq(frames=frames, meta={"fps": 12})}, {})
     sheet = out["sheet"]
     assert isinstance(sheet, SpriteSheet)
     assert sheet.frames == 4
     assert sheet.diffuse.width == 128 and sheet.diffuse.height == 32
+    assert sheet.meta["fps"] == 12  # sequence meta carried onto the sheet
 
 
 def test_pack_sheet_rejects_unequal_frames():
     frames = [blob_image(32, 32), blob_image(16, 16)]
     try:
-        run_tool("pack_sheet", {"frames": ImageBatch(images=frames)}, {})
+        run_tool("pack_sheet", {"frames": FrameSeq(frames=frames)}, {})
     except ValueError:
         return
     raise AssertionError("expected ValueError for unequal frames")
