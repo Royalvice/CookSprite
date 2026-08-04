@@ -1,0 +1,371 @@
+:root {
+  --bg: #14161c;
+  --panel: #1c1f28;
+  --panel-2: #232733;
+  --line: #2f3442;
+  --text: #e6e9f0;
+  --muted: #9aa3b5;
+  --accent: #ffb454;
+  --accent-2: #4a90d9;
+  --error: #ff6b6b;
+  --ok: #5ad19a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.app {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.app__header {
+  margin-bottom: 16px;
+}
+
+.app__title {
+  margin: 0;
+  font-size: 24px;
+  letter-spacing: 0.5px;
+}
+
+.app__tagline {
+  margin: 2px 0 0;
+  color: var(--muted);
+}
+
+.banner {
+  padding: 10px 12px;
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+
+.banner--error {
+  background: rgba(255, 107, 107, 0.12);
+  border: 1px solid rgba(255, 107, 107, 0.4);
+  color: var(--error);
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 860px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.layout__sidebar,
+.layout__main {
+  min-width: 0;
+}
+
+.toolbox {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.toolbox__title {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+
+.toolbox__desc {
+  color: var(--muted);
+  margin: -4px 0 12px;
+  font-size: 13px;
+}
+
+.toolbox__params {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 8px 0 16px;
+  padding: 12px;
+  background: var(--panel-2);
+  border-radius: 8px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.field--inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 0;
+}
+
+.field__label {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.field__control {
+  background: #10131a;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 8px 10px;
+  font: inherit;
+}
+
+.field__control:focus {
+  outline: none;
+  border-color: var(--accent-2);
+}
+
+.field__control--area {
+  resize: vertical;
+}
+
+.btn {
+  border: none;
+  border-radius: 8px;
+  padding: 10px 16px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btn--primary {
+  background: var(--accent);
+  color: #201400;
+  width: 100%;
+}
+
+.runstatus {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+}
+
+.runstatus--error {
+  border-color: rgba(255, 107, 107, 0.5);
+}
+
+.runstatus__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.runstatus__badge {
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.runstatus--error .runstatus__badge {
+  color: var(--error);
+}
+
+.runstatus__message {
+  flex: 1;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runstatus__pct {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.progress {
+  height: 8px;
+  background: var(--panel-2);
+  border-radius: 999px;
+  margin-top: 10px;
+  overflow: hidden;
+}
+
+.progress__fill {
+  height: 100%;
+  background: var(--accent-2);
+  transition: width 0.25s ease;
+}
+
+.progress__fill--done {
+  background: var(--ok);
+}
+
+.results__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+.preview {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.preview__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.preview__title {
+  margin: 0;
+  font-size: 14px;
+}
+
+.preview__hint,
+.preview__meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.preview__meta {
+  margin-top: 8px;
+}
+
+.preview__stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 280px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.preview__sprite {
+  background-repeat: no-repeat;
+}
+
+.checker {
+  background-color: #0e1015;
+  background-image:
+    linear-gradient(45deg, #191c24 25%, transparent 25%),
+    linear-gradient(-45deg, #191c24 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #191c24 75%),
+    linear-gradient(-45deg, transparent 75%, #191c24 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+.lightpreview__stage {
+  position: relative;
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 0 auto;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.lightpreview__stage canvas {
+  display: block;
+}
+
+.lightpreview__dot {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.8);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.lightpreview__controls {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lightpreview__controls .field {
+  margin-bottom: 0;
+}
+
+.framestrip {
+  margin-top: 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.framestrip__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.framestrip__cell {
+  position: relative;
+  padding: 0;
+  border: 2px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.framestrip__cell--active {
+  border-color: var(--accent);
+}
+
+.framestrip__thumb {
+  display: block;
+}
+
+.framestrip__index {
+  position: absolute;
+  bottom: 1px;
+  right: 2px;
+  font-size: 10px;
+  line-height: 1;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 1px 3px;
+  border-radius: 3px;
+}
