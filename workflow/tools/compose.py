@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..component import Port, RunContext, tool
+from ..tool import Port, RunContext, tool
 from ..types import Artifact, Image, NormalMap, SpritePair
 
 

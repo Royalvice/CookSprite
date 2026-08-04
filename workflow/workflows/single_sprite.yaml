@@ -23,7 +23,7 @@ params:
 
 nodes:
   - id: gen
-    component: text2img
+    tool: text2img
     params:
       prompt: ${prompt}
       model_id: ${model_id}
@@ -32,7 +32,7 @@ nodes:
       seed: ${seed}
 
   - id: px
-    component: pixelize
+    tool: pixelize
     inputs: { image: gen.image }
     params:
       target_width: ${grid_w}
@@ -40,12 +40,12 @@ nodes:
       colors: ${colors}
 
   - id: crop
-    component: crop_to_content
+    tool: crop_to_content
     inputs: { image: px.image }
     params: { threshold: 128 }
 
   - id: align
-    component: center_align
+    tool: center_align
     inputs: { image: crop.image }
     params:
       width: ${width}
@@ -53,12 +53,12 @@ nodes:
       anchor: bottom_center
 
   - id: nrm
-    component: normal_estimate
+    tool: normal_estimate
     inputs: { image: align.image }
     params: { strength: 2.0 }
 
   - id: pair
-    component: make_sprite_pair
+    tool: make_sprite_pair
     inputs:
       diffuse: align.image
       normal: nrm.normal

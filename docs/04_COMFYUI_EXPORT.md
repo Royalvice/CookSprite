@@ -21,15 +21,15 @@ links are `["node_id", output_index]` arrays.
 
 ## Why this is cheap
 
-CookSprite's own workflow is a typed component graph. ComfyUI's API format is a
+CookSprite's own workflow is a typed tool graph. ComfyUI's API format is a
 node graph with the same essential shape. So the exporter is a **structural
-translation** (map our components → ComfyUI node `class_type`s, our edges →
+translation** (map our tools → ComfyUI node `class_type`s, our edges →
 their link arrays), not a runtime integration.
 
 ## Boundaries
 
-- Export is one-directional and best-effort: only components with a known
-  ComfyUI equivalent translate. Unmapped components are reported, not silently
+- Export is one-directional and best-effort: only tools with a known
+  ComfyUI equivalent translate. Unmapped tools are reported, not silently
   dropped.
 - The exported JSON runs in the user's ComfyUI (with the matching nodes/models
   installed); CookSprite does not launch or manage ComfyUI.

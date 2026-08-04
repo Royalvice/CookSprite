@@ -1,6 +1,6 @@
-"""Typed I/O artifacts that flow between workflow components.
+"""Typed I/O artifacts that flow between workflow tools.
 
-Every component declares typed input/output ports using these classes so the
+Every tool declares typed input/output ports using these classes so the
 runner can check that connections are compatible before executing. Images are
 held as numpy uint8 arrays (H, W, C) in memory; persistence to PNG happens in
 the workspace layer, not here.
@@ -15,7 +15,7 @@ import numpy as np
 
 
 class Artifact:
-    """Base class for all typed values passed between components."""
+    """Base class for all typed values passed between tools."""
 
     kind: str = "artifact"
 

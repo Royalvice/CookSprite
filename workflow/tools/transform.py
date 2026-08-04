@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy as np
 
-from ..component import ParamSpec, Port, RunContext, tool
+from ..tool import ParamSpec, Port, RunContext, tool
 from ..types import Artifact, Image, SpriteSheet
 from . import imaging
 

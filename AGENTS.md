@@ -42,7 +42,7 @@ silent fallback or a second hidden implementation.
 
 ```text
 Model + Inference  ──[ /infer HTTP API ]──►  atomic capability, local OR remote (docker)
-Workflow           ──[ typed component graph ]──►  one minimal self-contained function
+Workflow           ──[ typed tool graph ]──►  one minimal self-contained task
 Frontend           ──[ triggers workflows ]──►  Web GUI (humans) + CLI/skill (agents)
 ```
 
@@ -55,37 +55,39 @@ knowing. ComfyUI is **not** a dependency — see the ComfyUI section.
 
 ```text
 Capability  — a semantic intent, e.g. "generate an 8-direction character".
-  └── Workflow(s) — concrete routes to that intent; a capability may have many.
+  └── Workflow — one minimal end-to-end route that satisfies a task; a
+        capability may have many workflows (only one is default).
         · route A: video model turntable → extract frames
         · route B: image model → one sheet → crop into N
         · route C: 1 reference image → batch-infer N frames
-        └── Component — typed input/output unit (ComfyUI-like), composed by
-              developers/agents. The frontend NEVER exposes topology to humans;
-              connections are authored and exported by default.
-              ├── Op   — an inference atom (text2img, img2img, img2vid,
-              │           frame-extract, normal-estimate, upscale …).
-              │           Each Op can be served by MANY model_ids behind /infer.
-              └── Tool — a deterministic, local, model-free step
-                          (pixel-perfect, crop, center-align, pack-sheet …).
+        └── Tool — the smallest unit that satisfies one minimal function,
+              with a typed input/output port (ComfyUI-like). Composed by
+              developers/agents into a graph; the frontend NEVER exposes
+              topology to humans. Every tool has a `kind`:
+              ├── kind="inference"     — calls /infer (text2img, img2img,
+              │     img2vid, frame-extract, upscale …). Each such tool names a
+              │     model op that MANY model_ids can serve behind /infer.
+              └── kind="deterministic" — a local, model-free step
+                    (pixelize, crop, center-align, normal-estimate, pack-sheet …).
 ```
 
 Key decoupling: a **Capability** is independent of *which model* or *which
 route* fulfills it. Same "8-direction" capability, multiple workflows, each
-workflow's Ops each selectable across multiple model_ids.
+inference tool selectable across multiple model_ids.
 
 **Route selection:** every workflow has a name; exactly one is marked default
 per capability. Humans and agents may explicitly pick another by name. No
 hidden auto-ranking.
 
-**Typed I/O:** components declare typed inputs/outputs (Image, ImageBatch,
+**Typed I/O:** tools declare typed inputs/outputs (Image, ImageBatch,
 SpriteSheet, FrameSeq, Mask, NormalMap, Palette, …) so they compose safely.
 
 
 ## Repository Shape & Branch State
 
 ```text
-backend/    Python — FastAPI /infer server, model adapters, Op registry
-workflow/   Python — workflow schema, component/Tool library, runner, ComfyUI export
+backend/    Python — FastAPI /infer server, model adapters, model-op routing
+workflow/   Python — workflow schema, tool library, runner, ComfyUI export
 cli/        Python — agent-facing CLI + skill
 web/        TypeScript — human toolbox, sprite preview, three.js light preview
 docs/       open-source-facing documentation (public)

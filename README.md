@@ -26,7 +26,7 @@ CookSprite is **AI-generation-first**, not a hand-drawing pixel editor. 🎨 Gen
 
 ```text
 🧠 Model + Inference  ──[ /infer HTTP API ]──►  atomic op · local OR docker
-⚙️  Workflow           ──[ typed component graph ]──►  one minimal function
+⚙️  Workflow           ──[ typed tool graph ]──►  one minimal task
 🖥️  Frontend           ──[ triggers workflows ]──►  Web toolbox (you) + CLI/skill (agents)
 ```
 

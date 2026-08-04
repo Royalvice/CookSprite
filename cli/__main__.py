@@ -1,7 +1,7 @@
 """`cspr` — the agent-facing CLI for CookSprite.
 
 Commands:
-    cspr list [--json]                 introspect capabilities / workflows / components
+    cspr list [--json]                 introspect capabilities / workflows / tools
     cspr run  <capability> [opts]      run a workflow, write the sprite pair to --out
     cspr workspace init <dir>          create a workspace (folder + config + manifest)
     cspr export <workflow_id> [--out]  export a workflow to ComfyUI API JSON
@@ -54,7 +54,7 @@ def _coerce(v: str) -> Any:
 
 def cmd_list(args: argparse.Namespace) -> int:
     library = Library.load_builtin()
-    data: dict[str, Any] = {"capabilities": [], "components": []}
+    data: dict[str, Any] = {"capabilities": [], "tools": []}
     for cap in library.capabilities():
         data["capabilities"].append(
             {
@@ -65,15 +65,15 @@ def cmd_list(args: argparse.Namespace) -> int:
                 ],
             }
         )
-    for comp in REGISTRY.all():
-        data["components"].append(
+    for t in REGISTRY.all():
+        data["tools"].append(
             {
-                "id": comp.id,
-                "category": comp.category,
-                "inputs": [{"name": p.name, "kind": p.kind} for p in comp.inputs],
-                "outputs": [{"name": p.name, "kind": p.kind} for p in comp.outputs],
-                "params": [{"name": p.name, "type": p.type, "default": p.default} for p in comp.params],
-                "description": comp.description,
+                "id": t.id,
+                "kind": t.kind,
+                "inputs": [{"name": p.name, "kind": p.kind} for p in t.inputs],
+                "outputs": [{"name": p.name, "kind": p.kind} for p in t.outputs],
+                "params": [{"name": p.name, "type": p.type, "default": p.default} for p in t.params],
+                "description": t.description,
             }
         )
     if args.json:
@@ -84,9 +84,9 @@ def cmd_list(args: argparse.Namespace) -> int:
             for wf in cap["workflows"]:
                 mark = " (default)" if wf["default"] else ""
                 print(f"  workflow: {wf['id']}{mark} — {wf['description']}")
-        print(f"\n{len(data['components'])} components registered "
-              f"({sum(1 for c in data['components'] if c['category']=='tool')} tools, "
-              f"{sum(1 for c in data['components'] if c['category']=='op')} ops)")
+        print(f"\n{len(data['tools'])} tools registered "
+              f"({sum(1 for c in data['tools'] if c['kind']=='deterministic')} deterministic, "
+              f"{sum(1 for c in data['tools'] if c['kind']=='inference')} inference)")
     return 0
 
 
@@ -149,7 +149,7 @@ def cmd_export(args: argparse.Namespace) -> int:
     else:
         print(text)
     if result.unmapped:
-        print(f"warning: unmapped components: {sorted(set(result.unmapped))}", file=sys.stderr)
+        print(f"warning: unmapped tools: {sorted(set(result.unmapped))}", file=sys.stderr)
     return 0
 
 
@@ -157,7 +157,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="cspr", description="Cook up sprites with AI.")
     sub = p.add_subparsers(dest="command", required=True)
 
-    lp = sub.add_parser("list", help="introspect capabilities/workflows/components")
+    lp = sub.add_parser("list", help="introspect capabilities/workflows/tools")
     lp.add_argument("--json", action="store_true")
     lp.set_defaults(func=cmd_list)
 

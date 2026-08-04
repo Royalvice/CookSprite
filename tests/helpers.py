@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from workflow.component import RunContext
+from workflow.tool import RunContext
 from workflow.types import Image
 
 

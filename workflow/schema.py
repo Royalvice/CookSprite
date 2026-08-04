@@ -13,10 +13,10 @@ A workflow YAML looks like:
       normal:   { type: bool,   default: true }
     nodes:
       - id: gen
-        component: text2img
+        tool: text2img
         params: { prompt: ${prompt}, width: ${width}, height: ${width} }
       - id: px
-        component: pixelize
+        tool: pixelize
         inputs: { image: gen.image }
         params: { target_width: 64, target_height: 64 }
       ...
@@ -33,13 +33,13 @@ from typing import Any
 
 import yaml
 
-from .component import ComponentRegistry
+from .tool import ToolRegistry
 
 
 @dataclass
 class NodeSpec:
     id: str
-    component: str
+    tool: str
     inputs: dict[str, str] = field(default_factory=dict)  # port -> "node.port"
     params: dict[str, Any] = field(default_factory=dict)
 
@@ -75,7 +75,7 @@ def load_workflow_yaml(text: str) -> WorkflowSpec:
         nodes = [
             NodeSpec(
                 id=n["id"],
-                component=n["component"],
+                tool=n["tool"],
                 inputs=dict(n.get("inputs", {})),
                 params=dict(n.get("params", {})),
             )
@@ -95,24 +95,24 @@ def load_workflow_yaml(text: str) -> WorkflowSpec:
     return spec
 
 
-def validate_workflow(spec: WorkflowSpec, registry: ComponentRegistry) -> None:
-    """Static checks: components exist, ports resolve, types are compatible, the
+def validate_workflow(spec: WorkflowSpec, registry: ToolRegistry) -> None:
+    """Static checks: tools exist, ports resolve, types are compatible, the
     graph is a DAG, and the declared output exists."""
     node_by_id = {n.id: n for n in spec.nodes}
     if len(node_by_id) != len(spec.nodes):
         raise WorkflowValidationError("duplicate node id")
 
     for node in spec.nodes:
-        if not registry.has(node.component):
-            raise WorkflowValidationError(f"node {node.id}: unknown component {node.component}")
-        comp = registry.get(node.component)
+        if not registry.has(node.tool):
+            raise WorkflowValidationError(f"node {node.id}: unknown tool {node.tool}")
+        comp = registry.get(node.tool)
 
-        # Every declared input port must exist on the component; every required
+        # Every declared input port must exist on the tool; every required
         # input port must be connected (unless it can come from an upstream).
         for port_name, ref in node.inputs.items():
             if comp.input_port(port_name) is None:
                 raise WorkflowValidationError(
-                    f"node {node.id}: component {node.component} has no input '{port_name}'"
+                    f"node {node.id}: tool {node.tool} has no input '{port_name}'"
                 )
             _validate_ref(node, port_name, ref, node_by_id, registry, comp)
 
@@ -125,7 +125,7 @@ def validate_workflow(spec: WorkflowSpec, registry: ComponentRegistry) -> None:
     # Output must resolve.
     if spec.output_node not in node_by_id:
         raise WorkflowValidationError(f"output references unknown node {spec.output_node}")
-    out_comp = registry.get(node_by_id[spec.output_node].component)
+    out_comp = registry.get(node_by_id[spec.output_node].tool)
     if out_comp.output_port(spec.output_port) is None:
         raise WorkflowValidationError(
             f"output port {spec.output} does not exist on {spec.output_node}"
@@ -140,7 +140,7 @@ def _validate_ref(node, port_name, ref, node_by_id, registry, comp) -> None:
     up_id, up_port = ref.split(".", 1)
     if up_id not in node_by_id:
         raise WorkflowValidationError(f"node {node.id}: input from unknown node {up_id}")
-    up_comp = registry.get(node_by_id[up_id].component)
+    up_comp = registry.get(node_by_id[up_id].tool)
     up = up_comp.output_port(up_port)
     if up is None:
         raise WorkflowValidationError(f"node {node.id}: {up_id} has no output {up_port}")

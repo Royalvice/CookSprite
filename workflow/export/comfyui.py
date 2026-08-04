@@ -2,10 +2,10 @@
 
 ComfyUI API format: {node_id: {"class_type": str, "inputs": {...}}}, where
 node-to-node links are ["node_id", output_index] arrays and widget values are
-inline. This is a structural translation (our components -> ComfyUI class_types,
+inline. This is a structural translation (our tools -> ComfyUI class_types,
 our edges -> link arrays), not a runtime integration.
 
-Components without a known ComfyUI equivalent are reported in `unmapped` rather
+Tools without a known ComfyUI equivalent are reported in `unmapped` rather
 than silently dropped (per docs/04). The caller decides whether a partial export
 is acceptable.
 """
@@ -17,9 +17,9 @@ from typing import Any
 
 from ..schema import WorkflowSpec, topo_order
 
-# Map a CookSprite component id -> a ComfyUI class_type. Only components with a
+# Map a CookSprite tool id -> a ComfyUI class_type. Only tools with a
 # reasonable ComfyUI counterpart are listed; others are reported as unmapped.
-COMPONENT_TO_COMFY: dict[str, str] = {
+TOOL_TO_COMFY: dict[str, str] = {
     "text2img": "CookSpriteText2Img",
     "img2img": "CookSpriteImg2Img",
     "pixelize": "CookSpritePixelize",
@@ -31,10 +31,10 @@ COMPONENT_TO_COMFY: dict[str, str] = {
     "make_sprite_pair": "CookSpriteMakeSpritePair",
 }
 
-# For each component, the ordered list of output port names, so a downstream
-# link's output_index can be computed. Kept here (export-local) to avoid
-# coupling the core component model to ComfyUI details.
-COMPONENT_OUTPUT_ORDER: dict[str, list[str]] = {
+# For each tool, the ordered list of output port names, so a downstream link's
+# output_index can be computed. Kept here (export-local) to avoid coupling the
+# core tool model to ComfyUI details.
+TOOL_OUTPUT_ORDER: dict[str, list[str]] = {
     "text2img": ["image"],
     "img2img": ["image"],
     "pixelize": ["image"],
@@ -63,9 +63,9 @@ def export_to_comfyui(spec: WorkflowSpec) -> ExportResult:
 
     for nid, num in numeric_id.items():
         node = node_by_id[nid]
-        class_type = COMPONENT_TO_COMFY.get(node.component)
+        class_type = TOOL_TO_COMFY.get(node.tool)
         if class_type is None:
-            unmapped.append(node.component)
+            unmapped.append(node.tool)
             continue
 
         inputs: dict[str, Any] = {}
@@ -75,7 +75,7 @@ def export_to_comfyui(spec: WorkflowSpec) -> ExportResult:
         # Links: port -> ["upstream_numeric_id", output_index].
         for port, ref in node.inputs.items():
             up_id, up_port = ref.split(".", 1)
-            out_order = COMPONENT_OUTPUT_ORDER.get(node_by_id[up_id].component, [])
+            out_order = TOOL_OUTPUT_ORDER.get(node_by_id[up_id].tool, [])
             out_index = out_order.index(up_port) if up_port in out_order else 0
             inputs[port] = [numeric_id[up_id], out_index]
 

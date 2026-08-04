@@ -40,11 +40,11 @@ capability: t
 output: a.image
 nodes:
   - id: a
-    component: text2img
+    tool: text2img
 """
     )
-    # Monkeypatch a fake unmapped component into the spec.
-    spec.nodes[0].component = "text2img"
+    # Monkeypatch a fake unmapped tool into the spec.
+    spec.nodes[0].tool = "text2img"
     res = export_to_comfyui(spec)
     assert res.graph  # text2img maps fine
     assert res.unmapped == []
@@ -96,7 +96,7 @@ def test_cli_list_json(capsys):
     assert rc == 0
     data = json.loads(capsys.readouterr().out)
     assert any(c["id"] == "single_sprite" for c in data["capabilities"])
-    assert any(comp["id"] == "pixelize" for comp in data["components"])
+    assert any(t["id"] == "pixelize" for t in data["tools"])
 
 
 def test_cli_run_writes_artifacts(tmp_path, capsys):

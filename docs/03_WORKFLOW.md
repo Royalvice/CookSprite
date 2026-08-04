@@ -1,24 +1,26 @@
 # 03 · Workflow
 
-A **workflow** is one minimal, self-contained function: a graph of typed
-components that turns inputs into sprite output. It is the unit a frontend
+A **workflow** is one minimal, self-contained task: a graph of typed
+tools that turns inputs into sprite output. It is the unit a frontend
 triggers.
 
-## Components
+## Tools
 
-Two kinds, both with typed inputs/outputs:
+A **tool** is the smallest unit that satisfies one minimal function. Every tool
+declares typed inputs/outputs and has a `kind`:
 
-- **Op** — wraps an inference atom (`/infer`). May be served by several models;
-  the workflow (or caller) picks a `model_id`, or takes the op's default.
-- **Tool** — deterministic, local, model-free. Examples: `pixelize`,
-  `pixel_perfect`, `crop`, `center_align`, `pack_sheet`.
+- **`kind="inference"`** — calls a model op via `/infer`. May be served by
+  several models; the workflow (or caller) picks a `model_id`, or takes the
+  op's default. Examples: `text2img`, `img2img`.
+- **`kind="deterministic"`** — local, model-free. Examples: `pixelize`,
+  `normal_estimate`, `crop`, `center_align`, `pack_sheet`.
 
-Components declare typed ports (`Image`, `ImageBatch`, `SpriteSheet`,
+Tools declare typed ports (`Image`, `ImageBatch`, `SpriteSheet`,
 `FrameSeq`, `Mask`, `NormalMap`, `Palette`, …) so connections are checked.
 
 ## Authoring vs using
 
-- **Authoring** (developers/agents): wire components into a graph. Connections
+- **Authoring** (developers/agents): wire tools into a graph. Connections
   are explicit and exported by default.
 - **Using** (humans): the web toolbox never shows the graph. You pick a
   capability, optionally pick a non-default workflow by name, set exposed
@@ -38,9 +40,9 @@ Callers select by name; otherwise the default runs.
 
 ## Running
 
-The workflow runner resolves the graph, calls `/infer` for Ops, runs Tools
-locally, and returns typed outputs (e.g. a sprite pair or a sheet). Failures
-surface explicitly per component.
+The workflow runner resolves the graph, calls `/infer` for inference tools,
+runs deterministic tools locally, and returns typed outputs (e.g. a sprite pair
+or a sheet). Failures surface explicitly per tool.
 
 ## ComfyUI export
 

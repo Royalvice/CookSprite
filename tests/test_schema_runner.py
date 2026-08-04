@@ -8,7 +8,7 @@ import workflow  # noqa: F401
 from backend.ops import AdapterRouter
 from backend.adapters.stub import StubAdapter
 from workflow.clients import DirectClient
-from workflow.component import REGISTRY
+from workflow.tool import REGISTRY
 from workflow.library import Library
 from workflow.runner import run_workflow
 from workflow.schema import WorkflowValidationError, load_workflow_yaml, validate_workflow
@@ -22,10 +22,10 @@ params:
   prompt: { type: string, default: "" }
 nodes:
   - id: a
-    component: text2img
+    tool: text2img
     params: { prompt: "${prompt}" }
   - id: b
-    component: pixelize
+    tool: pixelize
     inputs: { image: a.image }
 """
 
@@ -35,8 +35,8 @@ def test_valid_workflow_passes():
     validate_workflow(spec, REGISTRY)
 
 
-def test_unknown_component_fails():
-    bad = GOOD.replace("component: pixelize", "component: nope")
+def test_unknown_tool_fails():
+    bad = GOOD.replace("tool: pixelize", "tool: nope")
     with pytest.raises(WorkflowValidationError):
         validate_workflow(load_workflow_yaml(bad), REGISTRY)
 
@@ -49,12 +49,12 @@ capability: t
 output: c.image
 nodes:
   - id: a
-    component: text2img
+    tool: text2img
   - id: b
-    component: normal_estimate
+    tool: normal_estimate
     inputs: { image: a.image }
   - id: c
-    component: pixelize
+    tool: pixelize
     inputs: { image: b.normal }
 """
     with pytest.raises(WorkflowValidationError):
@@ -68,7 +68,7 @@ capability: t
 output: b.image
 nodes:
   - id: b
-    component: pixelize
+    tool: pixelize
 """
     with pytest.raises(WorkflowValidationError):
         validate_workflow(load_workflow_yaml(bad), REGISTRY)

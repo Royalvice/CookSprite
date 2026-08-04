@@ -1,11 +1,11 @@
-"""Tests for the deterministic Tool components."""
+"""Tests for the deterministic tools."""
 
 from __future__ import annotations
 
 import numpy as np
 
-import workflow  # noqa: F401  (registers components)
-from workflow.component import REGISTRY
+import workflow  # noqa: F401  (registers tools)
+from workflow.tool import REGISTRY
 from workflow.types import Image, ImageBatch, NormalMap, SpriteSheet
 
 from .helpers import NullCtx, blob_image, gradient_image

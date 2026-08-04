@@ -1,9 +1,11 @@
-"""Inference Op components. These do NOT run models themselves — they call the
-backend `/infer` API via the RunContext, which routes to whatever adapter the
-backend is configured with (stub for dev, vLLM-Omni on the H20 for prod).
+"""Inference tools (kind="inference"). These do NOT run models themselves — they
+call the backend `/infer` API via the RunContext, which routes to whatever
+adapter the backend is configured with (stub for dev, vLLM-Omni on the H20 for
+prod).
 
-The op keeps the model choice open: `model_id` is a parameter, and one op may be
-served by many models. Outputs are decoded into typed artifacts.
+The tool keeps the model choice open: `model_id` is a parameter, and one
+inference op may be served by many models. Outputs are decoded into typed
+artifacts.
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ from typing import Any
 import numpy as np
 from PIL import Image as PILImage
 
-from ..component import ParamSpec, Port, RunContext, op
+from ..tool import ParamSpec, Port, RunContext, tool
 from ..types import Artifact, Image, ensure_rgba
 
 
@@ -38,8 +40,9 @@ def _decode_image(payload: dict[str, Any]) -> Image:
     raise ValueError("unrecognized /infer image payload")
 
 
-@op(
+@tool(
     id="text2img",
+    kind="inference",
     inputs=[],
     outputs=[Port("image", "image")],
     params=[
@@ -75,8 +78,9 @@ def text2img(
     return {"image": _decode_image(outputs[0])}
 
 
-@op(
+@tool(
     id="img2img",
+    kind="inference",
     inputs=[Port("image", "image")],
     outputs=[Port("image", "image")],
     params=[

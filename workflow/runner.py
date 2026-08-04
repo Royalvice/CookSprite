@@ -2,8 +2,8 @@
 
 Resolves workflow-level params (with caller overrides + workspace config
 defaults), substitutes `${param}` references in node params, runs nodes in
-topological order, routes Tool nodes to local functions and Op nodes to the
-inference client, and returns the declared output artifact.
+topological order (deterministic tools run locally, inference tools call the
+inference client via the RunContext), and returns the declared output artifact.
 
 Progress is reported per node so the frontend can show a live bar.
 """
@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from .component import Component, ComponentRegistry, RunContext
+from .tool import Tool, ToolRegistry, RunContext
 from .schema import WorkflowSpec, topo_order, validate_workflow
 from .types import Artifact
 
@@ -79,7 +79,7 @@ def _substitute(value: Any, params: dict[str, Any]) -> Any:
 
 def run_workflow(
     spec: WorkflowSpec,
-    registry: ComponentRegistry,
+    registry: ToolRegistry,
     client: InferenceClient,
     *,
     params: dict[str, Any] | None = None,
@@ -97,7 +97,7 @@ def run_workflow(
     total = len(order)
     for idx, nid in enumerate(order):
         node = node_by_id[nid]
-        comp: Component = registry.get(node.component)
+        comp: Tool = registry.get(node.tool)
 
         # Gather typed inputs from upstream node outputs.
         node_inputs: dict[str, Artifact] = {}
@@ -113,7 +113,7 @@ def run_workflow(
             _node_base=idx / total,
             _node_span=1.0 / total,
         )
-        ctx.progress(0.0, f"{comp.id} ({comp.category})")
+        ctx.progress(0.0, f"{comp.id} ({comp.kind})")
         result = comp.fn(node_inputs, node_params, ctx)
         outputs[nid] = result
 
