@@ -217,7 +217,7 @@ export const api = {
   gallery: () => json<GalleryItem[]>("/gallery"),
   runtimes: () => json<RuntimeView[]>("/runtimes"),
   createRuntime: (body: { id: string; label: string; base_url: string; callback_url?: string }) => json<RuntimeView>("/runtimes", { method: "POST", ...jsonBody(body) }),
-  doctorRuntime: (id: string) => json<{ runtime_id: string; snapshot: string; system: Record<string, unknown>; models: Record<string, string[]>; recipes: RuntimeRecipe[] }>(`/runtimes/${encodeURIComponent(id)}/doctor`, { method: "POST" }),
+  doctorRuntime: (id: string) => json<{ runtime_id: string; snapshot: string; tool_count: number; recipe_count: number; system: Record<string, unknown>; device?: Record<string, unknown>; models: Record<string, number>; recipes: RuntimeRecipe[] }>(`/runtimes/${encodeURIComponent(id)}/doctor`, { method: "POST" }),
   localSetup: () => json<LocalSetupView>("/setup/local"),
   installLocal: (body: { directory?: string; with_models: boolean; host?: string; port?: number }) => json<LocalSetupView>("/setup/local", { method: "POST", ...jsonBody(body) }),
 };

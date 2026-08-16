@@ -210,6 +210,18 @@ def wait(client, run_id):
     raise AssertionError("run did not finish")
 
 
+def test_runtime_doctor_returns_a_compact_summary_not_the_dynamic_node_catalog(tmp_path):
+    client = ready_client(tmp_path)
+    response = client.post("/api/v1/runtimes/rt_test/doctor")
+    assert response.status_code == 200
+    report = response.json()
+    assert "tools" not in report
+    assert report["tool_count"] == len(CORE_NODES)
+    assert report["recipe_count"] == len(report["recipes"])
+    assert report["models"] == {"checkpoints": 1}
+    assert len(response.content) < 10_000
+
+
 def test_registry_is_stable_bilingual_and_has_no_hidden_preset_surface():
     registry = ActionRegistry()
     actions = registry.list()

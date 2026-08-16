@@ -391,10 +391,11 @@ def cmd_comfy(args: argparse.Namespace) -> int:
         if response.status_code >= 400 or args.json:
             return show(response)
         report = response.json()
-        system = report.get("system", {}).get("system", {})
+        system = report.get("system", {})
         print(
             f"{report['runtime_id']} ready · ComfyUI {system.get('comfyui_version', '?')} · "
-            f"{len(report.get('recipes', []))} recipe(s)"
+            f"{report.get('recipe_count', len(report.get('recipes', [])))} recipe(s) · "
+            f"{report.get('tool_count', '?')} node(s)"
         )
         for recipe in report.get("recipes", []):
             print(f"  {recipe['id']:<34} {recipe['label']} [{', '.join(recipe['modes'])}]")

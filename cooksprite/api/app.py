@@ -1490,13 +1490,30 @@ def create_app(
         snapshot, dynamic, recipes = persist_runtime_report(
             runtime, report, is_test_runtime=is_test_runtime
         )
+        devices = report.get("system_stats", {}).get("devices") or []
+        model_counts = {
+            name: len(items)
+            for name, items in (report.get("models") or {}).items()
+            if isinstance(items, list) and items
+        }
         return {
             "runtime_id": runtime_id,
             "snapshot": snapshot,
-            "tools": [item.model_dump() for item in dynamic],
+            "tool_count": len(dynamic),
+            "recipe_count": len(recipes),
             "recipes": [recipe.dump() for recipe in recipes],
-            "system": report.get("system_stats", {}),
-            "models": report.get("models", {}),
+            "system": {
+                key: system.get(key)
+                for key in (
+                    "comfyui_version",
+                    "python_version",
+                    "pytorch_version",
+                    "deploy_environment",
+                )
+                if system.get(key) is not None
+            },
+            "device": devices[0] if devices else None,
+            "models": model_counts,
         }
 
     @app.post("/api/v1/runtimes/{runtime_id}/recipes", status_code=201)
