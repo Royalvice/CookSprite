@@ -1,0 +1,219 @@
+schema: cooksprite.actions/v1
+actions:
+  - id: image.generate
+    i18n:
+      zh-CN: {name: 创作图片, description: 从文字或一张参考图创作静态素材}
+      en: {name: Create image, description: Create a static asset from text or one reference image}
+    accepts:
+      reference: {type: Image, required: false, max: 1}
+    produces: [Image]
+    controls:
+      - id: category
+        type: select
+        default: character
+        i18n:
+          zh-CN: {name: 素材类型, description: 编译为单体、完整轮廓或平铺等构图要求}
+          en: {name: Asset type, description: Compiles into single-subject, silhouette, or tiling composition intent}
+        options:
+          - {id: character, example_key: still.actor, i18n: {zh-CN: {name: 角色, description: 单个完整角色，全身和轮廓清楚}, en: {name: Character, description: One complete character with a clear full-body silhouette}}}
+          - {id: weapon, example_key: still.object, i18n: {zh-CN: {name: 武器, description: 单件完整武器，主体不被裁切}, en: {name: Weapon, description: One complete weapon, fully visible and uncropped}}}
+          - {id: prop, example_key: still.object, i18n: {zh-CN: {name: 道具, description: 单个完整可交互道具}, en: {name: Prop, description: One complete interactive prop}}}
+          - {id: terrain, example_key: still.tile, i18n: {zh-CN: {name: 地形块, description: 正交视角、可无缝平铺的地图块}, en: {name: Terrain tile, description: Orthographic, seamlessly tileable map material}}}
+          - {id: scene, example_key: still.tile, i18n: {zh-CN: {name: 场景元素, description: 独立、完整的环境装饰元素}, en: {name: Scene element, description: One isolated, complete environment element}}}
+          - {id: vfx, example_key: still.effect, i18n: {zh-CN: {name: 特效, description: 居中的独立视觉特效}, en: {name: VFX, description: One centered, isolated visual effect}}}
+      - id: style
+        type: select
+        default: pixel
+        i18n:
+          zh-CN: {name: 风格, description: 像素会同时编译提示词和像素化后处理}
+          en: {name: Style, description: Pixel compiles both prompt intent and pixel post-processing}
+        options:
+          - {id: pixel, example_key: still.actor, i18n: {zh-CN: {name: 像素, description: 像素提示词加最近邻像素化后处理}, en: {name: Pixel, description: Pixel-art prompt intent plus nearest-neighbor pixel post-processing}}}
+          - {id: smooth, example_key: still.smooth, i18n: {zh-CN: {name: 非像素, description: 保留模型原始的平滑绘制结果}, en: {name: Non-pixel, description: Keep the model's original smooth rendered output}}}
+      - id: prompt
+        type: text
+        default: ""
+        i18n:
+          zh-CN: {name: 描述, description: 写下你想创作的内容}
+          en: {name: Prompt, description: Describe what you want to create}
+      - id: strength
+        type: range
+        default: 0.65
+        min: 0
+        max: 1
+        step: 0.05
+        advanced: true
+        i18n:
+          zh-CN: {name: 重绘强度, description: 仅在有参考图时使用}
+          en: {name: Redraw strength, description: Used only with a reference image}
+      - id: count
+        type: number
+        default: 4
+        min: 1
+        max: 8
+        step: 1
+        i18n:
+          zh-CN: {name: 候选数, description: 一次生成的候选数量}
+          en: {name: Candidates, description: Number of candidates per run}
+      - id: loras
+        type: multi-select
+        default: []
+        advanced: true
+        i18n:
+          zh-CN: {name: LoRA, description: 可叠加多个风格适配器}
+          en: {name: LoRA, description: Stack compatible style adapters}
+      - id: seed
+        type: seed
+        default: -1
+        advanced: true
+        i18n:
+          zh-CN: {name: 随机种子, description: -1 表示随机}
+          en: {name: Seed, description: -1 means random}
+  - id: animation.generate
+    i18n:
+      zh-CN: {name: 创作动画, description: 使用当前模型支持的文字或角色图生成动作候选帧}
+      en: {name: Create animation, description: Generate motion candidates from text or a character image when supported by the selected model}
+    accepts:
+      character: {type: Image, required: false, max: 1}
+    produces: [FrameSeq]
+    controls:
+      - id: prompt
+        type: text
+        default: ""
+        i18n:
+          zh-CN: {name: 动画描述, description: 可补充动作、节奏和角色要求}
+          en: {name: Motion prompt, description: Optional motion, timing, and character details}
+      - id: action
+        type: select
+        default: walk
+        i18n:
+          zh-CN: {name: 动作, description: 选择要创作的动作}
+          en: {name: Action, description: Choose a motion}
+        options:
+          - {id: idle, example_key: motion.idle, i18n: {zh-CN: {name: 待机}, en: {name: Idle}}}
+          - {id: walk, example_key: motion.walk, i18n: {zh-CN: {name: 行走}, en: {name: Walk}}}
+          - {id: run, example_key: motion.run, i18n: {zh-CN: {name: 奔跑}, en: {name: Run}}}
+          - {id: attack, example_key: motion.attack, i18n: {zh-CN: {name: 攻击}, en: {name: Attack}}}
+          - {id: cast, example_key: motion.cast, i18n: {zh-CN: {name: 施法}, en: {name: Cast}}}
+          - {id: hit, example_key: motion.hit, i18n: {zh-CN: {name: 受击}, en: {name: Hit}}}
+          - {id: jump, example_key: motion.jump, i18n: {zh-CN: {name: 跳跃}, en: {name: Jump}}}
+          - {id: death, example_key: motion.death, i18n: {zh-CN: {name: 倒下}, en: {name: Death}}}
+      - id: view
+        type: select
+        default: level
+        i18n:
+          zh-CN: {name: 视角, description: 本次动画只对应一个视角}
+          en: {name: View, description: This sequence targets one view}
+        options:
+          - {id: level, i18n: {zh-CN: {name: 平视正交}, en: {name: Level orthographic}}}
+          - {id: top45, i18n: {zh-CN: {name: 45° 俯视}, en: {name: Top-45 orthographic}}}
+      - id: direction
+        type: select
+        default: s
+        i18n:
+          zh-CN: {name: 方向, description: 本次动画只对应一个真实方向}
+          en: {name: Direction, description: This sequence targets one real direction}
+        options:
+          - {id: n, i18n: {zh-CN: {name: 北}, en: {name: North}}}
+          - {id: ne, i18n: {zh-CN: {name: 东北}, en: {name: North-east}}}
+          - {id: e, i18n: {zh-CN: {name: 东}, en: {name: East}}}
+          - {id: se, i18n: {zh-CN: {name: 东南}, en: {name: South-east}}}
+          - {id: s, i18n: {zh-CN: {name: 南}, en: {name: South}}}
+          - {id: sw, i18n: {zh-CN: {name: 西南}, en: {name: South-west}}}
+          - {id: w, i18n: {zh-CN: {name: 西}, en: {name: West}}}
+          - {id: nw, i18n: {zh-CN: {name: 西北}, en: {name: North-west}}}
+      - id: count
+        type: number
+        default: 8
+        min: 1
+        max: 16
+        step: 1
+        i18n:
+          zh-CN: {name: 每轨候选帧, description: 生成后可人工挑选}
+          en: {name: Frames per track, description: Candidates to curate after generation}
+      - id: seed
+        type: seed
+        default: -1
+        advanced: true
+        i18n:
+          zh-CN: {name: 随机种子, description: -1 表示随机}
+          en: {name: Seed, description: -1 means random}
+  - id: frame.redraw
+    i18n:
+      zh-CN: {name: 重绘帧, description: 保留原帧并生成可替换变体}
+      en: {name: Redraw frame, description: Keep the source and create replacement variants}
+    accepts:
+      frame: {type: Image, required: true, max: 1}
+    produces: [ImageBatch]
+    controls:
+      - id: prompt
+        type: text
+        default: ""
+        i18n: {zh-CN: {name: 修改要求}, en: {name: Change request}}
+      - id: strength
+        type: range
+        default: 0.35
+        min: 0
+        max: 1
+        step: 0.05
+        i18n: {zh-CN: {name: 重绘强度}, en: {name: Redraw strength}}
+      - id: count
+        type: number
+        default: 4
+        min: 1
+        max: 8
+        step: 1
+        i18n: {zh-CN: {name: 变体数}, en: {name: Variants}}
+
+  - id: sheet.slice
+    i18n:
+      zh-CN: {name: 切分图集, description: 按网格把 SpriteSheet 变成候选帧}
+      en: {name: Slice sheet, description: Turn a SpriteSheet grid into frame candidates}
+    accepts:
+      sheet: {type: SpriteSheet, required: true, max: 1}
+    produces: [FrameSeq]
+    controls:
+      - {id: action, type: select, default: walk, i18n: {zh-CN: {name: 目标动作}, en: {name: Target action}}, options: [{id: idle, i18n: {zh-CN: {name: 待机}, en: {name: Idle}}}, {id: walk, i18n: {zh-CN: {name: 行走}, en: {name: Walk}}}, {id: run, i18n: {zh-CN: {name: 奔跑}, en: {name: Run}}}, {id: attack, i18n: {zh-CN: {name: 攻击}, en: {name: Attack}}}, {id: cast, i18n: {zh-CN: {name: 施法}, en: {name: Cast}}}, {id: hit, i18n: {zh-CN: {name: 受击}, en: {name: Hit}}}, {id: jump, i18n: {zh-CN: {name: 跳跃}, en: {name: Jump}}}, {id: death, i18n: {zh-CN: {name: 倒下}, en: {name: Death}}}]}
+      - {id: view, type: select, default: level, i18n: {zh-CN: {name: 目标视角}, en: {name: Target view}}, options: [{id: level, i18n: {zh-CN: {name: 平视正交}, en: {name: Level orthographic}}}, {id: top45, i18n: {zh-CN: {name: 45° 俯视}, en: {name: Top-45 orthographic}}}]}
+      - {id: direction, type: select, default: s, i18n: {zh-CN: {name: 目标方向}, en: {name: Target direction}}, options: [{id: n, i18n: {zh-CN: {name: 北}, en: {name: North}}}, {id: ne, i18n: {zh-CN: {name: 东北}, en: {name: North-east}}}, {id: e, i18n: {zh-CN: {name: 东}, en: {name: East}}}, {id: se, i18n: {zh-CN: {name: 东南}, en: {name: South-east}}}, {id: s, i18n: {zh-CN: {name: 南}, en: {name: South}}}, {id: sw, i18n: {zh-CN: {name: 西南}, en: {name: South-west}}}, {id: w, i18n: {zh-CN: {name: 西}, en: {name: West}}}, {id: nw, i18n: {zh-CN: {name: 西北}, en: {name: North-west}}}]}
+      - {id: columns, type: number, default: 0, min: 0, max: 256, step: 1, i18n: {zh-CN: {name: 列数（0 自动）}, en: {name: Columns (0 auto)}}}
+      - {id: rows, type: number, default: 0, min: 0, max: 256, step: 1, i18n: {zh-CN: {name: 行数（0 自动）}, en: {name: Rows (0 auto)}}}
+      - {id: frame_width, type: number, default: 64, min: 1, max: 4096, step: 1, i18n: {zh-CN: {name: 帧宽}, en: {name: Frame width}}}
+      - {id: frame_height, type: number, default: 64, min: 1, max: 4096, step: 1, i18n: {zh-CN: {name: 帧高}, en: {name: Frame height}}}
+      - {id: margin, type: number, default: 0, min: 0, max: 512, step: 1, advanced: true, i18n: {zh-CN: {name: 外边距}, en: {name: Margin}}}
+      - {id: spacing, type: number, default: 0, min: 0, max: 512, step: 1, advanced: true, i18n: {zh-CN: {name: 间距}, en: {name: Spacing}}}
+      - {id: exclude_empty, type: toggle, default: true, advanced: true, i18n: {zh-CN: {name: 排除空帧}, en: {name: Exclude empty}}}
+
+  - id: video.sample
+    i18n:
+      zh-CN: {name: 视频取帧, description: 从 GIF 或视频采样候选帧}
+      en: {name: Sample video, description: Sample frame candidates from GIF or video}
+    accepts:
+      video: {type: Video, required: true, max: 1}
+    produces: [FrameSeq]
+    controls:
+      - {id: action, type: select, default: walk, i18n: {zh-CN: {name: 目标动作}, en: {name: Target action}}, options: [{id: idle, i18n: {zh-CN: {name: 待机}, en: {name: Idle}}}, {id: walk, i18n: {zh-CN: {name: 行走}, en: {name: Walk}}}, {id: run, i18n: {zh-CN: {name: 奔跑}, en: {name: Run}}}, {id: attack, i18n: {zh-CN: {name: 攻击}, en: {name: Attack}}}, {id: cast, i18n: {zh-CN: {name: 施法}, en: {name: Cast}}}, {id: hit, i18n: {zh-CN: {name: 受击}, en: {name: Hit}}}, {id: jump, i18n: {zh-CN: {name: 跳跃}, en: {name: Jump}}}, {id: death, i18n: {zh-CN: {name: 倒下}, en: {name: Death}}}]}
+      - {id: view, type: select, default: level, i18n: {zh-CN: {name: 目标视角}, en: {name: Target view}}, options: [{id: level, i18n: {zh-CN: {name: 平视正交}, en: {name: Level orthographic}}}, {id: top45, i18n: {zh-CN: {name: 45° 俯视}, en: {name: Top-45 orthographic}}}]}
+      - {id: direction, type: select, default: s, i18n: {zh-CN: {name: 目标方向}, en: {name: Target direction}}, options: [{id: n, i18n: {zh-CN: {name: 北}, en: {name: North}}}, {id: ne, i18n: {zh-CN: {name: 东北}, en: {name: North-east}}}, {id: e, i18n: {zh-CN: {name: 东}, en: {name: East}}}, {id: se, i18n: {zh-CN: {name: 东南}, en: {name: South-east}}}, {id: s, i18n: {zh-CN: {name: 南}, en: {name: South}}}, {id: sw, i18n: {zh-CN: {name: 西南}, en: {name: South-west}}}, {id: w, i18n: {zh-CN: {name: 西}, en: {name: West}}}, {id: nw, i18n: {zh-CN: {name: 西北}, en: {name: North-west}}}]}
+      - {id: sample_fps, type: range, default: 12, min: 1, max: 60, step: 1, i18n: {zh-CN: {name: 采样帧率}, en: {name: Sample FPS}}}
+      - {id: max_frames, type: number, default: 48, min: 1, max: 240, step: 1, advanced: true, i18n: {zh-CN: {name: 最大帧数}, en: {name: Maximum frames}}}
+
+  - id: normal.generate
+    i18n:
+      zh-CN: {name: 生成法线, description: 为图片或当前动画轨道生成同尺寸法线}
+      en: {name: Generate normals, description: Generate same-size normals for an image or animation track}
+    accepts:
+      source: {type: [Image, FrameSeq, SpriteSheet], required: true, max: 64}
+    produces: [NormalMap]
+    controls:
+      - {id: strength, type: range, default: 1, min: 0, max: 2, step: 0.05, i18n: {zh-CN: {name: 法线强度}, en: {name: Normal strength}}}
+      - {id: flip_y, type: toggle, default: false, i18n: {zh-CN: {name: 翻转 Y}, en: {name: Flip Y}}}
+
+  - id: sprite.export
+    i18n:
+      zh-CN: {name: 导出 CookSprite, description: 打包唯一的 .cooksprite 交付格式}
+      en: {name: Export CookSprite, description: Package the canonical .cooksprite deliverable}
+    accepts: {}
+    produces: [CookSpritePack]
+    controls:
+      - {id: allow_incomplete, type: toggle, default: false, advanced: true, i18n: {zh-CN: {name: 允许不完整导出, description: 将问题写入清单而不是静默忽略}, en: {name: Allow incomplete export, description: Record issues in the manifest instead of hiding them}}}

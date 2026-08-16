@@ -14,28 +14,23 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "pydantic>=2.6",
-    "pyyaml>=6.0",
-    "pillow>=10.2",
-    "numpy>=1.26",
     "httpx>=0.27",
+    "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]
-# Heavy GPU serving deps — only needed on the inference host (e.g. H20).
-serve = ["ray[serve]>=2.9"]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.3"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.3", "Pillow>=10.0", "playwright>=1.55"]
 
 [project.scripts]
 cspr = "cli.__main__:main"
 
 [tool.setuptools]
-packages = ["backend", "backend.adapters", "workflow", "workflow.tools", "workflow.export", "cli"]
+packages = ["cooksprite", "cooksprite.api", "cooksprite.comfy", "cooksprite.nodes", "cli"]
 
 [tool.setuptools.package-data]
-workflow = ["workflows/*.yaml", "tasks/*.yaml"]
+cooksprite = ["actions.yaml", "example_assets/*.svg"]
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
 testpaths = ["tests"]
 
 [tool.ruff]

@@ -1,17 +1,20 @@
 import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
+import vue from "@vitejs/plugin-vue";
 
-// The frontend talks to the workflow server on :8000 via the /api prefix.
-// In dev we proxy so the browser can hit same-origin /api and avoid CORS.
+const apiProxyTarget = process.env.COOKSPRITE_API_PROXY_TARGET || "http://127.0.0.1:8000";
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [vue()],
   server: {
+    host: "127.0.0.1",
     proxy: {
       "/api": {
-        target: "http://localhost:8000",
+        target: apiProxyTarget,
         changeOrigin: true,
-        // SSE needs the connection kept open; the proxy handles this by default.
       },
     },
+  },
+  test: {
+    environment: "jsdom",
   },
 });

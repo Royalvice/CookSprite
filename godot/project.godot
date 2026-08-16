@@ -1,0 +1,15 @@
+; CookSprite importer validation project. Open this folder in Godot 4.4+.
+config_version=5
+
+[application]
+
+config/name="CookSprite Importer Tests"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/cooksprite_importer/plugin.cfg")
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"

@@ -1,161 +1,121 @@
-# AGENTS.md — CookSprite
+# CookSprite agent contract
 
-CookSprite is a general, open-source tool for producing 2D **sprites** with AI.
-`CLAUDE.md` is a compatibility symlink to this file; keep one agent contract.
+CookSprite is a general open-source AI sprite tool. Its signature output is a
+SpritePair: diffuse art plus a same-size normal map for dynamic-light preview.
+Lowest user burden and one canonical implementation per capability win.
 
-## First Rule
-
-**Lowest usage burden wins.** Design for three audiences, in this priority:
-
-1. **Agents** call it — fast, scriptable, one obvious way to do a thing.
-2. **Humans** use the web toolbox — pick a task, run, preview, light-edit.
-   Never author node graphs.
-3. **Contributors** extend it — add a model adapter or a workflow without
-   touching the other layers.
-
-**Fully general. Zero downstream-game assumptions.** CookSprite must never
-hard-code a specific game's camera angle, canvas size, direction naming, actor
-pixel height, or content identity. Direction counts, canvas dimensions, frame
-rates, and naming are user-supplied config, never baked constants.
-
-**Simply First.** One default route per capability. One owner per concern
-across the four layers. Delete an unselected route rather than keep it "just in
-case." Missing data or a failed inference surfaces an explicit error — never a
-silent fallback or a second hidden implementation.
-
-## Product Lock
-
-- CookSprite produces **sprites**: directional clips, sprite sheets, and — the
-  signature unit — **sprite pairs** (a diffuse frame plus a same-size normal
-  map for dynamic lighting).
-- It is an **AI-generation tool**, not a hand-drawing pixel editor. The web
-  frontend previews, selects frames, does pixel-perfect cleanup, and can
-  regenerate a single frame. Detailed hand-pixeling stays in dedicated editors
-  (Aseprite) via standard PNG sprite-sheet round-trips.
-- Reference frontends for the human editor: spritecook.ai and pixellab.ai.
-- The frontend includes a **three.js interactive preview**: load a sprite +
-  its normal map, drag a dynamic light source, watch normal-mapped shading in
-  real time.
-
-
-## Architecture — Four ABI-Decoupled Layers
+## System boundary
 
 ```text
-Model + Inference  ──[ /infer HTTP API ]──►  atomic capability, local OR remote (docker)
-Workflow           ──[ typed tool graph ]──►  one minimal self-contained task
-Frontend           ──[ triggers workflows ]──►  Web GUI (humans) + CLI/skill (agents)
+Human Web ──────────────────────┐
+Human / Agent → cspr CLI ───────┼→ CookSprite /api/v1 → ComfyUI → Artifacts
+Contributor graph clients ─────┘
 ```
 
-Each layer talks to the next only through a stable contract (its ABI). You can
-swap a model, add a workflow, or replace the web UI without the other layers
-knowing. ComfyUI is **not** a dependency — see the ComfyUI section.
+CookSprite API is the control plane. It validates typed requests, versions and
+compiles graphs, schedules runs, tracks state/provenance, and persists declared
+artifacts. It never runs AI inference or performs image, mask, audio, video, 3D,
+or other media computation.
 
+ComfyUI is the sole compute plane. Every authoritative media transformation,
+including deterministic processing, executes as an installed ComfyUI node or a
+sealed node subgraph. Web never talks to ComfyUI, authors graphs, or creates an
+authoritative derived artifact. Browser-only interaction such as three.js
+lighting preview is presentation state and is allowed.
 
-## The Three Abstractions (the core mental model)
+`CS_LoadArtifact` and `CS_StoreArtifact` are the only artifact bridge. Artifacts
+are typed, SHA-256 content-addressed blobs with SQLite metadata. Comfy upload,
+output, and view folders are never public storage.
 
-Two composition layers, same DAG shape. A **task** is a DAG of workflow-nodes;
-a **workflow** is a DAG of tool-nodes. Neither nests into itself.
+## Product and composition model
+
+Stable Actions are the only ordinary product entry points. Internally they
+compile through the following model:
 
 ```text
-Task  — a user-facing goal, e.g. "reference image → a full sprite animation
-  │      pack". A DAG of workflow-nodes; the unit a frontend triggers. A simple
-  │      goal (text→image) mounts ONE workflow; a big one mounts MANY.
-  └── node — one slot in the task. Runs exactly one Workflow, chosen from
-        │     `candidates` ([0] is the default; callers may pick another).
-        │     Nodes wire one workflow's output into another's declared input.
-        └── Workflow — one minimal end-to-end route; a FLAT graph of tools
-              │        (never contains another workflow). May declare external
-              │        `inputs` a task feeds via `$in.<name>`. Reusable across
-              │        tasks and across nodes.
-              └── Tool — the smallest unit that satisfies one minimal function,
-                    with a typed input/output port (ComfyUI-like). Every tool
-                    has a `kind`:
-                    ├── kind="inference"     — calls /infer (text2img, img2img,
-                    │     img2vid, upscale …). Names a model op that MANY
-                    │     model_ids can serve behind /infer.
-                    └── kind="deterministic" — a local, model-free step
-                          (pixelize, crop, center-align, normal-estimate …).
+Action → Task → Workflow → Tool → cooksprite.* / comfy.* ComfyUI nodes
 ```
 
-Key decoupling: a **task** is independent of *which model* or *which route*
-fulfills each step. A workflow is task-independent and reusable; the model
-choice is a param on each inference tool.
+- An **Action** is stable user intent shared by Web, CLI, and agents.
+- A **Task** is a versioned DAG of Workflow nodes with explicit candidates.
+- A **Workflow** is a versioned, flat DAG of Tools; it never nests Workflows.
+- A **Tool** is the smallest reusable typed capability. Its executable lowering
+  is a ComfyUI node or sealed subgraph; it has no API-side compute fallback.
+- A **Recipe** binds an Action to a validated Task/Workflow, models, and one
+  immutable runtime snapshot. Runtime changes require a new revision.
 
-**Candidate selection:** each task node lists one or more workflow candidates;
-`candidates[0]` is the default. Humans and agents may pick another candidate by
-node. No hidden auto-ranking.
+Tool ports use CookSprite domain types such as `Image`, `Mask`, `FrameSeq`,
+`SpriteSheet`, `NormalMap`, and `SpritePair`, represented by shared Python
+schema classes. Raw Comfy values, filesystem paths, temporary URLs, and
+node-specific dictionaries may exist only inside an adapter and must not cross
+a Tool, API, CLI, or artifact boundary. Output ports, never names or file
+extensions, determine artifact kinds. Only declared persistable outputs leave
+the graph.
 
-**Typed I/O:** tools declare typed inputs/outputs (Image, ImageBatch,
-SpriteSheet, FrameSeq, Mask, NormalMap, Palette, …) so they compose safely.
+`cooksprite.*` Tools lower to our custom-node packages. `comfy.*` Tools are
+dynamically discovered from a connected runtime. Discovery proves presence;
+only a validated Recipe proves that an Action is available. There is no hidden
+fallback route.
 
+## Tool packages
 
-## Repository Shape & Branch State
+Related Tools form one cohesive, versioned Tool package—for example alpha,
+frames, normals, or export—not a grab bag. Prefer composition and narrow
+protocols over deep inheritance or global switch statements. Each package owns:
 
-```text
-backend/    Python — FastAPI /infer server, model adapters, model-op routing
-workflow/   Python — workflow schema, tool library, runner, ComfyUI export
-cli/        Python — agent-facing CLI + skill
-web/        TypeScript — human toolbox, sprite preview, three.js light preview
-docs/       open-source-facing documentation (public)
-.agent-os/  dev-state docs (NEVER in git; ignored)
-```
+- its typed Tool contracts and domain configuration;
+- its server-side ComfyUI node implementations;
+- its Workflow/Task definitions and model/node requirements;
+- its compiler registration, provenance, license metadata, and tests.
 
-- `.agent-os/` is branch/local development state, never in git, never in the
-  public release tree.
-- `docs/` is the open-source-facing documentation and IS committed.
-- `AGENTS.md` is the one contract; `CLAUDE.md` is a symlink to it.
-- No model weights, secrets, `.env`, generated outputs, or scratch in git.
+Package implementations must be headless and require no ComfyUI browser
+extension. Content under `.local/` is untracked reference material only: never
+import it at runtime, package it, or copy it without an explicit license and
+clean-room provenance review.
 
+## One registry, all clients
 
-## ComfyUI Relationship — Export Bridge Only
+One structured Action/Tool registry is the source of truth. Its projections
+produce API discovery and validation, `cspr` commands/help, Vue controls and
+types, and the CookSprite agent Skill reference. These surfaces must not keep
+independent handwritten capability lists.
 
-ComfyUI is the most mature open-source generation ecosystem, so many users live
-there. CookSprite does **not** depend on it and does **not** build on its
-`custom_nodes`. Instead:
+Adding a capability is incomplete until the same change provides:
 
-- The backend is a self-owned lightweight inference API (`/infer`).
-- A **translator** exports a CookSprite workflow → ComfyUI **API-format JSON**
-  (`{node_id: {class_type, inputs}}`, links as `["node_id", output_index]`).
-- This lets ComfyUI users run our workflows in their environment without us
-  carrying ComfyUI's weight.
+1. typed Tool package contract and ComfyUI implementation;
+2. Workflow/Task/Recipe lowering and stable Action exposure;
+3. CLI list/describe/run/wait/cancel/result support without a browser;
+4. generated or compiler-checked Web controls and Agent Skill documentation;
+5. contract tests plus real ComfyUI execution returning typed artifacts.
 
-Rationale: ComfyUI's own architecture confirms inference-as-HTTP-API is right;
-its API-format workflow is nearly 1:1 with our "workflow = minimal function"
-concept, so a translator is cheap and keeps us light.
+Agents invoke `cspr`; they do not call internal Python classes or ComfyUI.
+Humans may use either Web or `cspr`. Every principal product workflow must be
+completable by CLI against `/api/v1`, without starting a frontend or browser.
 
+## Distribution and installation
 
-## Inference Contract (Model-Layer ABI)
+- The Python distribution `cooksprite` owns domain schemas, compiler, API,
+  CLI, installer, and node-pack payload/metadata, and ships as a wheel/sdist.
+- `web/` is a TypeScript + Vue npm workspace used to build and test the UI.
+  End users must not need Node.js or npm: release builds ship its static output
+  inside the Python/release distribution and the CookSprite server serves it.
+- CookSprite custom nodes are independently versioned as standard ComfyUI node
+  packages but are installed and verified by the CookSprite installer.
+- One explicit install command is the target UX for CLI, API, built Web assets,
+  an isolated pinned ComfyUI when needed, and compatible CookSprite node packs.
+  Existing local or remote ComfyUI installations use the same API and may be
+  registered without copying or modifying their existing models.
+- Model downloads are never a startup side effect. An install command must show
+  model identity, source, license, size, destination, and obtain explicit
+  consent before downloading. Installation must be resumable and verifiable.
 
-Minimal REST, async job model (generation — especially video — is long):
+## Project rules
 
-```text
-POST /infer { "op", "model_id", "inputs", "params" } → { "job_id" }
-GET  /jobs/{job_id}            → status + progress
-GET  /jobs/{job_id}/result     → { "outputs", "meta" }
-```
-
-- Engine: **vLLM-Omni** (covers FLUX.2 / WAN2.2 / LTX-2 / Qwen-Image / … in one
-  engine). Orchestration: **Ray Serve** (model pool + VRAM multiplexing +
-  future scale-out).
-- One unified API regardless of machine; dev deployment on H20 GPU.
-- Each `op` is atomic; one `op` ← many `model_id`s (caller/workflow picks).
-- Adapters implement `(op, model_id) → result` on vLLM-Omni.
-- Sprite multi-inputs (control / normal / mask / reference) are first-class
-  `inputs`, not bolted on.
-
-
-## v1 Vertical Slice (first end-to-end proof)
-
-One prompt → single sprite → pixelize + normal-estimate → preview / light-edit,
-touching every layer (Op + Tool + workflow + frontend + CLI). The frontend adds
-a **three.js interactive preview**: load the sprite + normal map, drag a dynamic
-light source, watch normal-mapped shading update live.
-
-## Working Discipline
-
-- Recovery order: read this file → `.agent-os/project-index.md` → active
-  `todo.md` → newest `run-log.md` → the smallest owning schema/module/test.
-- Make the smallest final-form change and verify it. No dead code or routes.
-- First-party Markdown stays below 500 lines.
-- No commit, push, or history rewrite without explicit user instruction.
-
+- Stable Actions minimize usage burden; contributor graph APIs are advanced
+  integration surfaces, not normal product UX.
+- No game-specific geometry, names, assets, or baked direction/canvas policy.
+- No user accounts in v0.1; use trusted localhost or private networking.
+- Do not commit secrets, models, generated outputs, `.env`, `.agent-os`, or
+  `.local`.
+- Preserve user changes. Do not commit, push, rewrite history, or publish
+  packages without explicit permission.

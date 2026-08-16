@@ -1,49 +1,18 @@
-# --- CookSprite dev-state (never public) ---
+.DS_Store
+.env
+.venv/
 .agent-os/
 .local/
-
-# --- Python ---
+*.egg-info/
 __pycache__/
 *.py[cod]
-.venv/
-venv/
-*.egg-info/
 .pytest_cache/
 .ruff_cache/
-.mypy_cache/
-
-# --- Node / TS web frontend ---
-node_modules/
-dist/
-build/
-.vite/
-*.tsbuildinfo
-
-# --- Model weights & big binaries (never in git) ---
-*.safetensors
-*.ckpt
-*.pt
-*.pth
-*.onnx
-*.gguf
-models/weights/
-
-# --- Secrets & env ---
-.env
-.env.*
-*.key
-secrets.*
-
-# --- Generated media / scratch / workspaces ---
-outputs/
-scratch/
-tmp/
-*.log
-cooksprite_workspace/
-
-
-# --- OS / editor ---
-.DS_Store
-Thumbs.db
-.idea/
-.vscode/
+data/
+models/
+output/
+web/node_modules/
+web/dist/
+web/playwright-report/
+web/test-results/
+godot/.godot/

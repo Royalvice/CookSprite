@@ -1,68 +1,88 @@
-<div align="center">
+# CookSprite
 
-# 🍳✨ CookSprite
+CookSprite is a local-first, open-source AI Sprite studio. Its signature asset
+is a `SpritePair`: diffuse art plus a same-size normal map that can be tested
+under live light before export.
 
-**Cook up game-ready sprites with AI.** 🎮👾
-
-_Directional clips · sprite sheets · **sprite pairs** (diffuse + normal map) for real dynamic lighting._
-
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![three.js](https://img.shields.io/badge/three.js-000000?logo=three.js&logoColor=white)](https://threejs.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)](./docker)
-[![ComfyUI export](https://img.shields.io/badge/ComfyUI-export%20bridge-6E44FF)](./docs/04_COMFYUI_EXPORT.md)
-[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#-contributing)
-[![Status: v1 slice](https://img.shields.io/badge/status-v1%20slice-orange.svg)](#-status)
-
-</div>
-
----
-
-CookSprite is **AI-generation-first**, not a hand-drawing pixel editor. 🎨 Generate, preview, pixel-perfect, and regenerate individual frames — then round-trip to editors like Aseprite via standard PNG sprite sheets when you want to hand-tune. 🖌️
-
-## 🧩 Design in one picture
+The product has one execution boundary:
 
 ```text
-🧠 Model + Inference  ──[ /infer HTTP API ]──►  atomic op · local OR docker
-⚙️  Workflow           ──[ typed tool graph ]──►  one minimal task
-🖥️  Frontend           ──[ triggers workflows ]──►  Web toolbox (you) + CLI/skill (agents)
+Vue Web UI / cspr CLI / agent Skill
+                  │
+                  ▼
+       CookSprite /api/v1 Actions
+                  │
+                  ▼
+               ComfyUI
+                  │
+                  ▼
+    SHA-256 CookSprite artifacts
 ```
 
-Four **ABI-decoupled** layers. 🔌 Swap a model, add a workflow, or replace the UI without touching the rest. ComfyUI is supported as an **export target** (workflow → ComfyUI API JSON), not a dependency.
+The browser never talks to ComfyUI and never contains inference logic. The API
+validates a registered Action, compiles its private graph, tracks the run, and
+stores only declared outputs. ComfyUI is the sole media execution runtime.
 
-## 💡 Concepts
+## Included in v0.1
 
-- 🎯 **Task** — what you want (e.g. "a single sprite pair"). A DAG of workflow-nodes; each node runs one workflow from a list of candidates.
-- 🛣️ **Workflow** — a flat tool graph that takes typed inputs and returns one typed artifact. Reusable across tasks; you never wire nodes by hand.
-- 🔧 **Tool** — the smallest unit, with typed I/O. `kind="inference"` calls a model; `kind="deterministic"` runs locally (pixelize, crop, pack…).
+- Vue 3 + TypeScript workbench with image, same-page animation curation, normal
+  preview, library, queue, gallery, and export stages.
+- Seven bilingual Actions shared by Web, CLI, and agents:
+  `image.generate`, `animation.generate`, `frame.redraw`, `sheet.slice`,
+  `video.sample`, `normal.generate`, and `sprite.export`.
+- Eight real direction tracks, level/top-45 views, per-frame timing and offsets,
+  original-preserving redraw variants, and undo/redo.
+- Typed `FrameSeq` manifests with ordered reusable `Image` frames.
+- Three.js normal-map preview with direct light dragging, a visible light gizmo,
+  full normal-map view, and neutral/day/night CC0 HDR environments.
+- One canonical `.cooksprite` ZIP package and a Godot 4.4+ importer.
+- Local SQLite metadata and SHA-256 content-addressed blobs. No account,
+  telemetry, remote gallery, or download without an explicit setup command/click.
 
-## 🚀 Quick start
+## Run locally
 
 ```bash
-pip install -e .
-
-# See what CookSprite can do
-cspr list
-
-# Cook a sprite (diffuse + normal pair) 🍳
-cspr run single_sprite --prompt "a small copper robot" --out ./out
-
-# Export any workflow to ComfyUI API JSON 🔁
-cspr export single_sprite --out workflow.json
+python -m pip install -e '.[dev]'
+cspr serve --host 127.0.0.1 --port 8000
 ```
 
-Prefer the web toolbox? 🖥️ `cd web && npm install && npm run dev` — includes a **three.js draggable-light preview** so you can see your normal maps light up in real time. 💡
+In another terminal:
 
-## 📊 Status
+```bash
+cd web
+npm install
+npm run dev
+```
 
-**v1 vertical slice — green.** ✅ Single-prompt → single-sprite pipeline runs end-to-end GPU-free (deterministic stub adapter), with a production vLLM-Omni inference path wired for real model weights. See [`docs/`](./docs) for the full design.
+Open `http://127.0.0.1:5173`. The workbench remains visible without a runtime,
+but generation Actions are disabled until a trusted ComfyUI is registered and
+checked:
 
-## 🤝 Contributing
+```bash
+cspr comfy import --runtime local --label "Local ComfyUI" --url http://127.0.0.1:8188
+cspr comfy doctor --runtime local
+```
 
-PRs welcome! New workflows are just declarative YAML; new Tools/Ops are small typed Python functions. Start with [`docs/03_WORKFLOW.md`](./docs/03_WORKFLOW.md).
+If ComfyUI is not installed, the Settings page or this explicit command installs
+an isolated pinned runtime, the CookSprite node pack, and a hash-verified default
+SD 1.5 checkpoint:
 
-## 📜 License
+```bash
+cspr comfy install ~/.cooksprite/runtime
+cspr comfy run ~/.cooksprite/runtime
+```
 
-[Apache-2.0](./LICENSE). Cook freely. 🧑‍🍳
+Use `--no-models` when only installing the runtime/node pack. Existing ComfyUI
+installations and model directories are never modified by the managed installer.
+Every compatible checkpoint already visible to that ComfyUI becomes a selectable
+text/image Recipe. Existing image-to-video or text-to-video API workflows stay
+in ComfyUI and can be registered as a small Recipe adapter; their declared
+`i2v`/`t2v` modes appear in the same animation model selector. On NVIDIA Linux,
+the managed installer pins a CUDA 12.6 PyTorch build instead of accepting an
+incompatible newest-CUDA wheel from a partial package mirror.
+
+Start with [architecture](docs/01_ARCHITECTURE.md), the
+[Action/API contract](docs/02_INFERENCE_API.md), and the
+[authoring workflow](docs/03_WORKFLOW.md). Contributor-level Comfy details live
+in [runtime integration](docs/04_COMFYUI_EXPORT.md); the existing
+[capability map](docs/05_COMFYUI_CAPABILITY_MAP.md) is preserved separately.

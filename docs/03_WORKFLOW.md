@@ -1,59 +1,47 @@
-# 03 · Workflow
+# 03 · Product workflow
 
-A **workflow** is one minimal, self-contained task: a graph of typed
-tools that turns inputs into sprite output. It is the unit a frontend
-triggers.
+The workbench follows one visible sequence so beginners do not need to learn
+graphs:
 
-## Tools
+1. **Create** — describe a character, weapon, prop, terrain, scene element, or
+   VFX; optionally drop one reference image for image-to-image.
+2. **Animate** — choose one action, one view, and one real direction; generate
+   a `FrameSeq`, then curate it in the same page. Hover/focus to preview, click
+   to place a green check, range-select, replace or append to the named final track, play,
+   reorder, repeat, delete, set exact milliseconds and offsets, compare A/B,
+   onion-skin/diff, redraw, and undo/redo.
+3. **Normals** — generate normals for one image or every frame in the current
+   sequence and inspect the real normal map or the pair under neutral, day, and
+   night HDR light.
+4. **Ship** — validate and emit `.cooksprite`; incomplete exports require an
+   explicit acknowledgement and record their warnings.
 
-A **tool** is the smallest unit that satisfies one minimal function. Every tool
-declares typed inputs/outputs and has a `kind`:
+The Animate stage also imports a SpriteSheet or GIF/video. Import chooses the
+target action, view, and direction before extraction. SpriteSheet controls cover
+auto/manual rows and columns, frame width/height, margin, spacing, and empty-cell
+exclusion. Video controls expose sampling FPS and maximum frames.
+Candidate lists virtualize after normal browser overflow and remain keyboard
+operable.
 
-- **`kind="inference"`** — calls a model op via `/infer`. May be served by
-  several models; the workflow (or caller) picks a `model_id`, or takes the
-  op's default. Examples: `text2img`, `img2img`.
-- **`kind="deterministic"`** — local, model-free. Examples: `pixelize`,
-  `normal_estimate`, `crop`, `center_align`, `pack_sheet`.
+Every imported/generated item is an Artifact and can be dragged to any
+compatible slot with the same `{artifact_id, kind}` payload. External files can
+be dropped or selected without a prior upload step. Originals stay in the
+Library; replacement variants add lineage instead of overwriting bytes.
 
-Tools declare typed ports (`Image`, `ImageBatch`, `FrameSeq`, `SpritePair`,
-`SpriteSheet`, `Mask`, `NormalMap`, `Palette`) so connections are checked.
-`ImageBatch` is an **unordered** set (e.g. batch candidates for one prompt);
-`FrameSeq` is an **ordered** sequence (animation / turntable), and is what
-`pack_sheet` consumes.
+Transient preview and committed selection are separate states. Hovering never
+changes the character/reference/normal input. After image generation, explicit
+buttons carry the selected result into image-to-image, animation, or normals.
+After curation, the final document track is materialized as a typed `FrameSeq`;
+that final sequence, not the raw candidate sequence, is the default hand-off to
+normal generation and later Actions. Per-project stage, form, input, selection,
+and active-sequence workspace state is restored after a browser refresh.
 
-Port typing is exact-match today (a `"any"` port opts out). Subtyping and
-union ports are a deliberate non-feature until a real cross-type tool needs
-them — see `.agent-os/change-decisions.md` CD-026.
+The Gallery is not a feed. A project appears only after **Finish & Showcase**.
+There are no accounts, recommendations, or telemetry in v0.1.
 
-## Tasks
+## Automation
 
-A **task** is a DAG of workflow-nodes. Each node has a `candidates` list of
-workflows (`candidates[0]` is the default); callers select a non-default
-candidate by name. Node outputs wire into downstream workflow declared
-`inputs`. Example — `single_sprite`:
-
-```
-gen (generate_image) ──► spr (spritify)
-```
-
-`spr` is wired `inputs: {src: gen}`, feeding `gen`'s image output into
-`spritify`'s declared `$in.src` input.
-
-## Authoring
-
-- **Authoring** (developers/agents): wire tools into a workflow graph, wire
-  workflows into a task. Connections are explicit.
-- **Using** (humans): the web toolbox never shows the graph. Pick a task,
-  optionally pick a non-default workflow candidate per node, set exposed
-  params, and run.
-
-## Running
-
-The workflow runner resolves the graph, calls `/infer` for inference tools,
-runs deterministic tools locally, and returns typed outputs (e.g. a sprite pair
-or a sheet). Failures surface explicitly per tool.
-
-## ComfyUI export
-
-Any workflow can be exported to ComfyUI **API-format JSON**. See
-`04_COMFYUI_EXPORT.md`.
+CLI and agents do not imitate clicks. They discover the same Action registry,
+create a Project, upload Artifacts, run Actions, wait for Run completion, edit
+the ETag-protected SpriteDocument, and run `sprite.export`. See
+`skills/cooksprite/SKILL.md` for the concise harness contract.

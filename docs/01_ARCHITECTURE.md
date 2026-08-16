@@ -1,53 +1,89 @@
 # 01 · Architecture
 
-Four ABI-decoupled layers. Each talks to the next only through a stable
-contract, so any layer can be swapped independently.
+## Boundary
 
 ```text
-Model + Inference  ──[ POST /infer ]──►  atomic op, local OR remote (docker)
-Workflow           ──[ typed tool graph ]──►  one minimal self-contained task
-Frontend           ──[ triggers workflows ]──►  Web GUI (humans) + CLI/skill (agents)
+Human              Automation                Contributor
+Vue UI              cspr / Skill              graph APIs
+   └──────────────────────┬────────────────────────┘
+                          ▼
+                 CookSprite /api/v1
+       Action registry · validation · compiler · runs
+       projects · SpriteDocument · artifact metadata
+                          │ private prompt
+                          ▼
+                       ComfyUI
+              inference and all media operations
+                          │ CS_StoreArtifact
+                          ▼
+        SQLite metadata + data/artifacts/<sha256>
 ```
 
-## The three abstractions
+CookSprite is a control plane, not an inference server. The API may validate,
+version, compile, schedule, package existing bytes, and track provenance. It
+must not run a model or perform an image/video operation. ComfyUI is the only
+execution runtime. `CS_LoadArtifact` and `CS_StoreArtifact` are the sole bridge;
+Comfy upload/view folders are not public storage.
 
-```text
-Task      — a DAG of workflow-nodes. Each node runs one workflow chosen from
-              a `candidates` list ([0] is the default); node outputs wire into
-              downstream workflow declared inputs.
-  └── Workflow  — a flat DAG of tool-nodes with typed I/O. Declares external
-        `inputs` (artifact ports); reusable across many tasks.
-        └── Tool — the smallest unit, with typed I/O and a `kind`:
-              ├── kind="inference"     — calls a model op via /infer; served by
-              │     MANY model_ids.
-              └── kind="deterministic" — a local, model-free step.
-```
+## Product layer
 
-- A **Task** composes workflows: each node slot has a default candidate and
-  optional alternates that callers can select by name.
-- A **Workflow** is task-independent and reusable. It never nests another
-  workflow; nesting is the task's job.
-- **Topology is never shown to humans.** Developers and agents author graphs;
-  the web frontend only triggers tasks.
+Most clients use stable Actions. One YAML registry is compiled into:
 
-## Typed I/O
+- API discovery and validation;
+- Vue controls, typed option examples, input slots, availability, and model choices;
+- `cspr action describe/run`;
+- the CookSprite agent Skill.
 
-Tools declare typed inputs/outputs so they compose safely:
-`Image`, `ImageBatch`, `SpriteSheet`, `FrameSeq`, `Mask`, `NormalMap`,
-`Palette`, and more as needed.
+Option examples are normal `ArtifactRef` values, not media URLs or hidden prompt
+packs. Every business image is rendered from an Artifact and uses the same
+`{artifact_id, kind}` drag payload. The browser sends Action IDs, artifact IDs,
+and user-visible values; it cannot author or submit a Comfy graph.
 
-## Repository layout
+## Contributor layer
 
-```text
-backend/    Python — /infer server, model adapters, model-op routing
-workflow/   Python — schema, tool library, runner, ComfyUI export
-cli/        Python — agent CLI + skill
-web/        TypeScript — human toolbox + three.js light preview
-docs/       this documentation
-```
+Advanced integrations can register runtimes, inspect Tools, and author typed
+Workflow/Task definitions. A Workflow is a flat Tool DAG. A Task is a Workflow
+DAG with explicit candidates. Every revision is immutable and bound to one
+doctor snapshot. A runtime change requires a newly validated revision; there is
+no hidden fallback.
 
-## Why decoupled
+Action, Workflow, and Task are authoring surfaces, not separate executors. Each
+compiles to the same private `ExecutionPlan` (`graph` plus declared artifact
+sinks), then uses one submit/wait/cancel/error path. Tool output ports determine
+artifact kinds; names such as `normal` are never used to guess a type. A Tool is
+not directly runnable because a versioned Workflow must declare which typed
+outputs may leave ComfyUI.
 
-You can replace the inference backend (local ↔ docker ↔ different models), add
-a new workflow route, or rebuild the web UI, and the other layers do not
-change. That is the whole point of the ABI boundaries.
+## Runtime adaptation
+
+An online ComfyUI and a compatible Action are separate facts. Doctor snapshots
+node schemas and model folders; a compact `Recipe` binds an Action to one
+checkpoint or imported API-format workflow and declares only:
+
+- supported Action IDs;
+- accepted modes such as `t2i`, `i2i`, `i2i-sequence`, or `video-to-frames`;
+- checkpoint identity or workflow graph;
+- semantic input slots and one typed output.
+
+This keeps arbitrary user ComfyUI installations useful without guessing what a
+node/model combination means. Runtime liveness plus at least one verified Recipe
+is required before the product says “ready.” Imported recipes are tied to the
+doctor snapshot and cannot silently survive incompatible node changes.
+
+The same topology works locally or remotely. For remote compute, CookSprite API
+is deployed beside ComfyUI, and signed artifact bridge traffic stays between
+those services. Web, CLI, and agents see the same Actions and never receive
+Comfy URLs, filesystem paths, workflow JSON, or prompt IDs.
+
+## State
+
+- `Project`: name, static/character/tileset type, publication state.
+- `SpriteDocument`: semantic editable state with ETag concurrency: pivot,
+  canvas, clips, views, direction tracks, frame order, timing, offsets, normals.
+- `Artifact`: immutable SHA-256 blob plus kind, media type, lineage, favorites,
+  trash state, and project links.
+- `Run`: Action/graph request, public status, normalized error, artifact outputs,
+  and private runtime identifiers.
+
+The local Gallery is deliberately manual: only explicitly published projects
+appear. v0.1 assumes trusted localhost/private networking and has no users.
