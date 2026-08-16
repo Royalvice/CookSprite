@@ -7,8 +7,9 @@ from typing import Any
 
 import yaml
 
-from .domain import ActionDescriptor, ArtifactRef, ModelOption
+from .domain import ActionDescriptor, ArtifactRef, ModelOption, ToolDescriptor
 from .recipes import Recipe, supports
+from .tool_packages import ToolPackageRegistry, tool_packages
 
 ACTION_IDS = (
     "image.generate",
@@ -17,7 +18,6 @@ ACTION_IDS = (
     "sheet.slice",
     "video.sample",
     "normal.generate",
-    "sprite.export",
 )
 
 
@@ -25,9 +25,16 @@ class RegistryError(ValueError):
     pass
 
 
-class ActionRegistry:
-    def __init__(self, path: str | Path | None = None):
+class CookSpriteRegistry:
+    """Single source of truth for product Actions and built-in Tool packages."""
+
+    def __init__(
+        self,
+        path: str | Path | None = None,
+        packages: ToolPackageRegistry = tool_packages,
+    ):
         self.path = Path(path or Path(__file__).with_name("actions.yaml"))
+        self.packages = packages
         raw = yaml.safe_load(self.path.read_text(encoding="utf-8"))
         if raw.get("schema") != "cooksprite.actions/v1":
             raise RegistryError("unsupported Action registry schema")
@@ -56,6 +63,12 @@ class ActionRegistry:
 
     def get(self, action_id: str) -> ActionDescriptor | None:
         return self._actions.get(action_id)
+
+    def tools(self) -> list[ToolDescriptor]:
+        return self.packages.tools()
+
+    def package_manifests(self) -> list[dict[str, Any]]:
+        return self.packages.dump()
 
     def list(
         self,
@@ -94,9 +107,6 @@ class ActionRegistry:
                     data["controls"][control_index]["options"][option_index]["example"] = (
                         self._examples[option.example_key].model_dump(mode="json")
                     )
-        if action.id == "sprite.export":
-            data.update(available=True, unavailable_reason=None, models=[])
-            return ActionDescriptor.model_validate(data)
         ready = bool(runtime and runtime.get("snapshot"))
         compatible = [recipe for recipe in recipes if supports(recipe, action.id)]
         available = ready and bool(compatible)
@@ -157,3 +167,14 @@ class ActionRegistry:
     @staticmethod
     def defaults(action: ActionDescriptor) -> dict[str, Any]:
         return {control.id: control.default for control in action.controls}
+
+
+# Backwards-compatible import name for contributors using the v0.1 API.
+ActionRegistry = CookSpriteRegistry
+
+__all__ = [
+    "ACTION_IDS",
+    "ActionRegistry",
+    "CookSpriteRegistry",
+    "RegistryError",
+]

@@ -87,7 +87,7 @@ const character = computed(() => {
 });
 const activeArtifact = computed(() => transientPreview.value || selectedArtifact.value || diffuse.value || store.curatedSequence?.artifact || store.activeSequence?.artifact || store.artifacts[0]);
 const createDisplayArtifact = computed(() => transientPreview.value || selectedArtifact.value || recentCreateOutputs.value[0] || imageCandidates.value[0]);
-const exportIssues = computed(() => store.activeRun?.action_id === "sprite.export" && store.activeRun.status === "failed"
+const exportIssues = computed(() => store.activeRun?.action_id === "project.export" && store.activeRun.status === "failed"
   ? store.activeRun.error?.issues || [store.activeRun.error?.message || store.activeRun.message] : []);
 const running = computed(() => Boolean(store.activeRun && ["queued", "running"].includes(store.activeRun.status)));
 const animationModel = computed(() => animationAction.value?.models.find((item) => item.id === animationValues.value.model));

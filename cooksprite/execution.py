@@ -45,7 +45,7 @@ class PlanBuilder:
         if not self.bridge or not self.run_id:
             raise ValueError("artifact references require a signed runtime bridge")
         class_type = "CS_LoadVideoArtifact" if video else "CS_LoadArtifact"
-        input_name = "video_url" if video else "artifact_url"
+        input_name = "video" if video else "artifact_url"
         node_id = self.add(
             class_type,
             {input_name: self.bridge.download_url(artifact_id, self.run_id)},
@@ -61,13 +61,14 @@ class PlanBuilder:
     ) -> str:
         if not self.bridge or not self.run_id:
             raise ValueError("persisted outputs require a signed runtime bridge")
+        storage_kind = "Image" if kind == "ImageBatch" else kind
         node_id = self.add(
             "CS_StoreArtifact",
             {
                 "value": value,
                 "upload_url": self.bridge.upload_url(
                     self.run_id,
-                    kind,
+                    storage_kind,
                     source_artifact,
                 ),
             },

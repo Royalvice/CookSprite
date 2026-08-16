@@ -96,6 +96,7 @@ class ToolDescriptor(BaseModel):
     id: str
     version: int = 1
     source: Literal["cooksprite", "comfy"]
+    package_id: str | None = None
     title: str
     inputs: list[PortDescriptor] = Field(default_factory=list)
     outputs: list[PortDescriptor] = Field(default_factory=list)
@@ -108,6 +109,37 @@ class ToolDescriptor(BaseModel):
             body = self.model_dump(exclude={"schema_hash"}, mode="json")
             self.schema_hash = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
         return self
+
+
+class ToolPackageManifest(BaseModel):
+    """One cohesive, versioned set of CookSprite Tools and Comfy nodes."""
+
+    id: str
+    version: str
+    license: str
+    requirements: list[str] = Field(default_factory=list)
+    tools: list[ToolDescriptor] = Field(default_factory=list)
+    lowerings: dict[str, str] = Field(default_factory=dict)
+    node_classes: list[str] = Field(default_factory=list)
+    workflows: list[str] = Field(default_factory=list)
+    tasks: list[str] = Field(default_factory=list)
+    recipes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def complete_lowerings(self) -> ToolPackageManifest:
+        tool_ids = {tool.id for tool in self.tools}
+        if set(self.lowerings) != tool_ids:
+            missing = sorted(tool_ids - set(self.lowerings))
+            unknown = sorted(set(self.lowerings) - tool_ids)
+            raise ValueError(f"package lowerings mismatch; missing={missing}, unknown={unknown}")
+        if len(self.node_classes) != len(set(self.node_classes)):
+            raise ValueError("package node classes must be unique")
+        return self
+
+
+class DefinitionRef(BaseModel):
+    id: str
+    revision: int = Field(ge=1)
 
 
 class ToolNode(BaseModel):
@@ -124,6 +156,7 @@ class WorkflowDefinition(BaseModel):
     inputs: dict[str, PortType] = Field(default_factory=dict)
     nodes: list[ToolNode]
     outputs: dict[str, ValueRef]
+    output_sources: dict[str, ValueRef] = Field(default_factory=dict)
     description: str = ""
 
 
@@ -246,6 +279,10 @@ class ActionRunCreate(BaseModel):
     values: dict[str, Any] = Field(default_factory=dict)
 
 
+class ProjectExportCreate(BaseModel):
+    allow_incomplete: bool = False
+
+
 class ArtifactPatch(BaseModel):
     favorite: bool | None = None
     title: str | None = Field(default=None, max_length=160)
@@ -284,6 +321,7 @@ class RunView(BaseModel):
     project_id: str | None = None
     artifacts: list[ArtifactRef] = Field(default_factory=list)
     error: dict[str, Any] | None = None
+    provenance: dict[str, Any] = Field(default_factory=dict)
     created_at: str = ""
     updated_at: str = ""
 

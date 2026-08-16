@@ -10,9 +10,6 @@ may optionally reveal it as the visible background.
 | `neutral_studio` | Poly Haven Studio | `poly_haven_studio_1k.hdr` |
 | `bright_day` | Qwantani Dawn (Pure Sky) | `qwantani_dawn_puresky_1k.hdr` |
 | `moon_night` | Rogland Moonlit Night | `rogland_moonlit_night_1k.hdr` |
-| `warm_healing` | Warm Restaurant | `warm_restaurant_1k.hdr` |
-| `cold_glamour` | Studio Kontrast 04 | `studio_kontrast_04_1k.hdr` |
-| `neon_arcade` | Neon Photostudio | `neon_photostudio_1k.hdr` |
 
 Downloaded from `https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/` on
 2026-08-13. No network request is made by the application at runtime.

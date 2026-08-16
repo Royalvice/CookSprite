@@ -9,7 +9,7 @@ those pieces mean to a CookSprite user.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
 RUNTIME_ASSETS_SCHEMA = "cooksprite.runtime-assets/v1"
@@ -26,6 +26,7 @@ CORE_IMAGE_NODES = {
     "CS_StoreArtifact",
     "CS_IsolateOnGreen",
     "CS_Pixelize",
+    "CS_CompilePromptPacket",
 }
 
 
@@ -41,9 +42,17 @@ class Recipe:
     slots: dict[str, str] = field(default_factory=dict)
     output: list[Any] | None = None
     source: str = "discovered"
+    runtime_snapshot: str | None = None
+    workflows: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def dump(self) -> dict[str, Any]:
         return asdict(self)
+
+    def bind_workflows(self, runtime_snapshot: str, workflows: dict[str, dict[str, Any]]) -> Recipe:
+        return replace(self, runtime_snapshot=runtime_snapshot, workflows=workflows)
+
+    def workflow_for(self, action_id: str, inputs: dict[str, list[str]]) -> dict[str, Any] | None:
+        return self.workflows.get(f"{action_id}:{recipe_mode(action_id, inputs)}")
 
     @classmethod
     def load(cls, raw: dict[str, Any]) -> Recipe:

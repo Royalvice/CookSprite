@@ -1,3 +1,5 @@
 """CookSprite's public, ComfyUI-backed sprite graph service."""
 
-__version__ = "0.1.0"
+from .version import __version__
+
+__all__ = ["__version__"]

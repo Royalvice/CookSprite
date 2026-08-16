@@ -116,11 +116,7 @@ def test_stored_snapshot_does_not_hide_an_offline_runtime(tmp_path):
     assert state["runtime"] == "offline"
     assert state["runtime_id"] == "rt_test"
     assert "stopped" in state["error"]
-    assert all(
-        not action["available"]
-        for action in c.get("/api/v1/actions").json()
-        if action["id"] != "sprite.export"
-    )
+    assert all(not action["available"] for action in c.get("/api/v1/actions").json())
     FakeComfy.online = True
 
 
@@ -151,11 +147,7 @@ def test_persisted_fake_runtime_stays_offline_in_normal_process(tmp_path):
     assert health["runtime"] == "offline"
     assert "disabled" in health["error"]
     assert product_client.get("/api/v1/runtimes").json()[0]["status"] == "offline"
-    assert all(
-        not action["available"]
-        for action in product_client.get("/api/v1/actions").json()
-        if action["id"] != "sprite.export"
-    )
+    assert all(not action["available"] for action in product_client.get("/api/v1/actions").json())
 
 
 def test_versioned_definitions_candidates_and_comfy_compilation(tmp_path):

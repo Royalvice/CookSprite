@@ -39,7 +39,10 @@ Stable IDs in `cooksprite/actions.yaml`:
 | `sheet.slice` | grid-based SpriteSheet extraction | `FrameSeq` |
 | `video.sample` | GIF/video sampling | `FrameSeq` |
 | `normal.generate` | same-size normal maps for image/sequence/sheet | `NormalMap` |
-| `sprite.export` | validate and build one canonical package | `CookSpritePack` |
+
+Packaging is deliberately not an inference Action. Use
+`POST /projects/{id}/exports` to validate and build the canonical
+`CookSpritePack`.
 
 ## Run an Action
 
@@ -83,6 +86,7 @@ Errors use a stable detail object:
 - `GET /projects/{id}/artifacts`
 - `POST /projects/{id}/sequences` materializes one curated document track as a reusable `FrameSeq`
 - `POST /projects/{id}/publish`
+- `POST /projects/{id}/exports`
 - `GET /gallery`
 
 Document GET returns an `ETag`. PUT must send `If-Match`; stale edits receive

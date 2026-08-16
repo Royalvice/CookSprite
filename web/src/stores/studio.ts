@@ -158,6 +158,34 @@ export const useStudioStore = defineStore("studio", () => {
     return artifact;
   }
 
+  function observeRun(
+    run: RunView,
+    actionId?: string,
+    source?: string | string[],
+  ) {
+    activeRun.value = run;
+    stopEvents?.();
+    let integrated = false;
+    stopEvents = subscribeRun(run.id, async (next) => {
+      activeRun.value = next;
+      replaceQueueRun(next);
+      if (next.status === "succeeded") {
+        await refreshArtifacts();
+        if (actionId && !integrated) lastOutputsByAction.value[actionId] = next.artifacts;
+        if (actionId && !integrated && SEQUENCE_ACTIONS.has(actionId) && next.artifacts[0]?.kind === "FrameSeq") {
+          integrated = true;
+          await loadSequence(next.artifacts[0].id);
+        }
+        if (!integrated && actionId === "normal.generate" && next.artifacts.length) {
+          integrated = true;
+          attachNormals(source, next.artifacts);
+        }
+      } else if (next.status === "failed" && actionId) {
+        await refreshRuntime();
+      }
+    }, async (reason) => { error.value = readableError(reason); if (actionId) await refreshRuntime(); });
+  }
+
   async function runAction(actionId: string, inputs: Record<string, string | string[]>, values: Record<string, unknown>) {
     const projectType: ProjectType = actionId === "animation.generate"
       ? "character"
@@ -185,28 +213,8 @@ export const useStudioStore = defineStore("studio", () => {
       await refreshRuntime();
       throw reason;
     }
-    activeRun.value = run;
+    observeRun(run, actionId, inputs.source);
     await refreshQueue();
-    stopEvents?.();
-    let integrated = false;
-    stopEvents = subscribeRun(run.id, async (next) => {
-      activeRun.value = next;
-      replaceQueueRun(next);
-      if (next.status === "succeeded") {
-        await refreshArtifacts();
-        if (!integrated) lastOutputsByAction.value[actionId] = next.artifacts;
-        if (!integrated && SEQUENCE_ACTIONS.has(actionId) && next.artifacts[0]?.kind === "FrameSeq") {
-          integrated = true;
-          await loadSequence(next.artifacts[0].id);
-        }
-        if (!integrated && actionId === "normal.generate" && next.artifacts.length) {
-          integrated = true;
-          attachNormals(inputs.source, next.artifacts);
-        }
-      } else if (next.status === "failed") {
-        await refreshRuntime();
-      }
-    }, async (reason) => { error.value = readableError(reason); await refreshRuntime(); });
     return run;
   }
 
@@ -363,7 +371,11 @@ export const useStudioStore = defineStore("studio", () => {
 
   async function exportPack(allowIncomplete = false) {
     await saveDocument();
-    return runAction("sprite.export", {}, { allow_incomplete: allowIncomplete });
+    if (!currentProject.value) throw new Error("No project is open");
+    const run = await api.exportProject(currentProject.value.id, allowIncomplete);
+    observeRun(run);
+    await refreshQueue();
+    return run;
   }
 
   return {

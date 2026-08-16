@@ -1,0 +1,2138 @@
+{
+  "action_ids": [
+    "image.generate",
+    "animation.generate",
+    "frame.redraw",
+    "sheet.slice",
+    "video.sample",
+    "normal.generate"
+  ],
+  "actions": [
+    {
+      "accepts": {
+        "reference": {
+          "max": 1,
+          "required": false,
+          "type": "Image"
+        }
+      },
+      "controls": [
+        {
+          "advanced": false,
+          "default": "character",
+          "i18n": {
+            "en": {
+              "description": "Compiles into single-subject",
+              "name": "Asset type"
+            },
+            "zh-CN": {
+              "description": "编译为单体、完整轮廓或平铺等构图要求",
+              "name": "素材类型"
+            }
+          },
+          "id": "category",
+          "max": null,
+          "min": null,
+          "options": [
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "One complete character with a clear full-body silhouette",
+                  "name": "Character"
+                },
+                "zh-CN": {
+                  "description": "单个完整角色，全身和轮廓清楚",
+                  "name": "角色"
+                }
+              },
+              "id": "character"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "One complete weapon",
+                  "name": "Weapon"
+                },
+                "zh-CN": {
+                  "description": "单件完整武器，主体不被裁切",
+                  "name": "武器"
+                }
+              },
+              "id": "weapon"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "One complete interactive prop",
+                  "name": "Prop"
+                },
+                "zh-CN": {
+                  "description": "单个完整可交互道具",
+                  "name": "道具"
+                }
+              },
+              "id": "prop"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Orthographic",
+                  "name": "Terrain tile"
+                },
+                "zh-CN": {
+                  "description": "正交视角、可无缝平铺的地图块",
+                  "name": "地形块"
+                }
+              },
+              "id": "terrain"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "One isolated",
+                  "name": "Scene element"
+                },
+                "zh-CN": {
+                  "description": "独立、完整的环境装饰元素",
+                  "name": "场景元素"
+                }
+              },
+              "id": "scene"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "One centered",
+                  "name": "VFX"
+                },
+                "zh-CN": {
+                  "description": "居中的独立视觉特效",
+                  "name": "特效"
+                }
+              },
+              "id": "vfx"
+            }
+          ],
+          "step": null,
+          "type": "select"
+        },
+        {
+          "advanced": false,
+          "default": "pixel",
+          "i18n": {
+            "en": {
+              "description": "Pixel compiles both prompt intent and pixel post-processing",
+              "name": "Style"
+            },
+            "zh-CN": {
+              "description": "像素会同时编译提示词和像素化后处理",
+              "name": "风格"
+            }
+          },
+          "id": "style",
+          "max": null,
+          "min": null,
+          "options": [
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Pixel-art prompt intent plus nearest-neighbor pixel post-processing",
+                  "name": "Pixel"
+                },
+                "zh-CN": {
+                  "description": "像素提示词加最近邻像素化后处理",
+                  "name": "像素"
+                }
+              },
+              "id": "pixel"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Keep the model's original smooth rendered output",
+                  "name": "Non-pixel"
+                },
+                "zh-CN": {
+                  "description": "保留模型原始的平滑绘制结果",
+                  "name": "非像素"
+                }
+              },
+              "id": "smooth"
+            }
+          ],
+          "step": null,
+          "type": "select"
+        },
+        {
+          "advanced": false,
+          "default": "",
+          "i18n": {
+            "en": {
+              "description": "Describe what you want to create",
+              "name": "Prompt"
+            },
+            "zh-CN": {
+              "description": "写下你想创作的内容",
+              "name": "描述"
+            }
+          },
+          "id": "prompt",
+          "max": null,
+          "min": null,
+          "options": [],
+          "step": null,
+          "type": "text"
+        },
+        {
+          "advanced": true,
+          "default": 0.65,
+          "i18n": {
+            "en": {
+              "description": "Used only with a reference image",
+              "name": "Redraw strength"
+            },
+            "zh-CN": {
+              "description": "仅在有参考图时使用",
+              "name": "重绘强度"
+            }
+          },
+          "id": "strength",
+          "max": 1.0,
+          "min": 0.0,
+          "options": [],
+          "step": 0.05,
+          "type": "range"
+        },
+        {
+          "advanced": false,
+          "default": 4,
+          "i18n": {
+            "en": {
+              "description": "Number of candidates per run",
+              "name": "Candidates"
+            },
+            "zh-CN": {
+              "description": "一次生成的候选数量",
+              "name": "候选数"
+            }
+          },
+          "id": "count",
+          "max": 8.0,
+          "min": 1.0,
+          "options": [],
+          "step": 1.0,
+          "type": "number"
+        },
+        {
+          "advanced": true,
+          "default": -1,
+          "i18n": {
+            "en": {
+              "description": "-1 means random",
+              "name": "Seed"
+            },
+            "zh-CN": {
+              "description": "-1 表示随机",
+              "name": "随机种子"
+            }
+          },
+          "id": "seed",
+          "max": null,
+          "min": null,
+          "options": [],
+          "step": null,
+          "type": "seed"
+        }
+      ],
+      "i18n": {
+        "en": {
+          "description": "Create a static asset from text or one reference image",
+          "name": "Create image"
+        },
+        "zh-CN": {
+          "description": "从文字或一张参考图创作静态素材",
+          "name": "创作图片"
+        }
+      },
+      "id": "image.generate",
+      "produces": [
+        "Image"
+      ]
+    },
+    {
+      "accepts": {
+        "character": {
+          "max": 1,
+          "required": false,
+          "type": "Image"
+        }
+      },
+      "controls": [
+        {
+          "advanced": false,
+          "default": "",
+          "i18n": {
+            "en": {
+              "description": "Optional motion",
+              "name": "Motion prompt"
+            },
+            "zh-CN": {
+              "description": "可补充动作、节奏和角色要求",
+              "name": "动画描述"
+            }
+          },
+          "id": "prompt",
+          "max": null,
+          "min": null,
+          "options": [],
+          "step": null,
+          "type": "text"
+        },
+        {
+          "advanced": false,
+          "default": "walk",
+          "i18n": {
+            "en": {
+              "description": "Choose a motion",
+              "name": "Action"
+            },
+            "zh-CN": {
+              "description": "选择要创作的动作",
+              "name": "动作"
+            }
+          },
+          "id": "action",
+          "max": null,
+          "min": null,
+          "options": [
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Idle"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "待机"
+                }
+              },
+              "id": "idle"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Walk"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "行走"
+                }
+              },
+              "id": "walk"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Run"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "奔跑"
+                }
+              },
+              "id": "run"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Attack"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "攻击"
+                }
+              },
+              "id": "attack"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Cast"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "施法"
+                }
+              },
+              "id": "cast"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Hit"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "受击"
+                }
+              },
+              "id": "hit"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Jump"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "跳跃"
+                }
+              },
+              "id": "jump"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Death"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "倒下"
+                }
+              },
+              "id": "death"
+            }
+          ],
+          "step": null,
+          "type": "select"
+        },
+        {
+          "advanced": false,
+          "default": "level",
+          "i18n": {
+            "en": {
+              "description": "This sequence targets one view",
+              "name": "View"
+            },
+            "zh-CN": {
+              "description": "本次动画只对应一个视角",
+              "name": "视角"
+            }
+          },
+          "id": "view",
+          "max": null,
+          "min": null,
+          "options": [
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Level orthographic"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "平视正交"
+                }
+              },
+              "id": "level"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Top-45 orthographic"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "45° 俯视"
+                }
+              },
+              "id": "top45"
+            }
+          ],
+          "step": null,
+          "type": "select"
+        },
+        {
+          "advanced": false,
+          "default": "s",
+          "i18n": {
+            "en": {
+              "description": "This sequence targets one real direction",
+              "name": "Direction"
+            },
+            "zh-CN": {
+              "description": "本次动画只对应一个真实方向",
+              "name": "方向"
+            }
+          },
+          "id": "direction",
+          "max": null,
+          "min": null,
+          "options": [
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "North"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "北"
+                }
+              },
+              "id": "n"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "North-east"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "东北"
+                }
+              },
+              "id": "ne"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "East"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "东"
+                }
+              },
+              "id": "e"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "South-east"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "东南"
+                }
+              },
+              "id": "se"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "South"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "南"
+                }
+              },
+              "id": "s"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "South-west"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "西南"
+                }
+              },
+              "id": "sw"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "West"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "西"
+                }
+              },
+              "id": "w"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "North-west"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "西北"
+                }
+              },
+              "id": "nw"
+            }
+          ],
+          "step": null,
+          "type": "select"
+        },
+        {
+          "advanced": false,
+          "default": 8,
+          "i18n": {
+            "en": {
+              "description": "Candidates to curate after generation",
+              "name": "Frames per track"
+            },
+            "zh-CN": {
+              "description": "生成后可人工挑选",
+              "name": "每轨候选帧"
+            }
+          },
+          "id": "count",
+          "max": 16.0,
+          "min": 1.0,
+          "options": [],
+          "step": 1.0,
+          "type": "number"
+        },
+        {
+          "advanced": true,
+          "default": -1,
+          "i18n": {
+            "en": {
+              "description": "-1 means random",
+              "name": "Seed"
+            },
+            "zh-CN": {
+              "description": "-1 表示随机",
+              "name": "随机种子"
+            }
+          },
+          "id": "seed",
+          "max": null,
+          "min": null,
+          "options": [],
+          "step": null,
+          "type": "seed"
+        }
+      ],
+      "i18n": {
+        "en": {
+          "description": "Generate motion candidates from text or a character image when supported by the selected model",
+          "name": "Create animation"
+        },
+        "zh-CN": {
+          "description": "使用当前模型支持的文字或角色图生成动作候选帧",
+          "name": "创作动画"
+        }
+      },
+      "id": "animation.generate",
+      "produces": [
+        "FrameSeq"
+      ]
+    },
+    {
+      "accepts": {
+        "frame": {
+          "max": 1,
+          "required": true,
+          "type": "Image"
+        }
+      },
+      "controls": [
+        {
+          "advanced": false,
+          "default": "",
+          "i18n": {
+            "en": {
+              "description": "",
+              "name": "Change request"
+            },
+            "zh-CN": {
+              "description": "",
+              "name": "修改要求"
+            }
+          },
+          "id": "prompt",
+          "max": null,
+          "min": null,
+          "options": [],
+          "step": null,
+          "type": "text"
+        },
+        {
+          "advanced": false,
+          "default": 0.35,
+          "i18n": {
+            "en": {
+              "description": "",
+              "name": "Redraw strength"
+            },
+            "zh-CN": {
+              "description": "",
+              "name": "重绘强度"
+            }
+          },
+          "id": "strength",
+          "max": 1.0,
+          "min": 0.0,
+          "options": [],
+          "step": 0.05,
+          "type": "range"
+        },
+        {
+          "advanced": false,
+          "default": 4,
+          "i18n": {
+            "en": {
+              "description": "",
+              "name": "Variants"
+            },
+            "zh-CN": {
+              "description": "",
+              "name": "变体数"
+            }
+          },
+          "id": "count",
+          "max": 8.0,
+          "min": 1.0,
+          "options": [],
+          "step": 1.0,
+          "type": "number"
+        }
+      ],
+      "i18n": {
+        "en": {
+          "description": "Keep the source and create replacement variants",
+          "name": "Redraw frame"
+        },
+        "zh-CN": {
+          "description": "保留原帧并生成可替换变体",
+          "name": "重绘帧"
+        }
+      },
+      "id": "frame.redraw",
+      "produces": [
+        "ImageBatch"
+      ]
+    },
+    {
+      "accepts": {
+        "sheet": {
+          "max": 1,
+          "required": true,
+          "type": "SpriteSheet"
+        }
+      },
+      "controls": [
+        {
+          "advanced": false,
+          "default": "walk",
+          "i18n": {
+            "en": {
+              "description": "",
+              "name": "Target action"
+            },
+            "zh-CN": {
+              "description": "",
+              "name": "目标动作"
+            }
+          },
+          "id": "action",
+          "max": null,
+          "min": null,
+          "options": [
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Idle"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "待机"
+                }
+              },
+              "id": "idle"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Walk"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "行走"
+                }
+              },
+              "id": "walk"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Run"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "奔跑"
+                }
+              },
+              "id": "run"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Attack"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "攻击"
+                }
+              },
+              "id": "attack"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Cast"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "施法"
+                }
+              },
+              "id": "cast"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Hit"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "受击"
+                }
+              },
+              "id": "hit"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Jump"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "跳跃"
+                }
+              },
+              "id": "jump"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Death"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "倒下"
+                }
+              },
+              "id": "death"
+            }
+          ],
+          "step": null,
+          "type": "select"
+        },
+        {
+          "advanced": false,
+          "default": "level",
+          "i18n": {
+            "en": {
+              "description": "",
+              "name": "Target view"
+            },
+            "zh-CN": {
+              "description": "",
+              "name": "目标视角"
+            }
+          },
+          "id": "view",
+          "max": null,
+          "min": null,
+          "options": [
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Level orthographic"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "平视正交"
+                }
+              },
+              "id": "level"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Top-45 orthographic"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "45° 俯视"
+                }
+              },
+              "id": "top45"
+            }
+          ],
+          "step": null,
+          "type": "select"
+        },
+        {
+          "advanced": false,
+          "default": "s",
+          "i18n": {
+            "en": {
+              "description": "",
+              "name": "Target direction"
+            },
+            "zh-CN": {
+              "description": "",
+              "name": "目标方向"
+            }
+          },
+          "id": "direction",
+          "max": null,
+          "min": null,
+          "options": [
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "North"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "北"
+                }
+              },
+              "id": "n"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "North-east"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "东北"
+                }
+              },
+              "id": "ne"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "East"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "东"
+                }
+              },
+              "id": "e"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "South-east"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "东南"
+                }
+              },
+              "id": "se"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "South"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "南"
+                }
+              },
+              "id": "s"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "South-west"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "西南"
+                }
+              },
+              "id": "sw"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "West"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "西"
+                }
+              },
+              "id": "w"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "North-west"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "西北"
+                }
+              },
+              "id": "nw"
+            }
+          ],
+          "step": null,
+          "type": "select"
+        },
+        {
+          "advanced": false,
+          "default": 0,
+          "i18n": {
+            "en": {
+              "description": "",
+              "name": "Columns (0 auto)"
+            },
+            "zh-CN": {
+              "description": "",
+              "name": "列数（0 自动）"
+            }
+          },
+          "id": "columns",
+          "max": 256.0,
+          "min": 0.0,
+          "options": [],
+          "step": 1.0,
+          "type": "number"
+        },
+        {
+          "advanced": false,
+          "default": 0,
+          "i18n": {
+            "en": {
+              "description": "",
+              "name": "Rows (0 auto)"
+            },
+            "zh-CN": {
+              "description": "",
+              "name": "行数（0 自动）"
+            }
+          },
+          "id": "rows",
+          "max": 256.0,
+          "min": 0.0,
+          "options": [],
+          "step": 1.0,
+          "type": "number"
+        },
+        {
+          "advanced": false,
+          "default": 64,
+          "i18n": {
+            "en": {
+              "description": "",
+              "name": "Frame width"
+            },
+            "zh-CN": {
+              "description": "",
+              "name": "帧宽"
+            }
+          },
+          "id": "frame_width",
+          "max": 4096.0,
+          "min": 1.0,
+          "options": [],
+          "step": 1.0,
+          "type": "number"
+        },
+        {
+          "advanced": false,
+          "default": 64,
+          "i18n": {
+            "en": {
+              "description": "",
+              "name": "Frame height"
+            },
+            "zh-CN": {
+              "description": "",
+              "name": "帧高"
+            }
+          },
+          "id": "frame_height",
+          "max": 4096.0,
+          "min": 1.0,
+          "options": [],
+          "step": 1.0,
+          "type": "number"
+        },
+        {
+          "advanced": true,
+          "default": 0,
+          "i18n": {
+            "en": {
+              "description": "",
+              "name": "Margin"
+            },
+            "zh-CN": {
+              "description": "",
+              "name": "外边距"
+            }
+          },
+          "id": "margin",
+          "max": 512.0,
+          "min": 0.0,
+          "options": [],
+          "step": 1.0,
+          "type": "number"
+        },
+        {
+          "advanced": true,
+          "default": 0,
+          "i18n": {
+            "en": {
+              "description": "",
+              "name": "Spacing"
+            },
+            "zh-CN": {
+              "description": "",
+              "name": "间距"
+            }
+          },
+          "id": "spacing",
+          "max": 512.0,
+          "min": 0.0,
+          "options": [],
+          "step": 1.0,
+          "type": "number"
+        },
+        {
+          "advanced": true,
+          "default": true,
+          "i18n": {
+            "en": {
+              "description": "",
+              "name": "Exclude empty"
+            },
+            "zh-CN": {
+              "description": "",
+              "name": "排除空帧"
+            }
+          },
+          "id": "exclude_empty",
+          "max": null,
+          "min": null,
+          "options": [],
+          "step": null,
+          "type": "toggle"
+        }
+      ],
+      "i18n": {
+        "en": {
+          "description": "Turn a SpriteSheet grid into frame candidates",
+          "name": "Slice sheet"
+        },
+        "zh-CN": {
+          "description": "按网格把 SpriteSheet 变成候选帧",
+          "name": "切分图集"
+        }
+      },
+      "id": "sheet.slice",
+      "produces": [
+        "FrameSeq"
+      ]
+    },
+    {
+      "accepts": {
+        "video": {
+          "max": 1,
+          "required": true,
+          "type": "Video"
+        }
+      },
+      "controls": [
+        {
+          "advanced": false,
+          "default": "walk",
+          "i18n": {
+            "en": {
+              "description": "",
+              "name": "Target action"
+            },
+            "zh-CN": {
+              "description": "",
+              "name": "目标动作"
+            }
+          },
+          "id": "action",
+          "max": null,
+          "min": null,
+          "options": [
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Idle"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "待机"
+                }
+              },
+              "id": "idle"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Walk"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "行走"
+                }
+              },
+              "id": "walk"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Run"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "奔跑"
+                }
+              },
+              "id": "run"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Attack"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "攻击"
+                }
+              },
+              "id": "attack"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Cast"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "施法"
+                }
+              },
+              "id": "cast"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Hit"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "受击"
+                }
+              },
+              "id": "hit"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Jump"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "跳跃"
+                }
+              },
+              "id": "jump"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Death"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "倒下"
+                }
+              },
+              "id": "death"
+            }
+          ],
+          "step": null,
+          "type": "select"
+        },
+        {
+          "advanced": false,
+          "default": "level",
+          "i18n": {
+            "en": {
+              "description": "",
+              "name": "Target view"
+            },
+            "zh-CN": {
+              "description": "",
+              "name": "目标视角"
+            }
+          },
+          "id": "view",
+          "max": null,
+          "min": null,
+          "options": [
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Level orthographic"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "平视正交"
+                }
+              },
+              "id": "level"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Top-45 orthographic"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "45° 俯视"
+                }
+              },
+              "id": "top45"
+            }
+          ],
+          "step": null,
+          "type": "select"
+        },
+        {
+          "advanced": false,
+          "default": "s",
+          "i18n": {
+            "en": {
+              "description": "",
+              "name": "Target direction"
+            },
+            "zh-CN": {
+              "description": "",
+              "name": "目标方向"
+            }
+          },
+          "id": "direction",
+          "max": null,
+          "min": null,
+          "options": [
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "North"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "北"
+                }
+              },
+              "id": "n"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "North-east"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "东北"
+                }
+              },
+              "id": "ne"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "East"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "东"
+                }
+              },
+              "id": "e"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "South-east"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "东南"
+                }
+              },
+              "id": "se"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "South"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "南"
+                }
+              },
+              "id": "s"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "South-west"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "西南"
+                }
+              },
+              "id": "sw"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "West"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "西"
+                }
+              },
+              "id": "w"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "North-west"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "西北"
+                }
+              },
+              "id": "nw"
+            }
+          ],
+          "step": null,
+          "type": "select"
+        },
+        {
+          "advanced": false,
+          "default": 12,
+          "i18n": {
+            "en": {
+              "description": "",
+              "name": "Sample FPS"
+            },
+            "zh-CN": {
+              "description": "",
+              "name": "采样帧率"
+            }
+          },
+          "id": "sample_fps",
+          "max": 60.0,
+          "min": 1.0,
+          "options": [],
+          "step": 1.0,
+          "type": "range"
+        },
+        {
+          "advanced": true,
+          "default": 48,
+          "i18n": {
+            "en": {
+              "description": "",
+              "name": "Maximum frames"
+            },
+            "zh-CN": {
+              "description": "",
+              "name": "最大帧数"
+            }
+          },
+          "id": "max_frames",
+          "max": 240.0,
+          "min": 1.0,
+          "options": [],
+          "step": 1.0,
+          "type": "number"
+        }
+      ],
+      "i18n": {
+        "en": {
+          "description": "Sample frame candidates from GIF or video",
+          "name": "Sample video"
+        },
+        "zh-CN": {
+          "description": "从 GIF 或视频采样候选帧",
+          "name": "视频取帧"
+        }
+      },
+      "id": "video.sample",
+      "produces": [
+        "FrameSeq"
+      ]
+    },
+    {
+      "accepts": {
+        "source": {
+          "max": 64,
+          "required": true,
+          "type": [
+            "Image",
+            "FrameSeq",
+            "SpriteSheet"
+          ]
+        }
+      },
+      "controls": [
+        {
+          "advanced": false,
+          "default": 1,
+          "i18n": {
+            "en": {
+              "description": "",
+              "name": "Normal strength"
+            },
+            "zh-CN": {
+              "description": "",
+              "name": "法线强度"
+            }
+          },
+          "id": "strength",
+          "max": 2.0,
+          "min": 0.0,
+          "options": [],
+          "step": 0.05,
+          "type": "range"
+        },
+        {
+          "advanced": false,
+          "default": false,
+          "i18n": {
+            "en": {
+              "description": "",
+              "name": "Flip Y"
+            },
+            "zh-CN": {
+              "description": "",
+              "name": "翻转 Y"
+            }
+          },
+          "id": "flip_y",
+          "max": null,
+          "min": null,
+          "options": [],
+          "step": null,
+          "type": "toggle"
+        }
+      ],
+      "i18n": {
+        "en": {
+          "description": "Generate same-size normals for an image or animation track",
+          "name": "Generate normals"
+        },
+        "zh-CN": {
+          "description": "为图片或当前动画轨道生成同尺寸法线",
+          "name": "生成法线"
+        }
+      },
+      "id": "normal.generate",
+      "produces": [
+        "NormalMap"
+      ]
+    }
+  ],
+  "artifact_kinds": [
+    "Image",
+    "ImageBatch",
+    "SpriteSheet",
+    "FrameSeq",
+    "Video",
+    "Mask",
+    "NormalMap",
+    "Palette",
+    "SpritePair",
+    "CookSpritePack"
+  ],
+  "schema": "cooksprite.registry/v1",
+  "tool_packages": [
+    {
+      "id": "bridge",
+      "license": "Apache-2.0",
+      "lowerings": {
+        "cooksprite.load_artifact": "CS_LoadArtifact",
+        "cooksprite.store_artifact": "CS_StoreArtifact"
+      },
+      "node_classes": [
+        "CS_LoadArtifact",
+        "CS_StoreArtifact"
+      ],
+      "recipes": [],
+      "requirements": [],
+      "tasks": [],
+      "tools": [
+        {
+          "id": "cooksprite.load_artifact",
+          "inputs": [
+            {
+              "name": "artifact_url",
+              "persistable": false,
+              "required": true,
+              "type": "Text"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "image",
+              "persistable": false,
+              "required": true,
+              "type": "Image"
+            }
+          ],
+          "package_id": "bridge",
+          "params_schema": {},
+          "schema_hash": "66f2b8fc7d47dee68f30cddf9c671ab2fb03b769debbfe8aa1531a331aecd6c3",
+          "source": "cooksprite",
+          "title": "Load an artifact",
+          "version": 1
+        },
+        {
+          "id": "cooksprite.store_artifact",
+          "inputs": [
+            {
+              "name": "value",
+              "persistable": false,
+              "required": true,
+              "type": "Image"
+            },
+            {
+              "name": "upload_url",
+              "persistable": false,
+              "required": true,
+              "type": "Text"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "receipt",
+              "persistable": false,
+              "required": true,
+              "type": "Text"
+            }
+          ],
+          "package_id": "bridge",
+          "params_schema": {},
+          "schema_hash": "042954ff70c1b920af28aa2bf20b949bb60b9f7716651378cf454ab03bfe61ac",
+          "source": "cooksprite",
+          "title": "Store an artifact",
+          "version": 1
+        }
+      ],
+      "version": "1.0.0",
+      "workflows": []
+    },
+    {
+      "id": "prompt",
+      "license": "Apache-2.0",
+      "lowerings": {
+        "cooksprite.compile_prompt_packet": "CS_CompilePromptPacket"
+      },
+      "node_classes": [
+        "CS_CompilePromptPacket"
+      ],
+      "recipes": [],
+      "requirements": [],
+      "tasks": [],
+      "tools": [
+        {
+          "id": "cooksprite.compile_prompt_packet",
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "positive",
+              "persistable": false,
+              "required": true,
+              "type": "Text"
+            },
+            {
+              "name": "negative",
+              "persistable": false,
+              "required": true,
+              "type": "Text"
+            }
+          ],
+          "package_id": "prompt",
+          "params_schema": {
+            "action_id": {
+              "type": "string"
+            },
+            "animation": {
+              "type": "string"
+            },
+            "category": {
+              "type": "string"
+            },
+            "direction": {
+              "type": "string"
+            },
+            "prompt": {
+              "type": "string"
+            },
+            "style": {
+              "type": "string"
+            },
+            "view": {
+              "type": "string"
+            }
+          },
+          "schema_hash": "b22250422d5ebb9cb07d10e5015ed22679af54faca1e79d05742322d2e2a4c80",
+          "source": "cooksprite",
+          "title": "Compile a Sprite prompt packet",
+          "version": 1
+        }
+      ],
+      "version": "1.0.0",
+      "workflows": []
+    },
+    {
+      "id": "image",
+      "license": "Apache-2.0",
+      "lowerings": {
+        "cooksprite.isolate_on_green": "CS_IsolateOnGreen",
+        "cooksprite.pixelize": "CS_Pixelize"
+      },
+      "node_classes": [
+        "CS_Pixelize",
+        "CS_IsolateOnGreen"
+      ],
+      "recipes": [
+        "comfy.core-checkpoint"
+      ],
+      "requirements": [
+        "scipy>=1.11"
+      ],
+      "tasks": [
+        "image.generate",
+        "frame.redraw",
+        "animation.generate"
+      ],
+      "tools": [
+        {
+          "id": "cooksprite.pixelize",
+          "inputs": [
+            {
+              "name": "image",
+              "persistable": false,
+              "required": true,
+              "type": "Image"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "image",
+              "persistable": true,
+              "required": true,
+              "type": "Image"
+            }
+          ],
+          "package_id": "image",
+          "params_schema": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "target_height": {
+              "type": "integer"
+            },
+            "target_width": {
+              "type": "integer"
+            }
+          },
+          "schema_hash": "87bb83262324b5380c41e06db6c3f25a575229937983df9749cf289e9219f761",
+          "source": "cooksprite",
+          "title": "Pixelize",
+          "version": 1
+        },
+        {
+          "id": "cooksprite.isolate_on_green",
+          "inputs": [
+            {
+              "name": "image",
+              "persistable": false,
+              "required": true,
+              "type": "Image"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "image",
+              "persistable": true,
+              "required": true,
+              "type": "Image"
+            }
+          ],
+          "package_id": "image",
+          "params_schema": {
+            "tolerance": {
+              "type": "number"
+            }
+          },
+          "schema_hash": "f0855da4b8c89c551a78e5741811de2d9c824c8872b098213ebaef6384110567",
+          "source": "cooksprite",
+          "title": "Isolate on chroma green",
+          "version": 1
+        }
+      ],
+      "version": "1.0.0",
+      "workflows": [
+        "image.generate:t2i",
+        "image.generate:i2i",
+        "frame.redraw:i2i",
+        "animation.generate:i2v"
+      ]
+    },
+    {
+      "id": "frames",
+      "license": "Apache-2.0",
+      "lowerings": {
+        "cooksprite.sample_video": "CS_LoadVideoArtifact",
+        "cooksprite.slice_sprite_sheet": "CS_SliceSpriteSheet"
+      },
+      "node_classes": [
+        "CS_SliceSpriteSheet",
+        "CS_LoadVideoArtifact"
+      ],
+      "recipes": [
+        "cooksprite.sheet",
+        "cooksprite.video"
+      ],
+      "requirements": [
+        "imageio>=2.34",
+        "imageio-ffmpeg>=0.5"
+      ],
+      "tasks": [
+        "sheet.slice",
+        "video.sample"
+      ],
+      "tools": [
+        {
+          "id": "cooksprite.slice_sprite_sheet",
+          "inputs": [
+            {
+              "name": "image",
+              "persistable": false,
+              "required": true,
+              "type": "SpriteSheet"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "frames",
+              "persistable": true,
+              "required": true,
+              "type": "ImageBatch"
+            }
+          ],
+          "package_id": "frames",
+          "params_schema": {
+            "columns": {
+              "type": "integer"
+            },
+            "exclude_empty": {
+              "type": "boolean"
+            },
+            "frame_height": {
+              "type": "integer"
+            },
+            "frame_width": {
+              "type": "integer"
+            },
+            "margin": {
+              "type": "integer"
+            },
+            "rows": {
+              "type": "integer"
+            },
+            "spacing": {
+              "type": "integer"
+            }
+          },
+          "schema_hash": "987f4154a8e63ed79da2ee2d1e0672606fb3c68b8fc7d096560f032dee222a67",
+          "source": "cooksprite",
+          "title": "Slice a SpriteSheet",
+          "version": 1
+        },
+        {
+          "id": "cooksprite.sample_video",
+          "inputs": [
+            {
+              "name": "video",
+              "persistable": false,
+              "required": true,
+              "type": "Video"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "frames",
+              "persistable": true,
+              "required": true,
+              "type": "ImageBatch"
+            }
+          ],
+          "package_id": "frames",
+          "params_schema": {
+            "max_frames": {
+              "type": "integer"
+            },
+            "sample_fps": {
+              "type": "number"
+            }
+          },
+          "schema_hash": "a7f0e1c2a086ffb63cfc0eb51d7f49f7c4142aa1a5526e03ff59ea77263e2a15",
+          "source": "cooksprite",
+          "title": "Sample a video artifact",
+          "version": 1
+        }
+      ],
+      "version": "1.0.0",
+      "workflows": [
+        "sheet.slice:sheet-to-frames",
+        "video.sample:video-to-frames"
+      ]
+    },
+    {
+      "id": "normal",
+      "license": "Apache-2.0",
+      "lowerings": {
+        "cooksprite.make_sprite_pair": "CS_MakeSpritePair",
+        "cooksprite.normal_estimate": "CS_NormalEstimate"
+      },
+      "node_classes": [
+        "CS_NormalEstimate",
+        "CS_MakeSpritePair"
+      ],
+      "recipes": [
+        "cooksprite.normal"
+      ],
+      "requirements": [],
+      "tasks": [
+        "normal.generate"
+      ],
+      "tools": [
+        {
+          "id": "cooksprite.normal_estimate",
+          "inputs": [
+            {
+              "name": "image",
+              "persistable": false,
+              "required": true,
+              "type": "Image"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "normal",
+              "persistable": true,
+              "required": true,
+              "type": "NormalMap"
+            }
+          ],
+          "package_id": "normal",
+          "params_schema": {
+            "flip_y": {
+              "type": "boolean"
+            },
+            "strength": {
+              "type": "number"
+            }
+          },
+          "schema_hash": "5afdabdd8a0421cdb2e4cf9a71ca9f64cf810c62ce1f3efbe172f0a68edd5261",
+          "source": "cooksprite",
+          "title": "Estimate normal map",
+          "version": 1
+        },
+        {
+          "id": "cooksprite.make_sprite_pair",
+          "inputs": [
+            {
+              "name": "diffuse",
+              "persistable": false,
+              "required": true,
+              "type": "Image"
+            },
+            {
+              "name": "normal",
+              "persistable": false,
+              "required": true,
+              "type": "NormalMap"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "diffuse",
+              "persistable": true,
+              "required": true,
+              "type": "Image"
+            },
+            {
+              "name": "normal",
+              "persistable": true,
+              "required": true,
+              "type": "NormalMap"
+            }
+          ],
+          "package_id": "normal",
+          "params_schema": {},
+          "schema_hash": "3cc963f6d830801d935e7fbe2ae6b2c0d64fe41c639572a520b66d20e986f681",
+          "source": "cooksprite",
+          "title": "Make a SpritePair",
+          "version": 1
+        }
+      ],
+      "version": "1.0.0",
+      "workflows": [
+        "normal.generate:image-to-normal"
+      ]
+    }
+  ]
+}

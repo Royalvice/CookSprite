@@ -43,5 +43,5 @@ There are no accounts, recommendations, or telemetry in v0.1.
 
 CLI and agents do not imitate clicks. They discover the same Action registry,
 create a Project, upload Artifacts, run Actions, wait for Run completion, edit
-the ETag-protected SpriteDocument, and run `sprite.export`. See
+the ETag-protected SpriteDocument, and run `cspr project export`. See
 `skills/cooksprite/SKILL.md` for the concise harness contract.

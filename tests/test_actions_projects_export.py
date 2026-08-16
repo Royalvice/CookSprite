@@ -10,9 +10,7 @@ from typing import ClassVar
 
 from fastapi.testclient import TestClient
 
-from cooksprite.action_compiler import ActionCompiler
 from cooksprite.api.app import create_app
-from cooksprite.bridge import ArtifactBridge
 from cooksprite.recipes import Recipe, imported_recipe_is_compatible, supports
 from cooksprite.registry import ACTION_IDS, ActionRegistry
 from cooksprite.store import Store
@@ -22,25 +20,89 @@ PNG = base64.b64decode(
 )
 
 
+def node(required, output):
+    return {
+        "input": {"required": {name: [kind] for name, kind in required.items()}},
+        "output": output,
+    }
+
+
 CORE_NODES = {
-    name: {"input": {"required": {}}, "output": ["IMAGE"]}
-    for name in (
-        "CheckpointLoaderSimple",
-        "CLIPTextEncode",
-        "KSampler",
-        "EmptyLatentImage",
-        "VAEEncode",
-        "VAEDecode",
-        "RepeatLatentBatch",
-        "ImageScale",
-        "CS_LoadArtifact",
-        "CS_StoreArtifact",
-        "CS_IsolateOnGreen",
-        "CS_Pixelize",
-        "CS_NormalEstimate",
-        "CS_SliceSpriteSheet",
-        "CS_LoadVideoArtifact",
-    )
+    "CheckpointLoaderSimple": node({"ckpt_name": "STRING"}, ["MODEL", "CLIP", "VAE"]),
+    "CLIPTextEncode": node({"text": "STRING", "clip": "CLIP"}, ["CONDITIONING"]),
+    "KSampler": node(
+        {
+            "model": "MODEL",
+            "seed": "INT",
+            "steps": "INT",
+            "cfg": "FLOAT",
+            "sampler_name": "STRING",
+            "scheduler": "STRING",
+            "positive": "CONDITIONING",
+            "negative": "CONDITIONING",
+            "latent_image": "LATENT",
+            "denoise": "FLOAT",
+        },
+        ["LATENT"],
+    ),
+    "EmptyLatentImage": node({"width": "INT", "height": "INT", "batch_size": "INT"}, ["LATENT"]),
+    "VAEEncode": node({"pixels": "IMAGE", "vae": "VAE"}, ["LATENT"]),
+    "VAEDecode": node({"samples": "LATENT", "vae": "VAE"}, ["IMAGE"]),
+    "RepeatLatentBatch": node({"samples": "LATENT", "amount": "INT"}, ["LATENT"]),
+    "ImageScale": node(
+        {
+            "image": "IMAGE",
+            "upscale_method": "STRING",
+            "width": "INT",
+            "height": "INT",
+            "crop": "STRING",
+        },
+        ["IMAGE"],
+    ),
+    "CS_LoadArtifact": node({"artifact_url": "STRING"}, ["IMAGE"]),
+    "CS_StoreArtifact": node({"value": "IMAGE", "upload_url": "STRING"}, ["STRING"]),
+    "CS_IsolateOnGreen": node({"image": "IMAGE", "tolerance": "FLOAT"}, ["IMAGE"]),
+    "CS_Pixelize": node(
+        {
+            "image": "IMAGE",
+            "target_width": "INT",
+            "target_height": "INT",
+            "enabled": "BOOLEAN",
+        },
+        ["IMAGE"],
+    ),
+    "CS_CompilePromptPacket": node(
+        {
+            "action_id": "STRING",
+            "prompt": "STRING",
+            "category": "STRING",
+            "style": "STRING",
+            "animation": "STRING",
+            "view": "STRING",
+            "direction": "STRING",
+        },
+        ["STRING", "STRING"],
+    ),
+    "CS_NormalEstimate": node(
+        {"image": "IMAGE", "strength": "FLOAT", "flip_y": "BOOLEAN"}, ["IMAGE"]
+    ),
+    "CS_SliceSpriteSheet": node(
+        {
+            "image": "IMAGE",
+            "columns": "INT",
+            "rows": "INT",
+            "frame_width": "INT",
+            "frame_height": "INT",
+            "margin": "INT",
+            "spacing": "INT",
+            "exclude_empty": "BOOLEAN",
+        },
+        ["IMAGE"],
+    ),
+    "CS_LoadVideoArtifact": node(
+        {"video": "STRING", "sample_fps": "FLOAT", "max_frames": "INT"}, ["IMAGE"]
+    ),
+    "ImportedSampler": node({"prompt": "STRING"}, ["IMAGE"]),
 }
 
 
@@ -183,103 +245,92 @@ def test_animation_recipes_advertise_their_actual_text_and_image_modes():
     assert not supports(t2v, "animation.generate", {"character": ["art_character"]})
 
 
-def test_sheet_and_video_candidate_counts_are_compiled_inside_comfy():
-    registry = ActionRegistry()
-    bridge = ArtifactBridge(b"k" * 32, "http://api.test/api/v1")
-    sheet = registry.get("sheet.slice")
-    graph = (
-        ActionCompiler(bridge)
-        .compile(
-            sheet,
-            {"sheet": ["art_sheet"]},
-            {**registry.defaults(sheet), "rows": 3, "columns": 4},
-            "run_sheet",
-            Recipe(
-                id="sheet",
-                label="Sheet",
-                family="cooksprite.sheet",
-                actions=["sheet.slice"],
-                modes=["sheet-to-frames"],
-            ),
-        )
-        .graph
+def test_sheet_and_video_candidate_counts_are_compiled_inside_comfy(tmp_path):
+    client = ready_client(tmp_path)
+    project = client.post("/api/v1/projects", json={"type": "character"}).json()
+    sheet = client.post(
+        "/api/v1/artifacts",
+        params={"project_id": project["id"], "kind": "SpriteSheet"},
+        content=PNG,
+    ).json()
+    run = client.post(
+        "/api/v1/actions/sheet.slice/runs",
+        json={
+            "project": project["id"],
+            "inputs": {"sheet": sheet["id"]},
+            "values": {"rows": 3, "columns": 4},
+        },
     )
+    assert run.status_code == 202
+    assert wait(client, run.json()["id"])["status"] == "succeeded"
+    graph = ProtocolComfy.submitted[-1]
     slicer = next(node for node in graph.values() if node["class_type"] == "CS_SliceSpriteSheet")
     assert slicer["inputs"]["rows"] * slicer["inputs"]["columns"] == 12
     assert any(node["class_type"] == "CS_LoadArtifact" for node in graph.values())
 
-    video = registry.get("video.sample")
-    graph = (
-        ActionCompiler(bridge)
-        .compile(
-            video,
-            {"video": ["art_video"]},
-            registry.defaults(video),
-            "run_video",
-            Recipe(
-                id="video",
-                label="Video",
-                family="cooksprite.video",
-                actions=["video.sample"],
-                modes=["video-to-frames"],
-            ),
-        )
-        .graph
+    video = client.post(
+        "/api/v1/artifacts",
+        params={"project_id": project["id"], "kind": "Video", "media_type": "video/mp4"},
+        content=b"video",
+    ).json()
+    run = client.post(
+        "/api/v1/actions/video.sample/runs",
+        json={"project": project["id"], "inputs": {"video": video["id"]}, "values": {}},
     )
+    assert run.status_code == 202
+    assert wait(client, run.json()["id"])["status"] == "succeeded"
+    graph = ProtocolComfy.submitted[-1]
     loader = next(node for node in graph.values() if node["class_type"] == "CS_LoadVideoArtifact")
     assert loader["inputs"]["max_frames"] == 48
 
 
-def test_asset_type_and_style_are_compiled_server_side_as_prompt_packet_and_graph_policy():
-    registry = ActionRegistry()
-    bridge = ArtifactBridge(b"k" * 32, "http://api.test/api/v1")
-    action = registry.get("image.generate")
-    recipe = Recipe(
-        id="core",
-        label="Core",
-        family="comfy.core-checkpoint",
-        actions=["image.generate"],
-        modes=["t2i", "i2i"],
-        checkpoint="test-model.safetensors",
-    )
-    pixel_graph = (
-        ActionCompiler(bridge)
-        .compile(
-            action,
-            {},
-            {**registry.defaults(action), "category": "weapon", "style": "pixel"},
-            "run_pixel",
-            recipe,
+def test_asset_type_and_style_are_compiled_as_comfy_prompt_packet_and_graph_policy(tmp_path):
+    client = ready_client(tmp_path)
+    project = client.post("/api/v1/projects", json={"type": "static"}).json()
+    action = client.get("/api/v1/actions/image.generate").json()
+
+    def run(category, style):
+        response = client.post(
+            "/api/v1/actions/image.generate/runs",
+            json={
+                "project": project["id"],
+                "inputs": {},
+                "values": {
+                    "model": action["models"][0]["id"],
+                    "category": category,
+                    "style": style,
+                    "count": 1,
+                },
+            },
         )
-        .graph
+        assert response.status_code == 202
+        assert wait(client, response.json()["id"])["status"] == "succeeded"
+        return ProtocolComfy.submitted[-1]
+
+    pixel_graph = run("weapon", "pixel")
+    smooth_graph = run("terrain", "smooth")
+    pixel_packet = next(
+        node for node in pixel_graph.values() if node["class_type"] == "CS_CompilePromptPacket"
     )
-    smooth_graph = (
-        ActionCompiler(bridge)
-        .compile(
-            action,
-            {},
-            {**registry.defaults(action), "category": "terrain", "style": "smooth"},
-            "run_smooth",
-            recipe,
-        )
-        .graph
+    smooth_packet = next(
+        node for node in smooth_graph.values() if node["class_type"] == "CS_CompilePromptPacket"
     )
-    pixel_text = next(
-        node["inputs"]["text"]
-        for node in pixel_graph.values()
-        if node["class_type"] == "CLIPTextEncode"
+    assert pixel_packet["inputs"]["category"] == "weapon"
+    assert pixel_packet["inputs"]["style"] == "pixel"
+    assert smooth_packet["inputs"]["category"] == "terrain"
+    assert smooth_packet["inputs"]["style"] == "smooth"
+    assert (
+        next(node for node in pixel_graph.values() if node["class_type"] == "CS_Pixelize")[
+            "inputs"
+        ]["enabled"]
+        is True
     )
-    smooth_text = next(
-        node["inputs"]["text"]
-        for node in smooth_graph.values()
-        if node["class_type"] == "CLIPTextEncode"
+    assert (
+        next(node for node in smooth_graph.values() if node["class_type"] == "CS_Pixelize")[
+            "inputs"
+        ]["enabled"]
+        is False
     )
-    assert "single game weapon" in pixel_text
-    assert "crisp hard pixel edges" in pixel_text
-    assert "seamless game terrain tile" in smooth_text
-    assert "clean game concept art" in smooth_text
-    assert any(node["class_type"] == "CS_Pixelize" for node in pixel_graph.values())
-    assert not any(node["class_type"] == "CS_Pixelize" for node in smooth_graph.values())
 
 
 def test_action_project_semantics_are_shared_by_every_api_client(tmp_path):
@@ -330,7 +381,7 @@ def test_action_project_semantics_are_shared_by_every_api_client(tmp_path):
     assert document["character"]["clips"] == []
 
 
-def test_imported_image_recipe_requires_bridge_pixel_policy_and_receives_it():
+def test_imported_image_recipe_requires_bridge_pixel_policy_and_receives_it(tmp_path):
     recipe = Recipe(
         id="imported-image",
         label="Imported image",
@@ -354,18 +405,35 @@ def test_imported_image_recipe_requires_bridge_pixel_policy_and_receives_it():
         recipe,
         {"object_info": {"ImportedSampler": {}, "CS_StoreArtifact": {}}},
     )
-    action = ActionRegistry().get("image.generate")
-    graph = (
-        ActionCompiler(ArtifactBridge(b"k" * 32, "http://api.test/api/v1"))
-        .compile(
-            action,
-            {},
-            {"category": "character", "style": "pixel", "count": 1, "seed": -1},
-            "run_imported",
-            recipe,
-        )
-        .graph
+    client = ready_client(tmp_path)
+    imported = client.post(
+        "/api/v1/runtimes/rt_test/recipes",
+        json={
+            key: value
+            for key, value in recipe.dump().items()
+            if key not in {"source", "runtime_snapshot", "workflows"}
+        },
     )
+    assert imported.status_code == 201
+    project = client.post("/api/v1/projects", json={"type": "static"}).json()
+    run = client.post(
+        "/api/v1/actions/image.generate/runs",
+        json={
+            "project": project["id"],
+            "inputs": {},
+            "values": {
+                "model": "rt_test:imported-image",
+                "category": "character",
+                "style": "pixel",
+                "count": 1,
+                "seed": -1,
+            },
+        },
+    )
+    assert run.status_code == 202
+    assert wait(client, run.json()["id"])["status"] == "succeeded"
+    graph = ProtocolComfy.submitted[-1]
+    assert any(node["class_type"] == "ImportedSampler" for node in graph.values())
     assert any(node["class_type"] == "CS_Pixelize" for node in graph.values())
 
 
@@ -402,13 +470,12 @@ def test_action_request_compiles_to_real_comfy_graph_and_artifact_store(tmp_path
     graph = ProtocolComfy.submitted[-1]
     assert any(node["class_type"] == "KSampler" for node in graph.values())
     assert any(node["class_type"] == "CS_StoreArtifact" for node in graph.values())
-    positive = next(
-        node["inputs"]["text"]
-        for node in graph.values()
-        if node["class_type"] == "CLIPTextEncode" and "soup knight" in node["inputs"]["text"]
-    )
-    assert "a soup knight" in positive
-    assert "prompt_pack" not in json.dumps(graph)
+    packet = next(node for node in graph.values() if node["class_type"] == "CS_CompilePromptPacket")
+    assert packet["inputs"]["prompt"] == "a soup knight"
+    assert packet["inputs"]["category"] == "character"
+    assert packet["inputs"]["style"] == "pixel"
+    assert state["provenance"]["task"]["id"].startswith("image.generate.")
+    assert state["provenance"]["workflows"]
     assert "private-prompt" not in json.dumps(state)
     queue = client.get("/api/v1/queue").json()
     assert queue["runtime"] == {"queue_running": [], "queue_pending": []}
@@ -556,7 +623,7 @@ def test_schema_v2_image_sequences_migrate_to_typed_manifest(tmp_path):
     store.db.close()
 
     migrated = Store(tmp_path)
-    assert migrated.db.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert migrated.db.execute("PRAGMA user_version").fetchone()[0] == 4
     assert [migrated.artifact(item)["kind"] for item in frame_ids] == ["Image", "Image"]
     run = migrated.run(run_id)
     sequence_ids = json.loads(run["artifacts"])
@@ -739,10 +806,7 @@ def test_static_package_is_unique_format_and_marks_integrity(tmp_path):
         ).status_code
         == 200
     )
-    run = client.post(
-        "/api/v1/actions/sprite.export/runs",
-        json={"project": project["id"], "inputs": {}, "values": {}},
-    ).json()
+    run = client.post(f"/api/v1/projects/{project['id']}/exports", json={}).json()
     state = wait(client, run["id"])
     assert state["status"] == "succeeded"
     package = state["artifacts"][0]

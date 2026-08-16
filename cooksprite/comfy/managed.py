@@ -14,10 +14,10 @@ import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 
+from ..version import NODE_PACK_VERSION
 from .client import ComfyClient
 
 PINNED_COMFY_REF = "v0.32.0"
-NODE_PACK_VERSION = "1.1.0"
 DEFAULT_MODEL = {
     "id": "sd15-fp16",
     "filename": "v1-5-pruned-emaonly-fp16.safetensors",

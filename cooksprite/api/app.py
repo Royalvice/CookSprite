@@ -13,13 +13,13 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.responses import Response as BinaryResponse
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from ..action_compiler import ActionCompileError, ActionCompiler
+from .. import __version__
+from ..action_graphs import bind_action_task, materialize_recipe_workflows, sealed_tool_descriptor
 from ..bridge import ArtifactBridge, BridgeError
-from ..catalog import builtin_tools
 from ..comfy import ComfyClient
 from ..comfy.managed import DEFAULT_MODEL, wait_until_ready
 from ..comfy.managed import install as install_managed_comfy
@@ -35,6 +35,7 @@ from ..domain import (
     FrameSequenceView,
     GalleryItem,
     ProjectCreate,
+    ProjectExportCreate,
     ProjectPatch,
     ProjectView,
     RunCreate,
@@ -60,8 +61,10 @@ from ..recipes import (
     runtime_manifest,
     supports,
 )
-from ..registry import ACTION_IDS, ActionRegistry, RegistryError
+from ..registry import ACTION_IDS, CookSpriteRegistry, RegistryError
 from ..store import DocumentConflict, Store, utcnow
+from ..supervisor import RunSupervisor
+from ..tool_packages import tool_packages
 
 SEQUENCE_ACTIONS = {"animation.generate", "sheet.slice", "video.sample"}
 TEST_RUNTIME_VERSIONS = {"test", "demo-test", "cooksprite-test-runtime"}
@@ -162,13 +165,13 @@ def create_app(
 ) -> FastAPI:
     app = FastAPI(
         title="CookSprite API",
-        version="0.1.0",
+        version=__version__,
         openapi_url="/api/v1/openapi.json",
         docs_url="/api/v1/docs",
     )
     data_path = Path(data_dir).expanduser().resolve()
     store = Store(data_path)
-    registry = ActionRegistry(registry_path)
+    registry = CookSpriteRegistry(registry_path)
     registry.set_examples(register_action_examples(store))
     app.state.store = store
     app.state.registry = registry
@@ -222,14 +225,17 @@ def create_app(
         is_test_runtime: bool = False,
     ) -> tuple[str, list[ToolDescriptor], list[Recipe]]:
         dynamic = _dynamic_tools(list((report.get("object_info") or {}).items()))
-        discovered = discover_recipes(report)
+        snapshot = _snapshot(report)
+        discovered = [
+            materialize_recipe_workflows(store, runtime["id"], snapshot, recipe)
+            for recipe in discover_recipes(report)
+        ]
         imported = [
-            recipe
+            materialize_recipe_workflows(store, runtime["id"], snapshot, recipe)
             for recipe in recipes_from_runtime(runtime)
             if imported_recipe_is_compatible(recipe, report)
         ]
         recipes = [*discovered, *imported]
-        snapshot = _snapshot(report)
         assets: list[dict[str, Any]] = [
             runtime_manifest(report, recipes, callback_url=callback_for(runtime))
         ]
@@ -262,6 +268,10 @@ def create_app(
                 runtime_cache.pop(runtime_id, None)
             else:
                 runtime_cache.clear()
+
+    supervisor = RunSupervisor(store, app.state.comfy_factory, invalidate_runtime)
+    app.state.supervisor = supervisor
+    app.router.add_event_handler("shutdown", supervisor.close)
 
     def probe_runtime(runtime: dict[str, Any] | None, *, force: bool = False) -> dict[str, Any]:
         checked_at = utcnow()
@@ -342,7 +352,19 @@ def create_app(
         dynamic = [
             ToolDescriptor.model_validate(item) for item in json.loads(runtime["tools"] or "[]")
         ]
-        return builtin_tools() + dynamic
+        sealed = [
+            descriptor
+            for recipe in recipes_from_runtime(runtime)
+            if (descriptor := sealed_tool_descriptor(recipe)) is not None
+        ]
+        return registry.tools() + dynamic + sealed
+
+    def sealed_graphs(runtime: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        return {
+            f"comfy.sealed.{recipe.id}": recipe.dump()
+            for recipe in recipes_from_runtime(runtime)
+            if recipe.source == "imported" and recipe.workflow
+        }
 
     def runtime_tool_ids(runtime: dict[str, Any] | None) -> set[str]:
         if not runtime:
@@ -407,6 +429,7 @@ def create_app(
             project_id=row.get("project_id"),
             artifacts=artifacts,
             error=json.loads(row["error"]) if row["error"] else None,
+            provenance=json.loads(row.get("provenance") or "{}"),
             created_at=row.get("created_at", ""),
             updated_at=row.get("updated_at", ""),
         )
@@ -418,50 +441,7 @@ def create_app(
         on_complete: Callable[[], None] | None = None,
     ) -> None:
         """Submit every Action, Workflow, and Task through one runtime path."""
-
-        def observe() -> None:
-            store.update_run(
-                run_id,
-                status="running",
-                message="submitted to ComfyUI",
-                progress=0.05,
-            )
-            try:
-                client = app.state.comfy_factory(runtime["base_url"])
-                prompt_id = client.submit(plan.graph)
-                store.update_run(run_id, prompt_id=prompt_id, progress=0.2)
-                client.wait(prompt_id)
-                record = store.run(run_id)
-                if record and record["status"] in {"cancel_requested", "cancelled"}:
-                    store.update_run(
-                        run_id,
-                        status="cancelled",
-                        message="cancelled",
-                        progress=1,
-                    )
-                    return
-                if on_complete:
-                    on_complete()
-                store.update_run(run_id, status="succeeded", progress=1, message="completed")
-            except Exception as exc:  # noqa: BLE001 - normalize the runtime boundary.
-                invalidate_runtime(runtime["id"])
-                record = store.run(run_id)
-                if record and record["status"] == "cancel_requested":
-                    store.update_run(
-                        run_id,
-                        status="cancelled",
-                        message="cancelled",
-                        progress=1,
-                    )
-                else:
-                    store.update_run(
-                        run_id,
-                        status="failed",
-                        message="ComfyUI execution failed",
-                        error=json.dumps(_detail("comfy_execution_failed", str(exc))),
-                    )
-
-        threading.Thread(target=observe, daemon=True).start()
+        supervisor.submit_plan(run_id, runtime, plan, on_complete)
 
     def frame_sequence_view(artifact_id: str) -> FrameSequenceView:
         row = store.artifact(artifact_id)
@@ -682,7 +662,7 @@ def create_app(
             "checked_at": state["checked_at"],
             "error": state["error"],
             "actions": action_states,
-            "schema_version": 3,
+            "schema_version": 4,
         }
 
     # Stable human/CLI/agent entry surface.
@@ -733,41 +713,38 @@ def create_app(
                     expanded.append(artifact_id)
             normalized_inputs["source"] = expanded
         runtime = selected_runtime(values)
-        if action_id != "sprite.export":
-            descriptor = registry.view(
-                action_id, runtime, runtime_tool_ids(runtime), recipes_from_runtime(runtime)
+        descriptor = registry.view(
+            action_id, runtime, runtime_tool_ids(runtime), recipes_from_runtime(runtime)
+        )
+        if not descriptor or not descriptor.available:
+            raise HTTPException(
+                409,
+                _detail(
+                    descriptor.unavailable_reason if descriptor else "runtime_not_ready",
+                    "the selected Action is not available on a healthy runtime",
+                ),
             )
-            if not descriptor or not descriptor.available:
-                raise HTTPException(
-                    409,
-                    _detail(
-                        descriptor.unavailable_reason if descriptor else "runtime_not_ready",
-                        "the selected Action is not available on a healthy runtime",
-                    ),
-                )
-            if not values.get("model") and descriptor.models:
-                values["model"] = descriptor.models[0].id
-            selected_model = str(values.get("model") or "")
-            prefix, separator, recipe_id = selected_model.partition(":")
-            if not separator or prefix != runtime["id"]:
-                raise HTTPException(
-                    422,
-                    _detail(
-                        "recipe_invalid",
-                        "the selected model does not belong to the selected runtime",
-                    ),
-                )
-            selected_recipe = recipe_for(runtime, recipe_id)
-            if not selected_recipe or not supports(selected_recipe, action_id, normalized_inputs):
-                raise HTTPException(
-                    409,
-                    _detail(
-                        "recipe_incompatible",
-                        "the selected model/workflow does not support these text/image inputs",
-                    ),
-                )
-        else:
-            selected_recipe = None
+        if not values.get("model") and descriptor.models:
+            values["model"] = descriptor.models[0].id
+        selected_model = str(values.get("model") or "")
+        prefix, separator, recipe_id = selected_model.partition(":")
+        if not separator or prefix != runtime["id"]:
+            raise HTTPException(
+                422,
+                _detail(
+                    "recipe_invalid",
+                    "the selected model does not belong to the selected runtime",
+                ),
+            )
+        selected_recipe = recipe_for(runtime, recipe_id)
+        if not selected_recipe or not supports(selected_recipe, action_id, normalized_inputs):
+            raise HTTPException(
+                409,
+                _detail(
+                    "recipe_incompatible",
+                    "the selected model/workflow does not support these text/image inputs",
+                ),
+            )
         project = ensure_action_project_type(project, action_id, values)
         run_id = f"run_{uuid.uuid4().hex}"
         payload = {
@@ -775,73 +752,47 @@ def create_app(
             "inputs": normalized_inputs,
             "values": values,
         }
-        if action_id == "sprite.export":
-            store.create_run(
-                run_id,
-                None,
-                action_id=action_id,
-                project_id=request.project,
-                request=payload,
-            )
-
-            def package() -> None:
-                store.update_run(
-                    run_id,
-                    status="running",
-                    progress=0.2,
-                    message="validating package",
-                )
-                try:
-                    result = build_package(
-                        store,
-                        request.project,
-                        allow_incomplete=bool(values.get("allow_incomplete", False)),
-                    )
-                    artifact = store.put_artifact(
-                        result.data,
-                        "application/vnd.cooksprite+zip",
-                        "CookSpritePack",
-                        {"manifest": result.manifest, "run_id": run_id},
-                        project_id=request.project,
-                        title=f"{project.name}.cooksprite",
-                    )
-                    store.attach_run_artifact(run_id, artifact.id)
-                    store.update_run(
-                        run_id, status="succeeded", progress=1, message="package ready"
-                    )
-                except PackageError as exc:
-                    store.update_run(
-                        run_id,
-                        status="failed",
-                        message="package is incomplete",
-                        error=json.dumps(
-                            _detail(
-                                "export_incomplete",
-                                "fix the listed issues or explicitly allow an incomplete package",
-                                issues=exc.issues,
-                            )
-                        ),
-                    )
-
-            threading.Thread(target=package, daemon=True).start()
-            return run_view(run_id)
-
         try:
-            compiled = ActionCompiler(bridge_for(runtime)).compile(
-                registered,
+            task_revision, workflow_revisions, task_inputs = bind_action_task(
+                store,
+                runtime["id"],
+                runtime["snapshot"],
+                selected_recipe,
+                action_id,
                 normalized_inputs,
                 values,
-                run_id,
-                selected_recipe,
             )
-        except (ActionCompileError, ValueError) as exc:
+            compiled = Compiler(
+                runtime_tools(runtime),
+                bridge_for(runtime),
+                run_id,
+                sealed_graphs=sealed_graphs(runtime),
+            ).compile_task(
+                task_revision,
+                workflow_revisions,
+                task_inputs,
+                {},
+            )
+        except (CompileError, ValueError) as exc:
             raise HTTPException(422, _detail("graph_invalid", str(exc))) from exc
+        provenance = {
+            "action": action_id,
+            "recipe": selected_recipe.id,
+            "task": {"id": task_revision.id, "revision": task_revision.revision},
+            "workflows": [
+                {"id": workflow.id, "revision": workflow.revision}
+                for workflow in workflow_revisions.values()
+            ],
+            "packages": tool_packages.versions(),
+            "runtime_snapshot": runtime["snapshot"],
+        }
         store.create_run(
             run_id,
             runtime["id"],
             action_id=action_id,
             project_id=request.project,
             request=payload,
+            provenance=provenance,
         )
 
         def finalize_action() -> None:
@@ -1084,6 +1035,66 @@ def create_app(
         if not project:
             raise HTTPException(404, _detail("project_not_found", "unknown project"))
         return project
+
+    @app.post(
+        "/api/v1/projects/{project_id}/exports",
+        response_model=RunView,
+        status_code=202,
+    )
+    def export_project(project_id: str, request: ProjectExportCreate) -> RunView:
+        project = store.project(project_id)
+        if not project:
+            raise HTTPException(404, _detail("project_not_found", "unknown project"))
+        run_id = f"run_{uuid.uuid4().hex}"
+        payload = {"project": project_id, "allow_incomplete": request.allow_incomplete}
+        store.create_run(
+            run_id,
+            None,
+            action_id="project.export",
+            project_id=project_id,
+            request=payload,
+            provenance={"operation": "project.export", "packages": tool_packages.versions()},
+        )
+
+        def package() -> None:
+            store.update_run(
+                run_id,
+                status="running",
+                progress=0.2,
+                message="validating package",
+            )
+            try:
+                result = build_package(
+                    store,
+                    project_id,
+                    allow_incomplete=request.allow_incomplete,
+                )
+                artifact = store.put_artifact(
+                    result.data,
+                    "application/vnd.cooksprite+zip",
+                    "CookSpritePack",
+                    {"manifest": result.manifest, "run_id": run_id},
+                    project_id=project_id,
+                    title=f"{project.name}.cooksprite",
+                )
+                store.attach_run_artifact(run_id, artifact.id)
+                store.update_run(run_id, status="succeeded", progress=1, message="package ready")
+            except PackageError as exc:
+                store.update_run(
+                    run_id,
+                    status="failed",
+                    message="package is incomplete",
+                    error=json.dumps(
+                        _detail(
+                            "export_incomplete",
+                            "fix the listed issues or explicitly allow an incomplete package",
+                            issues=exc.issues,
+                        )
+                    ),
+                )
+
+        supervisor.submit_job(run_id, package)
+        return run_view(run_id)
 
     @app.get("/api/v1/gallery", response_model=list[GalleryItem])
     def gallery() -> list[GalleryItem]:
@@ -1498,7 +1509,7 @@ def create_app(
                 422, _detail("recipe_invalid", "recipe id cannot be empty or contain ':'")
             )
         known_actions = set(ACTION_IDS)
-        if not body.actions or not set(body.actions).issubset(known_actions - {"sprite.export"}):
+        if not body.actions or not set(body.actions).issubset(known_actions):
             raise HTTPException(422, _detail("recipe_invalid", "recipe has unsupported Actions"))
         if not body.output or len(body.output) != 2:
             raise HTTPException(
@@ -1526,7 +1537,12 @@ def create_app(
                     nodes=missing,
                 ),
             )
-        recipe = Recipe(**body.model_dump(), source="imported")
+        recipe = materialize_recipe_workflows(
+            store,
+            runtime["id"],
+            runtime["snapshot"],
+            Recipe(**body.model_dump(), source="imported"),
+        )
         recipes = [item for item in recipes_from_runtime(runtime) if item.id != recipe.id]
         recipes.append(recipe)
         manifest = manifest_from_assets(runtime_assets(runtime))
@@ -1559,7 +1575,11 @@ def create_app(
 
     @app.get("/api/v1/tools")
     def tools() -> list[dict[str, Any]]:
-        return [item.model_dump() for item in builtin_tools()]
+        return [item.model_dump() for item in registry.tools()]
+
+    @app.get("/api/v1/tool-packages")
+    def tool_package_manifests() -> list[dict[str, Any]]:
+        return registry.package_manifests()
 
     @app.post("/api/v1/workflows", response_model=WorkflowRevision, status_code=201)
     def create_workflow(body: WorkflowDefinition) -> WorkflowRevision:
@@ -1719,6 +1739,58 @@ def create_app(
         store.create_run(run_id, request.runtime_id, request=request.model_dump(mode="json"))
         execute_plan(run_id, runtime, compiled)
         return run_view(run_id)
+
+    def recovered_finalizer(row: dict[str, Any]) -> Callable[[], None] | None:
+        action_id = row.get("action_id")
+        request = json.loads(row.get("request") or "{}")
+        if action_id in SEQUENCE_ACTIONS:
+            return lambda: finalize_frame_sequence(
+                row["id"],
+                action_id,
+                row.get("project_id") or request.get("project"),
+                request.get("values") or {},
+            )
+        if action_id == "normal.generate":
+            sources = (request.get("inputs") or {}).get("source") or []
+            source_ids = sources if isinstance(sources, list) else [sources]
+            return lambda: order_normal_outputs(row["id"], source_ids)
+        return None
+
+    for interrupted in store.runs(("queued", "running", "cancel_requested")):
+        runtime = store.runtime(interrupted.get("runtime_id"))
+        if interrupted.get("prompt_id") and runtime:
+            supervisor.resume_prompt(
+                interrupted["id"],
+                runtime,
+                interrupted["prompt_id"],
+                recovered_finalizer(interrupted),
+            )
+        else:
+            store.update_run(
+                interrupted["id"],
+                status="failed",
+                message="CookSprite restarted before this Run reached ComfyUI",
+                error=json.dumps(
+                    _detail(
+                        "run_interrupted",
+                        "retry this Run from its Action or project operation",
+                    )
+                ),
+            )
+
+    packaged_web = Path(__file__).resolve().parents[1] / "static"
+    source_web = Path(__file__).resolve().parents[2] / "web" / "dist"
+    web_root = packaged_web if (packaged_web / "index.html").is_file() else source_web
+    if (web_root / "index.html").is_file():
+
+        @app.get("/{spa_path:path}", include_in_schema=False)
+        def web_app(spa_path: str) -> FileResponse:
+            if spa_path.startswith("api/"):
+                raise HTTPException(404, _detail("not_found", "unknown API endpoint"))
+            candidate = (web_root / spa_path).resolve()
+            if candidate.is_relative_to(web_root.resolve()) and candidate.is_file():
+                return FileResponse(candidate)
+            return FileResponse(web_root / "index.html")
 
     return app
 

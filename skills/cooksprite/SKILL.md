@@ -97,6 +97,12 @@ cspr project sequence prj_x --clip walk --view level --direction s
 
 ## Export
 
-Run `sprite.export`. If validation reports missing directions or normals, fix
-them. Set `allow_incomplete=true` only when the user explicitly accepts the
-warnings. The only canonical delivery is the returned `.cooksprite` artifact.
+Project export is a project operation, not an AI Action:
+
+```bash
+cspr project export prj_x --wait
+```
+
+If validation reports missing directions or normals, fix them. Pass
+`--allow-incomplete` only when the user explicitly accepts the warnings. The
+only canonical delivery is the returned `.cooksprite` artifact.

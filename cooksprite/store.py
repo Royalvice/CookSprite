@@ -13,7 +13,7 @@ from typing import Any
 
 from .domain import ArtifactRef, ProjectView, SpriteDocument
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def utcnow() -> str:
@@ -119,6 +119,21 @@ class Store:
             self._ensure_column("runs", "request", "TEXT NOT NULL DEFAULT '{}'")
             self._ensure_column("runs", "created_at", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column("runs", "updated_at", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column("runs", "provenance", "TEXT NOT NULL DEFAULT '{}'")
+            self._ensure_column("definitions", "body_hash", "TEXT NOT NULL DEFAULT ''")
+            definition_rows = self.db.execute(
+                "SELECT kind,id,revision,body FROM definitions WHERE body_hash=''"
+            ).fetchall()
+            for row in definition_rows:
+                digest = hashlib.sha256(
+                    json.dumps(
+                        json.loads(row["body"]), sort_keys=True, separators=(",", ":")
+                    ).encode()
+                ).hexdigest()
+                self.db.execute(
+                    "UPDATE definitions SET body_hash=? WHERE kind=? AND id=? AND revision=?",
+                    (digest, row["kind"], row["id"], row["revision"]),
+                )
             self.db.commit()
         if previous_version and previous_version < 3:
             self._migrate_legacy_frame_sequences()
@@ -245,21 +260,32 @@ class Store:
     def save_definition(
         self, kind: str, definition_id: str, runtime_id: str, snapshot: str, body: dict
     ) -> int:
+        canonical = json.dumps(body, sort_keys=True, separators=(",", ":"))
+        body_hash = hashlib.sha256(canonical.encode()).hexdigest()
         with self.lock:
+            existing = self.db.execute(
+                "SELECT revision FROM definitions WHERE kind=? AND id=? AND runtime_id=? "
+                "AND snapshot=? AND body_hash=? ORDER BY revision DESC LIMIT 1",
+                (kind, definition_id, runtime_id, snapshot, body_hash),
+            ).fetchone()
+            if existing:
+                return int(existing["revision"])
             row = self.db.execute(
                 "SELECT MAX(revision) AS revision FROM definitions WHERE kind=? AND id=?",
                 (kind, definition_id),
             ).fetchone()
             revision = (row["revision"] or 0) + 1
             self.db.execute(
-                "INSERT INTO definitions VALUES(?,?,?,?,?,?)",
+                "INSERT INTO definitions(kind,id,revision,runtime_id,snapshot,body,body_hash) "
+                "VALUES(?,?,?,?,?,?,?)",
                 (
                     kind,
                     definition_id,
                     revision,
                     runtime_id,
                     snapshot,
-                    json.dumps(body),
+                    canonical,
+                    body_hash,
                 ),
             )
             self.db.commit()
@@ -566,12 +592,14 @@ class Store:
         action_id: str | None = None,
         project_id: str | None = None,
         request: dict[str, Any] | None = None,
+        provenance: dict[str, Any] | None = None,
     ) -> None:
         now = utcnow()
         with self.lock:
             self.db.execute(
                 "INSERT INTO runs(id,status,progress,message,error,artifacts,runtime_id,prompt_id,"
-                "action_id,project_id,request,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "action_id,project_id,request,created_at,updated_at,provenance) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     run_id,
                     "queued",
@@ -586,6 +614,7 @@ class Store:
                     json.dumps(request or {}),
                     now,
                     now,
+                    json.dumps(provenance or {}),
                 ),
             )
             self.db.commit()
@@ -601,8 +630,11 @@ class Store:
             "artifacts",
             "runtime_id",
             "prompt_id",
+            "provenance",
         }
         changes = {key: value for key, value in fields.items() if key in allowed}
+        if "provenance" in changes and not isinstance(changes["provenance"], str):
+            changes["provenance"] = json.dumps(changes["provenance"])
         changes["updated_at"] = utcnow()
         keys = ",".join(f"{key}=?" for key in changes)
         with self.lock:

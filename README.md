@@ -27,9 +27,10 @@ stores only declared outputs. ComfyUI is the sole media execution runtime.
 
 - Vue 3 + TypeScript workbench with image, same-page animation curation, normal
   preview, library, queue, gallery, and export stages.
-- Seven bilingual Actions shared by Web, CLI, and agents:
+- Six bilingual inference Actions shared by Web, CLI, and agents:
   `image.generate`, `animation.generate`, `frame.redraw`, `sheet.slice`,
-  `video.sample`, `normal.generate`, and `sprite.export`.
+  `video.sample`, and `normal.generate`. Project export is a separate project
+  operation because it does not execute media computation in ComfyUI.
 - Eight real direction tracks, level/top-45 views, per-frame timing and offsets,
   original-preserving redraw variants, and undo/redo.
 - Typed `FrameSeq` manifests with ordered reusable `Image` frames.
@@ -41,20 +42,16 @@ stores only declared outputs. ComfyUI is the sole media execution runtime.
 
 ## Run locally
 
-```bash
-python -m pip install -e '.[dev]'
-cspr serve --host 127.0.0.1 --port 8000
-```
-
-In another terminal:
+Release wheels contain the built Vue frontend, CLI, API, node pack, and Agent
+Skill. End users do not need Node.js:
 
 ```bash
-cd web
-npm install
-npm run dev
+python -m pip install cooksprite
+cspr install --accept-model-license
+cspr start
 ```
 
-Open `http://127.0.0.1:5173`. The workbench remains visible without a runtime,
+Open `http://127.0.0.1:8000`. The workbench remains visible without a runtime,
 but generation Actions are disabled until a trusted ComfyUI is registered and
 checked:
 
@@ -65,15 +62,13 @@ cspr comfy doctor --runtime local
 
 If ComfyUI is not installed, the Settings page or this explicit command installs
 an isolated pinned runtime, the CookSprite node pack, and a hash-verified default
-SD 1.5 checkpoint:
+SD 1.5 checkpoint. `cspr install` first displays the model identity, source,
+license, size, and destination and requires `--accept-model-license`.
 
-```bash
-cspr comfy install ~/.cooksprite/runtime
-cspr comfy run ~/.cooksprite/runtime
-```
-
-Use `--no-models` when only installing the runtime/node pack. Existing ComfyUI
-installations and model directories are never modified by the managed installer.
+Pass `--no-models` when an existing ComfyUI already has compatible models or
+when only installing the runtime/node pack. Existing ComfyUI installations and
+model directories are never modified by the managed installer. Contributors
+may still run the API and Vite development server separately.
 Every compatible checkpoint already visible to that ComfyUI becomes a selectable
 text/image Recipe. Existing image-to-video or text-to-video API workflows stay
 in ComfyUI and can be registered as a small Recipe adapter; their declared

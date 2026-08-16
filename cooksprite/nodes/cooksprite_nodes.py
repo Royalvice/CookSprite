@@ -16,7 +16,34 @@ import numpy as np
 import torch
 from PIL import Image
 
-NODE_PACK_VERSION = "1.1.0"
+CATEGORY_PROMPTS = {
+    "character": "a single full-body game character, centered, complete silhouette",
+    "weapon": "a single game weapon, centered, fully visible",
+    "prop": "a single game prop, centered, fully visible",
+    "terrain": "a seamless game terrain tile, orthographic",
+    "scene": "a single isolated game environment element",
+    "vfx": "a single game visual effect, centered",
+}
+ACTION_PROMPTS = {
+    "idle": "idle breathing animation keyframes",
+    "walk": "walk cycle animation keyframes",
+    "run": "run cycle animation keyframes",
+    "attack": "attack animation keyframes",
+    "cast": "spell casting animation keyframes",
+    "hit": "hit reaction animation keyframes",
+    "jump": "jump animation keyframes",
+    "death": "fall down animation keyframes",
+}
+DIRECTION_PROMPTS = {
+    "n": "facing north, rear view",
+    "ne": "facing north-east",
+    "e": "facing east, side view",
+    "se": "facing south-east",
+    "s": "facing south, front view",
+    "sw": "facing south-west",
+    "w": "facing west, side view",
+    "nw": "facing north-west",
+}
 
 
 def _tensor(image: Image.Image):
@@ -108,6 +135,57 @@ class CS_StoreArtifact:
         return (json.dumps(refs),)
 
 
+class CS_CompilePromptPacket:
+    """Compile CookSprite prompt engineering inside the compute plane."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "action_id": ("STRING", {"default": "image.generate"}),
+                "prompt": ("STRING", {"default": "", "multiline": True}),
+                "category": ("STRING", {"default": "character"}),
+                "style": ("STRING", {"default": "pixel"}),
+                "animation": ("STRING", {"default": "idle"}),
+                "view": ("STRING", {"default": "level"}),
+                "direction": ("STRING", {"default": "s"}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("positive", "negative")
+    FUNCTION = "compile"
+    CATEGORY = "CookSprite/Prompt"
+
+    def compile(self, action_id, prompt, category, style, animation, view, direction):
+        user = str(prompt or "").strip()
+        negative = (
+            "cropped, cut off, multiple views, contact sheet, text, watermark, logo, "
+            "photographic background, gradient background, shadow on background"
+        )
+        if action_id == "animation.generate":
+            parts = [
+                ACTION_PROMPTS.get(str(animation), "animation keyframes"),
+                "orthographic game sprite",
+                "45 degree top-down view" if view == "top45" else "level view",
+                DIRECTION_PROMPTS.get(str(direction), "front view"),
+                "preserve the same character identity, outfit, proportions and colors",
+                "one pose per image",
+                "flat pure chroma green background, RGB 0 255 0",
+            ]
+        else:
+            parts = [
+                CATEGORY_PROMPTS.get(str(category), "a single game asset"),
+                "pixel art, crisp hard pixel edges, limited palette, no antialiasing"
+                if style == "pixel"
+                else "clean game concept art",
+                "flat pure chroma green background, RGB 0 255 0",
+            ]
+        if user:
+            parts.insert(0, user)
+        return (", ".join(parts), negative)
+
+
 class CS_Pixelize:
     @classmethod
     def INPUT_TYPES(cls):
@@ -116,6 +194,7 @@ class CS_Pixelize:
                 "image": ("IMAGE",),
                 "target_width": ("INT", {"default": 128, "min": 8, "max": 4096}),
                 "target_height": ("INT", {"default": 128, "min": 8, "max": 4096}),
+                "enabled": ("BOOLEAN", {"default": True}),
             }
         }
 
@@ -123,7 +202,9 @@ class CS_Pixelize:
     FUNCTION = "run"
     CATEGORY = "CookSprite/Media"
 
-    def run(self, image, target_width, target_height):
+    def run(self, image, target_width, target_height, enabled=True):
+        if not enabled:
+            return (image,)
         frames = []
         for frame in image:
             source = Image.open(io.BytesIO(_png(frame, "NormalMap"))).convert("RGB")
@@ -169,19 +250,6 @@ class CS_IsolateOnGreen:
             pixels[background] = np.array([0.0, 1.0, 0.0], dtype=np.float32)
             results.append(torch.from_numpy(pixels).to(frame.device, dtype=frame.dtype))
         return (torch.stack(results),)
-
-
-class CS_CenterAlign:
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {"required": {"image": ("IMAGE",)}}
-
-    RETURN_TYPES = ("IMAGE",)
-    FUNCTION = "run"
-    CATEGORY = "CookSprite/Media"
-
-    def run(self, image):
-        return (image,)
 
 
 class CS_NormalEstimate:
@@ -278,7 +346,7 @@ class CS_LoadVideoArtifact:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "video_url": ("STRING", {"multiline": False}),
+                "video": ("STRING", {"multiline": False}),
                 "sample_fps": ("FLOAT", {"default": 12.0, "min": 0.1, "max": 120.0}),
                 "max_frames": ("INT", {"default": 48, "min": 1, "max": 1000}),
             }
@@ -288,10 +356,10 @@ class CS_LoadVideoArtifact:
     FUNCTION = "load"
     CATEGORY = "CookSprite/Bridge"
 
-    def load(self, video_url, sample_fps, max_frames):
+    def load(self, video, sample_fps, max_frames):
         import imageio.v2 as imageio
 
-        data, media_type = _read(video_url)
+        data, media_type = _read(video)
         suffix = ".gif" if media_type == "image/gif" else ".mp4"
         with tempfile.NamedTemporaryFile(suffix=suffix) as handle:
             handle.write(data)
@@ -330,9 +398,9 @@ class CS_MakeSpritePair:
 NODE_CLASSES = [
     CS_LoadArtifact,
     CS_StoreArtifact,
+    CS_CompilePromptPacket,
     CS_IsolateOnGreen,
     CS_Pixelize,
-    CS_CenterAlign,
     CS_NormalEstimate,
     CS_SliceSpriteSheet,
     CS_LoadVideoArtifact,

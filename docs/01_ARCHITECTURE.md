@@ -47,12 +47,18 @@ DAG with explicit candidates. Every revision is immutable and bound to one
 doctor snapshot. A runtime change requires a newly validated revision; there is
 no hidden fallback.
 
-Action, Workflow, and Task are authoring surfaces, not separate executors. Each
-compiles to the same private `ExecutionPlan` (`graph` plus declared artifact
-sinks), then uses one submit/wait/cancel/error path. Tool output ports determine
+The canonical lowering chain is `Action → Task revision → Workflow revision →
+Tool → ComfyUI node`. These are authoring layers, not separate executors. Each
+ends in the same private `ExecutionPlan` (`graph` plus declared artifact sinks),
+then uses one submit/wait/cancel/error path. Tool output ports determine
 artifact kinds; names such as `normal` are never used to guess a type. A Tool is
 not directly runnable because a versioned Workflow must declare which typed
 outputs may leave ComfyUI.
+
+Related built-in Tools live in static, versioned Tool packages. One aggregate
+registry owns the Action list, package manifests, node lowerings, dependency
+checks, CLI/Web constants, and generated Agent reference. There is no dynamic
+plugin marketplace or API-side media fallback.
 
 ## Runtime adaptation
 
@@ -83,7 +89,12 @@ Comfy URLs, filesystem paths, workflow JSON, or prompt IDs.
 - `Artifact`: immutable SHA-256 blob plus kind, media type, lineage, favorites,
   trash state, and project links.
 - `Run`: Action/graph request, public status, normalized error, artifact outputs,
-  and private runtime identifiers.
+  immutable definition/package/runtime provenance, and private runtime identifiers.
+
+A `RunSupervisor` owns worker lifetime. It maps ComfyUI WebSocket sampler steps
+to public Run progress, falls back to history polling through incompatible
+proxies, resumes already-submitted prompts after restart, and gives an explicit
+retryable failure to work interrupted before submission.
 
 The local Gallery is deliberately manual: only explicitly published projects
 appear. v0.1 assumes trusted localhost/private networking and has no users.

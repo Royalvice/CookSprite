@@ -63,6 +63,7 @@ export interface RunView {
   action_id?: string;
   project_id?: string;
   artifacts: ArtifactRef[];
+  provenance: Record<string, unknown>;
   error?: { code: string; message: string; issues?: string[] };
   created_at: string;
   updated_at: string;
@@ -198,6 +199,11 @@ export const api = {
   projectArtifacts: (id: string) => json<ArtifactRef[]>(`/projects/${encodeURIComponent(id)}/artifacts`),
   materializeSequence: (id: string, body: { action: AnimationClip["action"]; view: "level" | "top45"; direction: Direction }) =>
     json<FrameSequenceView>(`/projects/${encodeURIComponent(id)}/sequences`, { method: "POST", ...jsonBody(body) }),
+  exportProject: (id: string, allowIncomplete = false) =>
+    json<RunView>(`/projects/${encodeURIComponent(id)}/exports`, {
+      method: "POST",
+      ...jsonBody({ allow_incomplete: allowIncomplete }),
+    }),
   sequence: (id: string) => json<FrameSequenceView>(`/artifacts/${encodeURIComponent(id)}/sequence`),
   artifacts: (query = "") => json<ArtifactRef[]>(`/artifacts${query ? `?${query}` : ""}`),
   patchArtifact: (id: string, body: { favorite?: boolean; title?: string }) => json<ArtifactRef>(`/artifacts/${encodeURIComponent(id)}`, { method: "PATCH", ...jsonBody(body) }),

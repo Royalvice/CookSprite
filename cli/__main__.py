@@ -6,22 +6,31 @@ import argparse
 import json
 import mimetypes
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-from cooksprite.comfy.managed import install, install_node_pack, launch
+from cooksprite.client import CookSpriteClient
+from cooksprite.comfy.managed import (
+    DEFAULT_MODEL,
+    install,
+    install_node_pack,
+    launch,
+    wait_until_ready,
+)
+from cooksprite.dev import check_generated, check_tool_packages, sync_generated
 
 TERMINAL = {"succeeded", "failed", "cancelled"}
 
 
-def client(base: str) -> httpx.Client:
-    return httpx.Client(base_url=base.rstrip("/"), timeout=30)
+def client(base: str | None) -> CookSpriteClient:
+    return CookSpriteClient(base)
 
 
-def show(response: httpx.Response) -> int:
+def show(response) -> int:
     if response.status_code >= 400:
         print(response.text, file=sys.stderr)
         return 2
@@ -47,7 +56,7 @@ def parse_pairs(items: list[str], lists: bool = False) -> dict[str, Any]:
     return result
 
 
-def wait_for_run(http: httpx.Client, run: dict[str, Any]) -> int:
+def wait_for_run(http: CookSpriteClient, run: dict[str, Any]) -> int:
     while run["status"] not in TERMINAL:
         time.sleep(0.35)
         response = http.get(f"/api/v1/runs/{run['id']}")
@@ -129,6 +138,36 @@ def cmd_project(args: argparse.Namespace) -> int:
                     },
                 )
             )
+        if args.action == "update":
+            body = {
+                key: value
+                for key, value in {
+                    "name": args.name,
+                    "type": args.type,
+                    "favorite": args.favorite,
+                }.items()
+                if value is not None
+            }
+            return show(http.patch(f"/api/v1/projects/{args.id}", json=body))
+        if args.action == "publish":
+            return show(
+                http.post(
+                    f"/api/v1/projects/{args.id}/publish",
+                    json={"cover_artifact_id": args.cover},
+                )
+            )
+        if args.action == "export":
+            response = http.post(
+                f"/api/v1/projects/{args.id}/exports",
+                json={"allow_incomplete": args.allow_incomplete},
+            )
+            if response.status_code >= 400:
+                return show(response)
+            run = response.json()
+            if args.wait:
+                return wait_for_run(http, run)
+            print(json.dumps(run, ensure_ascii=False, indent=2))
+            return 0
         return show(
             http.post(
                 "/api/v1/projects",
@@ -160,12 +199,43 @@ def cmd_document(args: argparse.Namespace) -> int:
 
 
 def cmd_artifact(args: argparse.Namespace) -> int:
-    if args.action == "sequence":
-        with client(args.api) as http:
-            return show(http.get(f"/api/v1/artifacts/{args.id}/sequence"))
-    path = Path(args.file)
-    media_type = args.media_type or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     with client(args.api) as http:
+        if args.action == "sequence":
+            return show(http.get(f"/api/v1/artifacts/{args.id}/sequence"))
+        if args.action == "list":
+            params = {
+                key: value
+                for key, value in {
+                    "project_id": args.project,
+                    "kind": args.kind,
+                    "trashed": args.trashed,
+                    "search": args.search,
+                }.items()
+                if value not in {None, "", False}
+            }
+            return show(http.get("/api/v1/artifacts", params=params))
+        if args.action == "show":
+            return show(http.get(f"/api/v1/artifacts/{args.id}"))
+        if args.action == "download":
+            response = http.get(f"/api/v1/artifacts/{args.id}/content")
+            if response.status_code >= 400:
+                return show(response)
+            Path(args.out).write_bytes(response.content)
+            print(args.out)
+            return 0
+        if args.action in {"trash", "restore"}:
+            return show(http.post(f"/api/v1/artifacts/{args.id}/{args.action}"))
+        if args.action == "favorite":
+            return show(
+                http.patch(
+                    f"/api/v1/artifacts/{args.id}",
+                    json={"favorite": args.enabled},
+                )
+            )
+        path = Path(args.file)
+        media_type = (
+            args.media_type or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        )
         response = http.post(
             "/api/v1/artifacts",
             params={
@@ -177,6 +247,98 @@ def cmd_artifact(args: argparse.Namespace) -> int:
             content=path.read_bytes(),
         )
     return show(response)
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    with client(args.api) as http:
+        response = http.get(f"/api/v1/runs/{args.id}")
+        if response.status_code >= 400:
+            return show(response)
+        if args.action == "show":
+            return show(response)
+        if args.action == "wait":
+            return wait_for_run(http, response.json())
+        return show(http.post(f"/api/v1/runs/{args.id}/{args.action}"))
+
+
+def cmd_simple_get(args: argparse.Namespace) -> int:
+    with client(args.api) as http:
+        return show(http.get(f"/api/v1/{args.path}"))
+
+
+def cmd_dev(args: argparse.Namespace) -> int:
+    try:
+        if args.action == "sync":
+            print(json.dumps({"written": sync_generated()}, indent=2))
+            return 0
+        report = check_tool_packages(args.runtime_url)
+        report["generated"] = check_generated()
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+
+def cmd_install(args: argparse.Namespace) -> int:
+    if not args.no_models and not args.accept_model_license:
+        model = DEFAULT_MODEL
+        print(
+            "Default model download requires explicit consent:\n"
+            f"  {model['filename']}\n"
+            f"  source: {model['url']}\n"
+            f"  license: {model['license']}\n"
+            f"  size: {model['size'] / 1024**3:.2f} GiB\n"
+            f"  destination: {Path(args.dir).expanduser() / 'ComfyUI' / model['relative_path']}\n"
+            "Run again with --accept-model-license, or use --no-models.",
+            file=sys.stderr,
+        )
+        return 2
+    target = install(
+        args.dir,
+        with_models=not args.no_models,
+        python_executable=args.python,
+        progress=lambda message, value: print(f"{value:>6.1%} {message}", file=sys.stderr),
+    )
+    print(json.dumps({"comfyui": str(target), "api": "cspr start"}, indent=2))
+    return 0
+
+
+def cmd_start(args: argparse.Namespace) -> int:
+    import uvicorn
+
+    from cooksprite.api.app import create_app
+
+    comfy_url = args.comfy_url
+    if not comfy_url:
+        launch(args.dir, host=args.comfy_host, port=args.comfy_port, cuda_device=args.cuda_device)
+        comfy_url = f"http://{args.comfy_host}:{args.comfy_port}"
+    wait_until_ready(comfy_url, timeout=args.timeout)
+    api_base = f"http://{args.host}:{args.port}"
+
+    def register_runtime() -> None:
+        deadline = time.monotonic() + args.timeout
+        while time.monotonic() < deadline:
+            try:
+                with CookSpriteClient(api_base) as http:
+                    created = http.post(
+                        "/api/v1/runtimes",
+                        json={
+                            "id": args.runtime,
+                            "label": args.label,
+                            "base_url": comfy_url,
+                            "callback_url": f"{api_base}/api/v1",
+                        },
+                    )
+                    if created.status_code < 400:
+                        http.post(f"/api/v1/runtimes/{args.runtime}/doctor").raise_for_status()
+                        return
+            except (httpx.HTTPError, OSError):
+                time.sleep(0.25)
+
+    threading.Thread(target=register_runtime, daemon=True).start()
+    uvicorn.run(create_app(args.data_dir), host=args.host, port=args.port)
+    return 0
 
 
 def cmd_list(args: argparse.Namespace) -> int:
@@ -273,7 +435,7 @@ def cmd_gc(args: argparse.Namespace) -> int:
 
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="cspr")
-    root.add_argument("--api", default="http://127.0.0.1:8000")
+    root.add_argument("--api", help="CookSprite API URL; defaults to config or localhost")
     root.add_argument("--lang", choices=["en", "zh-CN"], default="en")
     commands = root.add_subparsers(dest="command", required=True)
 
@@ -306,6 +468,23 @@ def parser() -> argparse.ArgumentParser:
     project_show = project_commands.add_parser("show")
     project_show.add_argument("id")
     project_show.set_defaults(func=cmd_project)
+    project_update = project_commands.add_parser("update")
+    project_update.add_argument("id")
+    project_update.add_argument("--name")
+    project_update.add_argument("--type", choices=["static", "character", "tileset"])
+    favorite = project_update.add_mutually_exclusive_group()
+    favorite.add_argument("--favorite", action="store_true", dest="favorite")
+    favorite.add_argument("--unfavorite", action="store_false", dest="favorite")
+    project_update.set_defaults(func=cmd_project, favorite=None)
+    project_publish = project_commands.add_parser("publish")
+    project_publish.add_argument("id")
+    project_publish.add_argument("--cover")
+    project_publish.set_defaults(func=cmd_project)
+    project_export = project_commands.add_parser("export")
+    project_export.add_argument("id")
+    project_export.add_argument("--allow-incomplete", action="store_true")
+    project_export.add_argument("--wait", action="store_true")
+    project_export.set_defaults(func=cmd_project)
     project_sequence = project_commands.add_parser(
         "sequence", help="materialize one curated document track as FrameSeq"
     )
@@ -349,6 +528,41 @@ def parser() -> argparse.ArgumentParser:
     sequence = artifact_commands.add_parser("sequence", help="expand a FrameSeq manifest")
     sequence.add_argument("id")
     sequence.set_defaults(func=cmd_artifact)
+    artifact_list = artifact_commands.add_parser("list")
+    artifact_list.add_argument("--project")
+    artifact_list.add_argument("--kind")
+    artifact_list.add_argument("--trashed", action="store_true")
+    artifact_list.add_argument("--search", default="")
+    artifact_list.set_defaults(func=cmd_artifact)
+    artifact_show = artifact_commands.add_parser("show")
+    artifact_show.add_argument("id")
+    artifact_show.set_defaults(func=cmd_artifact)
+    artifact_download = artifact_commands.add_parser("download")
+    artifact_download.add_argument("id")
+    artifact_download.add_argument("--out", required=True)
+    artifact_download.set_defaults(func=cmd_artifact)
+    for operation in ("trash", "restore"):
+        command = artifact_commands.add_parser(operation)
+        command.add_argument("id")
+        command.set_defaults(func=cmd_artifact)
+    artifact_favorite = artifact_commands.add_parser("favorite")
+    artifact_favorite.add_argument("id")
+    artifact_favorite.add_argument(
+        "--off", action="store_false", dest="enabled", help="remove favorite"
+    )
+    artifact_favorite.set_defaults(func=cmd_artifact, enabled=True)
+
+    runs = commands.add_parser("run", help="show, wait, cancel, or retry a Run")
+    run_commands = runs.add_subparsers(dest="action", required=True)
+    for operation in ("show", "wait", "cancel", "retry"):
+        command = run_commands.add_parser(operation)
+        command.add_argument("id")
+        command.set_defaults(func=cmd_run)
+
+    queue = commands.add_parser("queue")
+    queue.set_defaults(func=cmd_simple_get, path="queue")
+    gallery = commands.add_parser("gallery")
+    gallery.set_defaults(func=cmd_simple_get, path="gallery")
 
     serve = commands.add_parser("serve")
     serve.add_argument("--host", default="127.0.0.1")
@@ -359,7 +573,7 @@ def parser() -> argparse.ArgumentParser:
     contributor_list = commands.add_parser("list")
     contributor_list.add_argument("kind", choices=["tools", "workflows", "tasks", "runtimes"])
     contributor_list.set_defaults(func=cmd_list)
-    contributor_run = commands.add_parser("run")
+    contributor_run = commands.add_parser("contributor-run")
     contributor_run.add_argument("kind", choices=["workflow", "task"])
     contributor_run.add_argument("id")
     contributor_run.add_argument("--revision", type=int, required=True)
@@ -404,6 +618,37 @@ def parser() -> argparse.ArgumentParser:
     comfy_recipe.add_argument("--runtime", required=True)
     comfy_recipe.add_argument("file")
     comfy_recipe.set_defaults(func=cmd_comfy)
+
+    dev = commands.add_parser("dev")
+    dev_commands = dev.add_subparsers(dest="action", required=True)
+    dev_check = dev_commands.add_parser("check")
+    dev_check.add_argument("--runtime-url")
+    dev_check.set_defaults(func=cmd_dev)
+    dev_sync = dev_commands.add_parser("sync")
+    dev_sync.set_defaults(func=cmd_dev)
+
+    install_command = commands.add_parser(
+        "install", help="install isolated ComfyUI, CookSprite nodes, and optional starter model"
+    )
+    install_command.add_argument("--dir", default="~/.cooksprite/runtime")
+    install_command.add_argument("--no-models", action="store_true")
+    install_command.add_argument("--accept-model-license", action="store_true")
+    install_command.add_argument("--python")
+    install_command.set_defaults(func=cmd_install)
+
+    start = commands.add_parser("start", help="start CookSprite and a local or remote ComfyUI")
+    start.add_argument("--dir", default="~/.cooksprite/runtime")
+    start.add_argument("--data-dir", default="~/.cooksprite/data")
+    start.add_argument("--host", default="127.0.0.1")
+    start.add_argument("--port", type=int, default=8000)
+    start.add_argument("--comfy-url", help="use an existing local or remote ComfyUI")
+    start.add_argument("--comfy-host", default="127.0.0.1")
+    start.add_argument("--comfy-port", type=int, default=8188)
+    start.add_argument("--cuda-device", type=int)
+    start.add_argument("--runtime", default="rt_default")
+    start.add_argument("--label", default="ComfyUI")
+    start.add_argument("--timeout", type=float, default=180)
+    start.set_defaults(func=cmd_start)
     return root
 
 
