@@ -5,12 +5,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform
+import shutil
+import subprocess
 import threading
 import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
@@ -21,9 +24,9 @@ from .. import __version__
 from ..action_graphs import bind_action_task, materialize_recipe_workflows, sealed_tool_descriptor
 from ..bridge import ArtifactBridge, BridgeError
 from ..comfy import ComfyClient
-from ..comfy.managed import DEFAULT_MODEL, wait_until_ready
 from ..comfy.managed import install as install_managed_comfy
 from ..comfy.managed import launch as launch_managed_comfy
+from ..comfy.managed import wait_until_ready
 from ..compiler import CompileError, Compiler
 from ..domain import (
     ActionDescriptor,
@@ -39,6 +42,7 @@ from ..domain import (
     ProjectPatch,
     ProjectView,
     RunCreate,
+    RunRuntimeState,
     RunView,
     SpriteDocument,
     TaskDefinition,
@@ -51,6 +55,7 @@ from ..domain import (
 from ..example_catalog import register_action_examples
 from ..execution import ExecutionPlan
 from ..package import PackageError, build_package
+from ..prompting import COMPILER_VERSION
 from ..recipes import (
     Recipe,
     discover_recipes,
@@ -74,6 +79,8 @@ class RuntimeCreate(BaseModel):
     id: str
     label: str
     base_url: str
+    location: Literal["local", "remote"] = "remote"
+    transport: str = "http"
     callback_url: str | None = None
 
 
@@ -89,15 +96,26 @@ class RecipeCreate(BaseModel):
     checkpoint: str | None = None
 
 
+class RuntimeDefaultBinding(BaseModel):
+    workflow_id: str
+    model_id: str
+
+
 class LocalSetupCreate(BaseModel):
     directory: str | None = None
-    with_models: bool = True
     host: str = "127.0.0.1"
     port: int = 8188
 
 
 class PublishCreate(BaseModel):
     cover_artifact_id: str | None = None
+
+
+class ProjectDirectoryView(BaseModel):
+    project_id: str
+    path: str
+    opened: bool = False
+    error: str | None = None
 
 
 def _snapshot(info: dict[str, Any]) -> str:
@@ -218,6 +236,70 @@ def create_app(
         manifest = manifest_from_assets(runtime_assets(runtime))
         return str(manifest.get("callback_url") or default_callback_url).rstrip("/")
 
+    def _default_binding(
+        action_id: str,
+        recipes: list[Recipe],
+        current: dict[str, Any] | None = None,
+    ) -> dict[str, str] | None:
+        """Keep one compact, per-runtime default without guessing model ability."""
+
+        compatible = [recipe for recipe in recipes if supports(recipe, action_id)]
+        if not compatible:
+            return None
+        if isinstance(current, dict):
+            workflow_id = str(current.get("workflow_id") or "")
+            model_id = str(current.get("model_id") or "")
+            selected = next((recipe for recipe in compatible if recipe.id == workflow_id), None)
+            if selected and (not selected.checkpoint or not model_id or selected.checkpoint == model_id):
+                return {
+                    "workflow_id": selected.id,
+                    "model_id": model_id or selected.checkpoint or selected.id,
+                }
+        selected = compatible[0]
+        return {"workflow_id": selected.id, "model_id": selected.checkpoint or selected.id}
+
+    def runtime_defaults(
+        runtime: dict[str, Any] | None, recipes: list[Recipe] | None = None
+    ) -> dict[str, dict[str, str]]:
+        if not runtime:
+            return {}
+        manifest = manifest_from_assets(runtime_assets(runtime))
+        stored = manifest.get("defaults") if isinstance(manifest.get("defaults"), dict) else {}
+        available = recipes if recipes is not None else recipes_from_runtime(runtime)
+        result: dict[str, dict[str, str]] = {}
+        for action_id in ACTION_IDS:
+            binding = _default_binding(action_id, available, stored.get(action_id))
+            if binding:
+                result[action_id] = binding
+        return result
+
+    def save_runtime_defaults(
+        runtime: dict[str, Any], defaults: dict[str, dict[str, str]]
+    ) -> None:
+        manifest = manifest_from_assets(runtime_assets(runtime))
+        manifest = {
+            **manifest,
+            "schema": manifest.get("schema", "cooksprite.runtime-assets/v1"),
+            "defaults": defaults,
+            "callback_url": callback_for(runtime),
+        }
+        assets = [
+            item
+            for item in runtime_assets(runtime)
+            if not (isinstance(item, dict) and item.get("schema") == manifest["schema"])
+        ]
+        assets.insert(0, manifest)
+        store.put_runtime(
+            runtime["id"],
+            runtime["label"],
+            runtime["base_url"],
+            runtime.get("snapshot", ""),
+            json.loads(runtime.get("tools") or "[]"),
+            assets,
+            runtime.get("location", "remote"),
+            runtime.get("transport", "http"),
+        )
+
     def persist_runtime_report(
         runtime: dict[str, Any],
         report: dict[str, Any],
@@ -235,9 +317,36 @@ def create_app(
             for recipe in recipes_from_runtime(runtime)
             if imported_recipe_is_compatible(recipe, report)
         ]
-        recipes = [*discovered, *imported]
+        recipes_by_id: dict[str, Recipe] = {}
+        for recipe in [*discovered, *imported]:
+            # Fresh structural discovery wins over an older imported copy with
+            # the same id, while unrelated user workflows remain intact.
+            recipes_by_id.setdefault(recipe.id, recipe)
+        recipes = list(recipes_by_id.values())
+        manifest = runtime_manifest(report, recipes, callback_url=callback_for(runtime))
+        existing_manifest = manifest_from_assets(runtime_assets(runtime))
+        stored_defaults = (
+            existing_manifest.get("defaults")
+            if isinstance(existing_manifest.get("defaults"), dict)
+            else {}
+        )
+        manifest["defaults"] = {
+            action_id: binding
+            for action_id in ACTION_IDS
+            if (
+                binding := _default_binding(action_id, recipes, stored_defaults.get(action_id))
+            )
+        }
+        model_sources: dict[str, str] = {}
+        for folder, names in (manifest.get("models") or {}).items():
+            if not isinstance(names, list):
+                continue
+            for name in names:
+                key = f"{folder}:{name}"
+                model_sources[key] = "User existing"
+        manifest["model_sources"] = model_sources
         assets: list[dict[str, Any]] = [
-            runtime_manifest(report, recipes, callback_url=callback_for(runtime))
+            manifest
         ]
         if is_test_runtime:
             assets.append({"cooksprite_test_runtime": True})
@@ -248,6 +357,8 @@ def create_app(
             snapshot,
             [item.model_dump(mode="json") for item in dynamic],
             assets,
+            runtime.get("location", "remote"),
+            runtime.get("transport", "http"),
         )
         invalidate_runtime(runtime["id"])
         return snapshot, dynamic, recipes
@@ -359,11 +470,120 @@ def create_app(
         ]
         return registry.tools() + dynamic + sealed
 
+    def capability_category(action_id: str) -> str:
+        if action_id in {"image.generate", "image.views", "frame.redraw"}:
+            return "image"
+        if action_id in {"animation.generate", "video.sample"}:
+            return "video"
+        if action_id in {
+            "normal.generate",
+            "sheet.slice",
+            "image.pixelize",
+            "image.cutout",
+            "project.export",
+        }:
+            return "tools"
+        return "text"
+
+    def runtime_capabilities(runtime: dict[str, Any]) -> dict[str, Any]:
+        """Return a compact, semantic view over one ComfyUI capability snapshot."""
+
+        manifest = manifest_from_assets(runtime_assets(runtime))
+        categories = {
+            "image": {"models": [], "workflows": [], "tools": []},
+            "text": {"models": [], "workflows": [], "tools": []},
+            "video": {"models": [], "workflows": [], "tools": []},
+            "tools": {"models": [], "workflows": [], "tools": []},
+        }
+        model_folders = {"checkpoints", "diffusion_models", "unet", "loras"}
+        video_folders = {"video_models", "unet_video", "text_encoders_video"}
+        text_folders = {"text_encoders", "clip"}
+        model_sources = manifest.get("model_sources") or {}
+        for folder, names in (manifest.get("models") or {}).items():
+            if not isinstance(names, list):
+                continue
+            category = (
+                "video"
+                if folder in video_folders
+                else "text"
+                if folder in text_folders
+                else "image"
+                if folder in model_folders
+                else "tools"
+            )
+            for name in names:
+                categories[category]["models"].append(
+                    {
+                        "id": f"{folder}:{name}",
+                        "label": str(name),
+                        "folder": str(folder),
+                        "source": str(model_sources.get(f"{folder}:{name}", "User existing")),
+                    }
+                )
+        for recipe in recipes_from_runtime(runtime):
+            target_categories = {capability_category(action) for action in recipe.actions}
+            for category in target_categories:
+                categories[category]["workflows"].append(
+                    {
+                        "id": recipe.id,
+                        "label": recipe.label,
+                        "source": "CookSprite"
+                        if recipe.family.startswith("cooksprite.")
+                        else "User imported"
+                        if recipe.source == "imported"
+                        else "ComfyUI",
+                        "actions": recipe.actions,
+                        "modes": recipe.modes,
+                    }
+                )
+        templates = manifest.get("workflow_templates") or {}
+        for template_id, template in (templates.items() if isinstance(templates, dict) else []):
+            serialized = json.dumps(template, ensure_ascii=False).lower()
+            if any(token in serialized for token in ("video", "animated", "i2v", "t2v")):
+                category = "video"
+            elif any(token in serialized for token in ("prompt", "caption", "translate", "enhance")):
+                category = "text"
+            elif any(token in serialized for token in ("image", "checkpoint", "ksampler", "t2i", "i2i")):
+                category = "image"
+            else:
+                category = "tools"
+            label = template.get("name") if isinstance(template, dict) else None
+            categories[category]["workflows"].append(
+                {
+                    "id": str(template_id),
+                    "label": str(label or template_id),
+                    "source": "ComfyUI",
+                    "template": True,
+                }
+            )
+        for tool in runtime_tools(runtime):
+            tool_category = "tools"
+            if tool.source == "comfy":
+                output_types = {item.type for item in tool.outputs}
+                tool_category = "video" if "Video" in output_types else "image" if "Image" in output_types else "tools"
+            categories[tool_category]["tools"].append(
+                {
+                    "id": tool.id,
+                    "label": tool.title,
+                    "source": "CookSprite" if tool.source == "cooksprite" else "ComfyUI / third-party",
+                    "inputs": [item.type for item in tool.inputs],
+                    "outputs": [item.type for item in tool.outputs],
+                }
+            )
+        return {
+            "runtime_id": runtime["id"],
+            "snapshot": runtime.get("snapshot"),
+            "system": manifest.get("system") or {},
+            "features": manifest.get("features") or {},
+            "workflow_templates": manifest.get("workflow_templates") or {},
+            "categories": categories,
+        }
+
     def sealed_graphs(runtime: dict[str, Any]) -> dict[str, dict[str, Any]]:
         return {
             f"comfy.sealed.{recipe.id}": recipe.dump()
             for recipe in recipes_from_runtime(runtime)
-            if recipe.source == "imported" and recipe.workflow
+            if recipe.source in {"imported", "discovered"} and recipe.workflow
         }
 
     def runtime_tool_ids(runtime: dict[str, Any] | None) -> set[str]:
@@ -420,6 +640,10 @@ def create_app(
             artifact = store.artifact(artifact_id)
             if artifact:
                 artifacts.append(store.artifact_ref(artifact, row.get("project_id")))
+        try:
+            runtime_state = RunRuntimeState.model_validate_json(row.get("runtime_state") or "{}")
+        except (TypeError, ValueError):
+            runtime_state = RunRuntimeState()
         return RunView(
             id=row["id"],
             status=row["status"],
@@ -427,7 +651,10 @@ def create_app(
             message=row["message"],
             action_id=row.get("action_id"),
             project_id=row.get("project_id"),
+            runtime_id=row.get("runtime_id"),
+            runtime_snapshot=json.loads(row.get("provenance") or "{}").get("runtime_snapshot"),
             artifacts=artifacts,
+            runtime_state=runtime_state,
             error=json.loads(row["error"]) if row["error"] else None,
             provenance=json.loads(row.get("provenance") or "{}"),
             created_at=row.get("created_at", ""),
@@ -662,7 +889,7 @@ def create_app(
             "checked_at": state["checked_at"],
             "error": state["error"],
             "actions": action_states,
-            "schema_version": 4,
+            "schema_version": 6,
         }
 
     # Stable human/CLI/agent entry surface.
@@ -725,7 +952,16 @@ def create_app(
                 ),
             )
         if not values.get("model") and descriptor.models:
-            values["model"] = descriptor.models[0].id
+            binding = runtime_defaults(runtime).get(action_id)
+            preferred = (
+                f"{runtime['id']}:{binding['workflow_id']}"
+                if binding and binding.get("workflow_id")
+                else ""
+            )
+            values["model"] = next(
+                (item.id for item in descriptor.models if item.id == preferred),
+                descriptor.models[0].id,
+            )
         selected_model = str(values.get("model") or "")
         prefix, separator, recipe_id = selected_model.partition(":")
         if not separator or prefix != runtime["id"]:
@@ -784,6 +1020,7 @@ def create_app(
                 for workflow in workflow_revisions.values()
             ],
             "packages": tool_packages.versions(),
+            "prompt_compiler": COMPILER_VERSION,
             "runtime_snapshot": runtime["snapshot"],
         }
         store.create_run(
@@ -810,15 +1047,30 @@ def create_app(
 
     @app.get("/api/v1/runs/{run_id}/events")
     def events(run_id: str) -> StreamingResponse:
+        if not store.run(run_id):
+            raise HTTPException(404, _detail("run_not_found", "unknown run"))
+
         def stream():
+            last_updated = ""
+            heartbeat_at = time.monotonic()
             while True:
                 state = run_view(run_id).model_dump(mode="json")
-                yield f"data: {json.dumps(state)}\n\n"
+                marker = state.get("updated_at") or state["runtime_state"].get("updated_at") or ""
+                if marker != last_updated:
+                    yield f"data: {json.dumps(state, ensure_ascii=False, separators=(',', ':'))}\n\n"
+                    last_updated = marker
                 if state["status"] in {"succeeded", "failed", "cancelled"}:
                     break
-                time.sleep(0.35)
+                if time.monotonic() - heartbeat_at >= 10:
+                    yield ": keep-alive\n\n"
+                    heartbeat_at = time.monotonic()
+                time.sleep(0.2)
 
-        return StreamingResponse(stream(), media_type="text/event-stream")
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @app.post("/api/v1/runs/{run_id}/cancel", response_model=RunView)
     def cancel_run(run_id: str) -> RunView:
@@ -891,6 +1143,37 @@ def create_app(
         if not project:
             raise HTTPException(404, _detail("project_not_found", "unknown project"))
         return project
+
+    @app.get("/api/v1/projects/{project_id}/directory", response_model=ProjectDirectoryView)
+    def get_project_directory(project_id: str) -> ProjectDirectoryView:
+        if not store.project(project_id):
+            raise HTTPException(404, _detail("project_not_found", "unknown project"))
+        return ProjectDirectoryView(project_id=project_id, path=str(store.project_directory(project_id)))
+
+    @app.post("/api/v1/projects/{project_id}/directory/open", response_model=ProjectDirectoryView)
+    def open_project_directory(project_id: str) -> ProjectDirectoryView:
+        if not store.project(project_id):
+            raise HTTPException(404, _detail("project_not_found", "unknown project"))
+        directory = store.project_directory(project_id)
+        system = platform.system()
+        if system == "Darwin":
+            command = ["open", str(directory)]
+        elif system == "Windows":
+            command = ["explorer", str(directory)]
+        else:
+            launcher = shutil.which("xdg-open")
+            command = [launcher, str(directory)] if launcher else []
+        if not command:
+            return ProjectDirectoryView(
+                project_id=project_id,
+                path=str(directory),
+                error="no graphical file browser launcher is available on the API host",
+            )
+        try:
+            subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as exc:
+            return ProjectDirectoryView(project_id=project_id, path=str(directory), error=str(exc))
+        return ProjectDirectoryView(project_id=project_id, path=str(directory), opened=True)
 
     @app.patch("/api/v1/projects/{project_id}", response_model=ProjectView)
     def patch_project(project_id: str, request: ProjectPatch) -> ProjectView:
@@ -1309,6 +1592,68 @@ def create_app(
     def gc() -> dict[str, int]:
         return {"removed_blobs": store.gc()}
 
+    @app.post("/api/v1/local/probe")
+    def probe_local_comfy() -> dict[str, Any]:
+        """Probe only the API host's explicitly local candidates.
+
+        This does not inspect or classify remote URLs. A loopback URL supplied
+        by a user remains whatever Runtime location the user declared.
+        """
+
+        configured = [
+            runtime
+            for runtime in store.runtimes()
+            if runtime.get("location", "remote") == "local"
+        ]
+        candidates: list[dict[str, Any]] = []
+        urls = {str(runtime["base_url"]) for runtime in configured}
+        urls.add("http://127.0.0.1:8188")
+        managed_installed = (default_managed_root / "install.json").is_file() and (
+            default_managed_root / "ComfyUI" / "main.py"
+        ).is_file()
+        for base_url in sorted(urls):
+            try:
+                # Keep the button responsive when the usual local port is not
+                # listening. The full doctor call fans out to several ComfyUI
+                # endpoints and is only useful after this cheap liveness check.
+                client = app.state.comfy_factory(base_url)
+                ping = getattr(client, "ping", None)
+                if callable(ping):
+                    ping()
+                report = app.state.comfy_factory(base_url).doctor()
+                system = (report.get("system_stats") or {}).get("system") or {}
+                candidates.append(
+                    {
+                        "base_url": base_url,
+                        "status": "found",
+                        "version": system.get("comfyui_version"),
+                        "device": system.get("device"),
+                        "models": sum(
+                            len(items)
+                            for items in (report.get("models") or {}).values()
+                            if isinstance(items, list)
+                        ),
+                        "workflows": len(report.get("workflow_templates") or {}),
+                        "nodes": len(report.get("object_info") or {}),
+                        "managed": base_url == f"http://127.0.0.1:{LocalSetupCreate.model_fields['port'].default}",
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001 - probe returns a user-readable state.
+                candidates.append(
+                    {"base_url": base_url, "status": "unreachable", "error": str(exc)}
+                )
+        if any(item["status"] == "found" for item in candidates):
+            status = "found"
+        elif managed_installed or configured:
+            status = "installed" if managed_installed else "unreachable"
+        else:
+            status = "missing"
+        return {
+            "status": status,
+            "managed_installed": managed_installed,
+            "candidates": candidates,
+        }
+
     # Contributor/debug surface. Ordinary Web/CLI/Skill users do not need it.
     @app.get("/api/v1/setup/local")
     def local_setup_status() -> dict[str, Any]:
@@ -1332,7 +1677,6 @@ def create_app(
         return {
             **state,
             "default_directory": str(default_managed_root),
-            "model": DEFAULT_MODEL,
         }
 
     @app.post("/api/v1/setup/local", status_code=202)
@@ -1361,7 +1705,6 @@ def create_app(
             try:
                 install_managed_comfy(
                     root,
-                    with_models=request.with_models,
                     progress=progress,
                 )
                 with setup_lock:
@@ -1389,6 +1732,8 @@ def create_app(
                             "models": {},
                         }
                     ],
+                    "local",
+                    "local-process",
                 )
                 runtime = runtime_or_404(runtime_id)
                 _, _, recipes = persist_runtime_report(runtime, report)
@@ -1439,31 +1784,110 @@ def create_app(
             existing.get("snapshot", "") if same_endpoint and existing else "",
             json.loads(existing.get("tools", "[]")) if same_endpoint and existing else [],
             existing_assets,
+            request.location,
+            request.transport,
         )
         invalidate_runtime(request.id)
         return {
             "id": request.id,
             "label": request.label,
             "base_url": request.base_url,
+            "location": request.location,
+            "transport": request.transport,
             "snapshot": existing.get("snapshot") if same_endpoint and existing else None,
         }
 
     @app.get("/api/v1/runtimes")
     def runtimes() -> list[dict[str, Any]]:
+        active_runtime_id = store.active_runtime_id()
+        if not active_runtime_id:
+            fallback = store.active_runtime()
+            active_runtime_id = fallback["id"] if fallback else None
         result = []
         for row in store.runtimes():
             state = probe_runtime(row)
             result.append(
                 {
-                    **{key: row[key] for key in ("id", "label", "base_url", "snapshot")},
+                    **{
+                        key: row[key]
+                        for key in ("id", "label", "base_url", "snapshot", "location", "transport")
+                    },
                     "status": state["status"],
                     "error": state["error"],
                     "checked_at": state["checked_at"],
                     "callback_url": callback_for(row),
                     "recipes": [recipe.dump() for recipe in recipes_from_runtime(row)],
+                    "active": row["id"] == active_runtime_id,
                 }
             )
         return result
+
+    @app.post("/api/v1/runtimes/{runtime_id}/select")
+    def select_runtime(runtime_id: str) -> dict[str, Any]:
+        runtime = runtime_or_404(runtime_id)
+        store.set_active_runtime(runtime_id)
+        invalidate_runtime()
+        state = probe_runtime(runtime, force=True)
+        return {
+            "runtime_id": runtime_id,
+            "status": state["status"],
+            "error": state["error"],
+            "active": True,
+        }
+
+    @app.get("/api/v1/runtimes/{runtime_id}/capabilities")
+    def runtime_capabilities_view(runtime_id: str) -> dict[str, Any]:
+        return runtime_capabilities(runtime_or_404(runtime_id))
+
+    @app.get("/api/v1/runtimes/{runtime_id}/defaults")
+    def runtime_defaults_view(runtime_id: str) -> dict[str, Any]:
+        runtime = runtime_or_404(runtime_id)
+        recipes = recipes_from_runtime(runtime)
+        return {
+            "runtime_id": runtime_id,
+            "defaults": runtime_defaults(runtime, recipes),
+            "recipes": [
+                {
+                    "id": recipe.id,
+                    "label": recipe.label,
+                    "actions": recipe.actions,
+                    "modes": recipe.modes,
+                    "model_id": recipe.checkpoint or recipe.id,
+                }
+                for recipe in recipes
+            ],
+        }
+
+    @app.put("/api/v1/runtimes/{runtime_id}/defaults/{action_id}")
+    def set_runtime_default(
+        runtime_id: str, action_id: str, body: RuntimeDefaultBinding
+    ) -> dict[str, Any]:
+        runtime = runtime_or_404(runtime_id)
+        if action_id not in ACTION_IDS:
+            raise HTTPException(404, _detail("action_not_found", "unknown Action"))
+        recipes = recipes_from_runtime(runtime)
+        recipe = next((item for item in recipes if item.id == body.workflow_id), None)
+        if not recipe or not supports(recipe, action_id):
+            raise HTTPException(
+                422,
+                _detail(
+                    "default_workflow_incompatible",
+                    "the selected Workflow does not support this Action",
+                ),
+            )
+        if recipe.checkpoint and body.model_id != recipe.checkpoint:
+            raise HTTPException(
+                422,
+                _detail("default_model_incompatible", "the selected model is not this Workflow's model"),
+            )
+        defaults = runtime_defaults(runtime, recipes)
+        defaults[action_id] = {
+            "workflow_id": body.workflow_id,
+            "model_id": body.model_id or recipe.checkpoint or recipe.id,
+        }
+        save_runtime_defaults(runtime, defaults)
+        invalidate_runtime(runtime_id)
+        return {"runtime_id": runtime_id, "action_id": action_id, "default": defaults[action_id]}
 
     @app.post("/api/v1/runtimes/{runtime_id}/doctor")
     def doctor(runtime_id: str) -> dict[str, Any]:
@@ -1582,6 +2006,8 @@ def create_app(
             runtime["snapshot"],
             json.loads(runtime.get("tools") or "[]"),
             assets,
+            runtime.get("location", "remote"),
+            runtime.get("transport", "http"),
         )
         invalidate_runtime(runtime_id)
         return recipe.dump()

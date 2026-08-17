@@ -27,11 +27,11 @@ transport with a protocol double, but acceptance uses a real pinned ComfyUI and
 real model execution.
 
 `cspr comfy install <directory>` installs the pinned official ComfyUI revision
-and this versioned node pack into an isolated environment. Unless
-`--no-models` is supplied, the explicit command/click also downloads the
-published default checkpoint and verifies its SHA-256 hash. Attaching to an
-existing ComfyUI never copies or mutates its models; install the node pack with
-`cspr comfy install-nodes <comfy-directory>` and restart ComfyUI.
+and this versioned node pack into an isolated environment. It never downloads a
+default model. Model files and model paths are selected in the connected
+ComfyUI; attaching to an existing ComfyUI never copies or mutates its models.
+Install the node pack with `cspr comfy install-nodes <comfy-directory>` and
+restart ComfyUI.
 
 Core checkpoints are discovered directly and become `t2i`, `i2i`, and
 image-sequence choices without copying model files. Model families whose graph

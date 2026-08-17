@@ -5,7 +5,10 @@
     "frame.redraw",
     "sheet.slice",
     "video.sample",
-    "normal.generate"
+    "normal.generate",
+    "image.views",
+    "image.pixelize",
+    "image.cutout"
   ],
   "actions": [
     {
@@ -1680,6 +1683,119 @@
       "produces": [
         "NormalMap"
       ]
+    },
+    {
+      "accepts": {
+        "source": {
+          "max": 1,
+          "required": true,
+          "type": "Image"
+        }
+      },
+      "controls": [],
+      "i18n": {
+        "en": {
+          "description": "Create a batch of views from one reference image",
+          "name": "Create image views"
+        },
+        "zh-CN": {
+          "description": "从一张参考图创建一组视角图片",
+          "name": "创建视角组"
+        }
+      },
+      "id": "image.views",
+      "produces": [
+        "ImageBatch"
+      ]
+    },
+    {
+      "accepts": {
+        "source": {
+          "max": 1,
+          "required": true,
+          "type": "Image"
+        }
+      },
+      "controls": [
+        {
+          "advanced": false,
+          "default": 128,
+          "i18n": {
+            "en": {
+              "description": "",
+              "name": "Target width"
+            },
+            "zh-CN": {
+              "description": "",
+              "name": "目标宽度"
+            }
+          },
+          "id": "target_width",
+          "max": 4096.0,
+          "min": 8.0,
+          "options": [],
+          "step": 1.0,
+          "type": "number"
+        },
+        {
+          "advanced": false,
+          "default": 128,
+          "i18n": {
+            "en": {
+              "description": "",
+              "name": "Target height"
+            },
+            "zh-CN": {
+              "description": "",
+              "name": "目标高度"
+            }
+          },
+          "id": "target_height",
+          "max": 4096.0,
+          "min": 8.0,
+          "options": [],
+          "step": 1.0,
+          "type": "number"
+        }
+      ],
+      "i18n": {
+        "en": {
+          "description": "Convert a high-resolution image into pixel art",
+          "name": "Pixelize image"
+        },
+        "zh-CN": {
+          "description": "把高分辨率图片转换为像素化图片",
+          "name": "像素化图片"
+        }
+      },
+      "id": "image.pixelize",
+      "produces": [
+        "Image"
+      ]
+    },
+    {
+      "accepts": {
+        "source": {
+          "max": 1,
+          "required": true,
+          "type": "Image"
+        }
+      },
+      "controls": [],
+      "i18n": {
+        "en": {
+          "description": "Extract the subject as an RGBA image",
+          "name": "Cut out image"
+        },
+        "zh-CN": {
+          "description": "从图片中提取带透明通道的主体",
+          "name": "抠图"
+        }
+      },
+      "id": "image.cutout",
+      "produces": [
+        "Image"
+      ]
     }
   ],
   "artifact_kinds": [
@@ -1789,13 +1905,19 @@
           "inputs": [],
           "outputs": [
             {
-              "name": "positive",
+              "name": "prompt",
               "persistable": false,
               "required": true,
               "type": "Text"
             },
             {
-              "name": "negative",
+              "name": "negative_prompt",
+              "persistable": false,
+              "required": true,
+              "type": "Text"
+            },
+            {
+              "name": "metadata",
               "persistable": false,
               "required": true,
               "type": "Text"
@@ -1803,10 +1925,22 @@
           ],
           "package_id": "prompt",
           "params_schema": {
+            "action": {
+              "type": "string"
+            },
             "action_id": {
               "type": "string"
             },
             "animation": {
+              "type": "string"
+            },
+            "background": {
+              "type": "string"
+            },
+            "camera_preset": {
+              "type": "string"
+            },
+            "caption": {
               "type": "string"
             },
             "category": {
@@ -1815,23 +1949,50 @@
             "direction": {
               "type": "string"
             },
+            "edit_instruction": {
+              "type": "string"
+            },
+            "facing": {
+              "type": "string"
+            },
+            "height": {
+              "type": "integer"
+            },
+            "mode": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "negative_terms": {
+              "type": "string"
+            },
+            "orientation": {
+              "type": "string"
+            },
             "prompt": {
               "type": "string"
             },
             "style": {
               "type": "string"
             },
+            "task": {
+              "type": "string"
+            },
             "view": {
               "type": "string"
+            },
+            "width": {
+              "type": "integer"
             }
           },
-          "schema_hash": "b22250422d5ebb9cb07d10e5015ed22679af54faca1e79d05742322d2e2a4c80",
+          "schema_hash": "67e695c770791d6b414f1e0523dc00cd1bcaca2021292d0a120d2f23edf404c8",
           "source": "cooksprite",
-          "title": "Compile a Sprite prompt packet",
+          "title": "Compile a model-neutral Sprite prompt packet",
           "version": 1
         }
       ],
-      "version": "1.0.0",
+      "version": "1.1.0",
       "workflows": []
     },
     {

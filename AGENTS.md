@@ -57,6 +57,17 @@ dynamically discovered from a connected runtime. Discovery proves presence;
 only a validated Recipe proves that an Action is available. There is no hidden
 fallback route.
 
+Every Task and Workflow must have a compiler-owned standalone lowering to a
+standard ComfyUI workflow that runs successfully in a compatible ComfyUI
+runtime without CookSprite orchestration. Standalone execution and execution
+through CookSprite must be equivalent: given the same revision, immutable
+runtime snapshot, model and node versions, input artifact bytes, prompts, seed,
+sampler, scheduler, deterministic settings, and all other parameters, declared
+outputs must have the same domain types and canonical SHA-256 content hashes.
+Every implementation must prove this with a real-ComfyUI conformance test; a
+hidden API-side transform, alternate graph, tolerance-based visual comparison,
+or nondeterministic fallback does not satisfy the contract.
+
 ## Tool packages
 
 Related Tools form one cohesive, versioned Tool package—for example alpha,

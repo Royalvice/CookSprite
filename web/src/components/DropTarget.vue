@@ -6,8 +6,8 @@ import { ARTIFACT_MIME, activeArtifactDrag, decodeArtifact } from "../drag";
 import { useStudioStore } from "../stores/studio";
 import ArtifactVisual from "./ArtifactVisual.vue";
 
-const props = defineProps<{ accepts: ArtifactKind[]; label: string; artifact?: ArtifactRef | null; reason?: string; multiple?: boolean }>();
-const emit = defineEmits<{ artifact: [payload: { artifact_id: string; kind: ArtifactKind }]; files: [files: File[]] }>();
+const props = defineProps<{ accepts: ArtifactKind[]; label: string; artifact?: ArtifactRef | null; reason?: string; multiple?: boolean; clearable?: boolean }>();
+const emit = defineEmits<{ artifact: [payload: { artifact_id: string; kind: ArtifactKind }]; files: [files: File[]]; clear: [] }>();
 const store = useStudioStore();
 const state = ref<"idle" | "compatible" | "incompatible" | "success" | "error">("idle");
 const message = ref("");
@@ -91,6 +91,12 @@ function accept(payload: { artifact_id: string; kind: ArtifactKind }) {
   picker.value = false;
   setTemporary("success", "已接收 / Added");
 }
+function clearArtifact() {
+  acceptedId.value = "";
+  clearLocalPreview();
+  picker.value = false;
+  emit("clear");
+}
 function drop(event: DragEvent) {
   event.preventDefault();
   dragDepth = 0;
@@ -154,8 +160,9 @@ onBeforeUnmount(() => {
     <UploadSimple v-else :size="24" />
     <strong>{{ state === "compatible" ? "松开以使用 / Drop to use" : displayArtifact || localPreview ? displayTitle : message || label }}</strong>
     <span class="drop-meta">{{ displayArtifact ? `${displayArtifact.kind} · 已选择` : localPreview ? "正在导入图片…" : "CookSprite Artifact · 可用素材" }}</span>
-    <button class="text-button" type="button" @click="picker = !picker">{{ $t("common.select") }}</button>
-    <input ref="input" class="visually-hidden" type="file" :multiple="multiple" accept="image/png,image/jpeg,image/webp,image/svg+xml,image/gif,video/mp4,video/webm,.hdr,.exr" @change="fileChange" />
+    <button v-if="clearable && displayArtifact" class="text-button" type="button" @click="clearArtifact">{{ $t("common.clear") }}</button>
+    <button v-else class="text-button" type="button" @click="picker = !picker">{{ $t("common.select") }}</button>
+    <input ref="input" class="visually-hidden" type="file" :multiple="multiple" :aria-label="`${label} / Import file`" accept="image/png,image/jpeg,image/webp,image/svg+xml,image/gif,video/mp4,video/webm,.hdr,.exr" @change="fileChange" />
     <div v-if="picker" class="drop-picker" role="dialog" :aria-label="$t('common.select')">
       <header><strong>{{ $t("common.select") }}</strong><button class="icon-button compact" type="button" :aria-label="$t('common.close')" @click="picker = false"><X :size="14" /></button></header>
       <button v-for="artifact in choices" :key="artifact.id" type="button" @click="accept({ artifact_id: artifact.id, kind: artifact.kind })"><span>{{ artifact.title || artifact.id.slice(0, 14) }}</span><small>{{ artifact.kind }}</small></button>

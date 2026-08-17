@@ -11,6 +11,12 @@ from typing import ClassVar
 from fastapi.testclient import TestClient
 
 from cooksprite.api.app import create_app
+from cooksprite.nodes.cooksprite_nodes import CS_CompilePromptPacket
+from cooksprite.prompting import (
+    ImagePromptRequest,
+    SpritePromptCompiler,
+    VideoPromptRequest,
+)
 from cooksprite.recipes import Recipe, imported_recipe_is_compatible, supports
 from cooksprite.registry import ACTION_IDS, ActionRegistry
 from cooksprite.store import Store
@@ -80,8 +86,21 @@ CORE_NODES = {
             "animation": "STRING",
             "view": "STRING",
             "direction": "STRING",
+            "task": "STRING",
+            "mode": "STRING",
+            "caption": "STRING",
+            "action": "STRING",
+            "camera_preset": "STRING",
+            "orientation": "STRING",
+            "facing": "STRING",
+            "model": "STRING",
+            "width": "INT",
+            "height": "INT",
+            "background": "STRING",
+            "edit_instruction": "STRING",
+            "negative_terms": "STRING",
         },
-        ["STRING", "STRING"],
+        ["STRING", "STRING", "STRING"],
     ),
     "CS_NormalEstimate": node(
         {"image": "IMAGE", "strength": "FLOAT", "flip_y": "BOOLEAN"}, ["IMAGE"]
@@ -513,6 +532,70 @@ def test_action_examples_are_typed_artifacts_not_media_urls(tmp_path):
     assert all(not item["meta"].get("system") for item in client.get("/api/v1/artifacts").json())
 
 
+def test_prompt_tool_is_model_neutral_and_deterministic():
+    compiler = SpritePromptCompiler()
+    request = ImagePromptRequest(
+        caption="a soup knight",
+        category="character",
+        style="pixel",
+        mode="t2i",
+        camera_preset="top45",
+        orientation="right",
+    )
+    first = compiler.compile_image(request)
+    second = compiler.compile_image(request)
+    assert first.to_dict() == second.to_dict()
+    assert first.task == "image"
+    assert first.mode == "t2i"
+    assert first.metadata["compiler_version"] == "sprite_prompt_package_v1"
+    assert first.camera_contract.pitch_deg == 25
+    assert "clip" not in first.prompt.lower()
+    video = compiler.compile_video(VideoPromptRequest(caption="soup knight", action="walk"))
+    assert video.task == "video"
+    assert video.metadata["action"] == "walk"
+    assert len(compiler.image_matrix("soup knight")) == 24
+    assert len(compiler.video_actions("soup knight")) == 9
+
+
+def test_prompt_node_preserves_old_inputs_and_returns_three_generic_text_ports():
+    node = CS_CompilePromptPacket()
+    prompt, negative, metadata = node.compile(
+        "image.generate", "a soup knight", "character", "pixel", "idle", "level", "s"
+    )
+    assert prompt.startswith("Create one complete asset")
+    assert "extra characters" in negative
+    assert '"compiler_version": "sprite_prompt_package_v1"' in metadata
+    assert CS_CompilePromptPacket.RETURN_TYPES == ("STRING", "STRING", "STRING")
+    assert CS_CompilePromptPacket.RETURN_NAMES == ("prompt", "negative_prompt", "metadata")
+
+
+def test_runtime_defaults_select_the_configured_recipe_when_model_is_omitted(tmp_path):
+    client = ready_client(tmp_path)
+    defaults = client.get("/api/v1/runtimes/rt_test/defaults")
+    assert defaults.status_code == 200
+    binding = defaults.json()["defaults"]["image.generate"]
+    assert binding["workflow_id"].startswith("core-image-")
+    updated = client.put(
+        "/api/v1/runtimes/rt_test/defaults/image.generate",
+        json={
+            "workflow_id": binding["workflow_id"],
+            "model_id": "test-model.safetensors",
+        },
+    )
+    assert updated.status_code == 200
+    project = client.post("/api/v1/projects", json={"type": "static"}).json()
+    run = client.post(
+        "/api/v1/actions/image.generate/runs",
+        json={
+            "project": project["id"],
+            "inputs": {},
+            "values": {"prompt": "a soup knight", "count": 1},
+        },
+    )
+    assert run.status_code == 202
+    assert wait(client, run.json()["id"])["provenance"]["recipe"] == binding["workflow_id"]
+
+
 def test_animation_run_returns_one_typed_frame_sequence(tmp_path):
     client = ready_client(tmp_path)
     project = client.post("/api/v1/projects", json={"type": "character"}).json()
@@ -635,7 +718,7 @@ def test_schema_v2_image_sequences_migrate_to_typed_manifest(tmp_path):
     store.db.close()
 
     migrated = Store(tmp_path)
-    assert migrated.db.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert migrated.db.execute("PRAGMA user_version").fetchone()[0] == 6
     assert [migrated.artifact(item)["kind"] for item in frame_ids] == ["Image", "Image"]
     run = migrated.run(run_id)
     sequence_ids = json.loads(run["artifacts"])

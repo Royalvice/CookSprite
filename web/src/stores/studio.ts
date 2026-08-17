@@ -17,6 +17,7 @@ import {
   type ProjectView,
   type QueueView,
   type RunView,
+  type RuntimeView,
   type RuntimeStatus,
   type SpriteDocument,
 } from "../api/generated";
@@ -26,6 +27,8 @@ const EMPTY_QUEUE: QueueView = { running: [], pending: [], history: [] };
 export const useStudioStore = defineStore("studio", () => {
   const actions = ref<ActionDescriptor[]>([]);
   const projects = ref<ProjectView[]>([]);
+  const runtimes = ref<RuntimeView[]>([]);
+  const activeRuntimeId = ref("");
   const gallery = ref<GalleryItem[]>([]);
   const currentProject = ref<ProjectView | null>(null);
   const documentView = ref<DocumentView | null>(null);
@@ -42,6 +45,7 @@ export const useStudioStore = defineStore("studio", () => {
   const loading = ref(false);
   const error = ref("");
   const saveState = ref<"saved" | "saving" | "conflict" | "offline">("saved");
+  const documentDirty = ref(false);
   const undoStack = ref<SpriteDocument[]>([]);
   const redoStack = ref<SpriteDocument[]>([]);
   let saveTimer = 0;
@@ -64,7 +68,7 @@ export const useStudioStore = defineStore("studio", () => {
     loading.value = true;
     error.value = "";
     const results = await Promise.allSettled([
-      api.health(), api.actions(), api.projects(), api.gallery(), api.artifacts(), api.queue(),
+      api.health(), api.actions(), api.projects(), api.gallery(), api.queue(), api.runtimes(),
     ]);
     if (results[0].status === "fulfilled") {
       runtimeStatus.value = results[0].value.runtime;
@@ -73,8 +77,18 @@ export const useStudioStore = defineStore("studio", () => {
     if (results[1].status === "fulfilled") actions.value = results[1].value;
     if (results[2].status === "fulfilled") projects.value = results[2].value;
     if (results[3].status === "fulfilled") gallery.value = results[3].value;
-    if (results[4].status === "fulfilled") allArtifacts.value = results[4].value;
-    if (results[5].status === "fulfilled") queue.value = results[5].value;
+    if (results[4].status === "fulfilled") queue.value = results[4].value;
+    if (results[5].status === "fulfilled") {
+      runtimes.value = results[5].value;
+      activeRuntimeId.value = runtimes.value.find((item) => item.active)?.id || runtimes.value[0]?.id || "";
+    }
+    const savedProjectId = localStorage.getItem("cooksprite.current-project");
+    const initialProject = projects.value.find((item) => item.id === savedProjectId) || projects.value[0];
+    if (initialProject) await openProject(initialProject.id);
+    const resumableRun = [...queue.value.running, ...queue.value.pending].find(
+      (item) => !initialProject || item.project_id === initialProject.id,
+    ) || queue.value.running[0] || queue.value.pending[0];
+    if (resumableRun) observeRun(resumableRun, resumableRun.action_id);
     const failed = results.find((result) => result.status === "rejected");
     if (failed?.status === "rejected") error.value = readableError(failed.reason);
     loading.value = false;
@@ -85,6 +99,19 @@ export const useStudioStore = defineStore("studio", () => {
     runtimeStatus.value = health.runtime;
     runtimeError.value = health.error || "";
     actions.value = await api.actions();
+  }
+
+  async function refreshRuntimes() {
+    runtimes.value = await api.runtimes();
+    activeRuntimeId.value = runtimes.value.find((item) => item.active)?.id || activeRuntimeId.value || runtimes.value[0]?.id || "";
+    return runtimes.value;
+  }
+
+  async function selectRuntime(id: string) {
+    await api.selectRuntime(id);
+    activeRuntimeId.value = id;
+    await refreshRuntimes();
+    await refreshActions();
   }
 
   async function refreshRuntime() {
@@ -108,6 +135,13 @@ export const useStudioStore = defineStore("studio", () => {
     return project;
   }
 
+  async function createProject(name: string, type: ProjectType = "static") {
+    const project = await api.createProject({ name, type });
+    projects.value = [project, ...projects.value.filter((item) => item.id !== project.id)];
+    await openProject(project.id);
+    return project;
+  }
+
   async function openProject(id: string) {
     loading.value = true;
     error.value = "";
@@ -117,7 +151,10 @@ export const useStudioStore = defineStore("studio", () => {
       ]);
       currentProject.value = project;
       documentView.value = doc;
+      documentDirty.value = false;
       artifacts.value = assets;
+      allArtifacts.value = assets;
+      localStorage.setItem("cooksprite.current-project", project.id);
       undoStack.value = [];
       redoStack.value = [];
       saveState.value = "saved";
@@ -141,8 +178,14 @@ export const useStudioStore = defineStore("studio", () => {
   }
 
   async function refreshArtifacts() {
-    if (currentProject.value) artifacts.value = await api.projectArtifacts(currentProject.value.id);
-    allArtifacts.value = await api.artifacts();
+    if (!currentProject.value) {
+      artifacts.value = [];
+      allArtifacts.value = [];
+      return;
+    }
+    const assets = await api.projectArtifacts(currentProject.value.id);
+    artifacts.value = assets;
+    allArtifacts.value = assets;
   }
 
   async function upload(file: File, forcedKind?: ArtifactKind) {
@@ -194,7 +237,7 @@ export const useStudioStore = defineStore("studio", () => {
         : currentProject.value?.type || "static";
     const project = await ensureProject(projectType);
     await saveDocument();
-    if (saveState.value !== "saved") throw new Error(error.value || "Project save failed");
+    if (saveState.value !== "saved") return null;
     error.value = "";
     let run: RunView;
     try {
@@ -210,8 +253,9 @@ export const useStudioStore = defineStore("studio", () => {
         if (index >= 0) projects.value[index] = updatedProject;
       }
     } catch (reason) {
+      error.value = readableError(reason);
       await refreshRuntime();
-      throw reason;
+      return null;
     }
     observeRun(run, actionId, inputs.source);
     await refreshQueue();
@@ -264,7 +308,9 @@ export const useStudioStore = defineStore("studio", () => {
       next.type = "character";
       next.character ||= { pivot: { x: 0.5, y: 1 }, clips: [] };
       next.history.push({ operation: "convert_to_character", at: new Date().toISOString() });
+      documentDirty.value = true;
       documentView.value = await api.putDocument(currentProject.value.id, next, documentView.value.etag);
+      documentDirty.value = false;
       saveState.value = "saved";
     }
   }
@@ -303,6 +349,7 @@ export const useStudioStore = defineStore("studio", () => {
     redoStack.value = [];
     change(documentView.value.document);
     documentView.value.document.history.push({ operation, at: new Date().toISOString() });
+    documentDirty.value = true;
     scheduleSave();
   }
 
@@ -353,8 +400,13 @@ export const useStudioStore = defineStore("studio", () => {
   async function saveDocument() {
     if (!currentProject.value || !documentView.value) return;
     window.clearTimeout(saveTimer);
+    if (!documentDirty.value) {
+      saveState.value = "saved";
+      return;
+    }
     try {
       documentView.value = await api.putDocument(currentProject.value.id, documentView.value.document, documentView.value.etag);
+      documentDirty.value = false;
       saveState.value = "saved";
     } catch (reason) {
       saveState.value = reason instanceof ApiError && reason.status === 409 ? "conflict" : "offline";
@@ -379,10 +431,10 @@ export const useStudioStore = defineStore("studio", () => {
   }
 
   return {
-    actions, projects, gallery, currentProject, documentView, document, artifacts, allArtifacts,
+    actions, projects, runtimes, activeRuntimeId, gallery, currentProject, documentView, document, artifacts, allArtifacts,
     queue, runtimeStatus, runtimeError, runtimeReady, activeSequence, curatedSequence, lastOutputsByAction, activeRun, loading, error, saveState, undoStack, redoStack,
     runningCount, artifactById,
-    initialize, refreshActions, refreshRuntime, ensureProject, ensureCharacterDocument, openProject, patchProject, refreshArtifacts, upload, runAction, readSequence, loadSequence, loadCuratedSequence, materializeTrackSequence,
+    initialize, refreshActions, refreshRuntimes, selectRuntime, refreshRuntime, ensureProject, createProject, ensureCharacterDocument, openProject, patchProject, refreshArtifacts, upload, runAction, readSequence, loadSequence, loadCuratedSequence, materializeTrackSequence,
     cancel, retry, refreshQueue, mutateDocument, undo, redo, saveDocument, publish, exportPack,
   };
 });

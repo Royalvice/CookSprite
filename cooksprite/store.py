@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import mimetypes
+import re
+import shutil
 import sqlite3
 import threading
 import uuid
@@ -11,9 +14,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .domain import ArtifactRef, ProjectView, SpriteDocument
+from .domain import ArtifactRef, ProjectView, RunRuntimeState, SpriteDocument
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 6
+PROJECT_ID_PATTERN = r"prj_[\w-]{1,96}"
 
 
 def utcnow() -> str:
@@ -30,6 +34,8 @@ class Store:
         self.root.mkdir(parents=True, exist_ok=True)
         self.blobs = self.root / "artifacts"
         self.blobs.mkdir(exist_ok=True)
+        self.project_roots = self.blobs / "projects"
+        self.project_roots.mkdir(exist_ok=True)
         self.db = sqlite3.connect(self.root / "cooksprite.sqlite3", check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.lock = threading.RLock()
@@ -48,7 +54,9 @@ class Store:
                     base_url TEXT NOT NULL,
                     snapshot TEXT,
                     tools TEXT NOT NULL DEFAULT '[]',
-                    assets TEXT NOT NULL DEFAULT '[]'
+                    assets TEXT NOT NULL DEFAULT '[]',
+                    location TEXT NOT NULL DEFAULT 'remote',
+                    transport TEXT NOT NULL DEFAULT 'http'
                 );
                 CREATE TABLE IF NOT EXISTS definitions (
                     kind TEXT NOT NULL,
@@ -108,6 +116,10 @@ class Store:
                     version INTEGER PRIMARY KEY,
                     applied_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
                 """
             )
             self._ensure_column("artifacts", "title", "TEXT NOT NULL DEFAULT ''")
@@ -120,7 +132,10 @@ class Store:
             self._ensure_column("runs", "created_at", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column("runs", "updated_at", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column("runs", "provenance", "TEXT NOT NULL DEFAULT '{}'")
+            self._ensure_column("runs", "runtime_state", "TEXT NOT NULL DEFAULT '{}'")
             self._ensure_column("definitions", "body_hash", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column("runtimes", "location", "TEXT NOT NULL DEFAULT 'remote'")
+            self._ensure_column("runtimes", "transport", "TEXT NOT NULL DEFAULT 'http'")
             definition_rows = self.db.execute(
                 "SELECT kind,id,revision,body FROM definitions WHERE body_hash=''"
             ).fetchall()
@@ -226,13 +241,41 @@ class Store:
     def active_runtime(self, runtime_id: str | None = None) -> dict[str, Any] | None:
         if runtime_id:
             runtime = self.runtime(runtime_id)
-            return runtime if runtime and runtime.get("snapshot") else None
+            return runtime
         with self.lock:
+            selected = self.db.execute(
+                "SELECT value FROM settings WHERE key='active_runtime_id'"
+            ).fetchone()
+            if selected:
+                row = self.db.execute(
+                    "SELECT * FROM runtimes WHERE id=?", (selected["value"],)
+                ).fetchone()
+                if row:
+                    return dict(row)
             row = self.db.execute(
-                "SELECT * FROM runtimes WHERE snapshot IS NOT NULL AND snapshot != '' "
-                "ORDER BY id LIMIT 1"
+                "SELECT * FROM runtimes ORDER BY CASE WHEN snapshot IS NOT NULL AND snapshot != '' "
+                "THEN 0 ELSE 1 END, id LIMIT 1"
             ).fetchone()
         return dict(row) if row else None
+
+    def set_active_runtime(self, runtime_id: str) -> None:
+        with self.lock:
+            exists = self.db.execute("SELECT 1 FROM runtimes WHERE id=?", (runtime_id,)).fetchone()
+            if not exists:
+                raise FileNotFoundError(runtime_id)
+            self.db.execute(
+                "INSERT INTO settings(key,value) VALUES('active_runtime_id',?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (runtime_id,),
+            )
+            self.db.commit()
+
+    def active_runtime_id(self) -> str | None:
+        with self.lock:
+            row = self.db.execute(
+                "SELECT value FROM settings WHERE key='active_runtime_id'"
+            ).fetchone()
+        return str(row["value"]) if row else None
 
     def put_runtime(
         self,
@@ -242,10 +285,13 @@ class Store:
         snapshot: str = "",
         tools: list | None = None,
         assets: list | None = None,
+        location: str = "remote",
+        transport: str = "http",
     ) -> None:
         with self.lock:
             self.db.execute(
-                "INSERT OR REPLACE INTO runtimes VALUES(?,?,?,?,?,?)",
+                "INSERT OR REPLACE INTO runtimes "
+                "(id,label,base_url,snapshot,tools,assets,location,transport) VALUES(?,?,?,?,?,?,?,?)",
                 (
                     runtime_id,
                     label,
@@ -253,6 +299,8 @@ class Store:
                     snapshot,
                     json.dumps(tools or []),
                     json.dumps(assets or []),
+                    location,
+                    transport,
                 ),
             )
             self.db.commit()
@@ -311,13 +359,21 @@ class Store:
         return [dict(row) for row in rows]
 
     def create_project(self, name: str, project_type: str) -> ProjectView:
-        project_id = f"prj_{uuid.uuid4().hex[:20]}"
         now = utcnow()
         clean_name = name.strip() or "Untitled Sprite"
+        prefix = self._project_name_prefix(clean_name)
         document = SpriteDocument(type=project_type).model_dump(mode="json", by_alias=True)
         body = json.dumps(document, sort_keys=True, separators=(",", ":"))
         etag = self._etag(1, body)
         with self.lock:
+            for _ in range(16):
+                project_id = f"prj_{prefix}_{uuid.uuid4().hex[:8]}"
+                if not self.db.execute(
+                    "SELECT 1 FROM projects WHERE id=?", (project_id,)
+                ).fetchone():
+                    break
+            else:
+                raise RuntimeError("could not allocate a unique project id")
             self.db.execute(
                 "INSERT INTO projects VALUES(?,?,?,?,?,?,?,?,?)",
                 (project_id, clean_name, project_type, 0, 0, None, None, now, now),
@@ -327,7 +383,14 @@ class Store:
                 (project_id, 1, etag, body, now),
             )
             self.db.commit()
+        self.materialize_project(project_id)
         return self.project(project_id)  # type: ignore[return-value]
+
+    @staticmethod
+    def _project_name_prefix(name: str) -> str:
+        prefix = "".join(char if char.isalnum() or char in "_-" else "_" for char in name)
+        prefix = re.sub(r"_+", "_", prefix).strip("_-").lower()
+        return (prefix[:48].rstrip("_-") or "untitled_sprite")
 
     def project(self, project_id: str) -> ProjectView | None:
         with self.lock:
@@ -353,6 +416,7 @@ class Store:
                 f"UPDATE projects SET {keys} WHERE id=?", [*changes.values(), project_id]
             )
             self.db.commit()
+        self.materialize_project(project_id)
         return self.project(project_id)
 
     def publish_project(self, project_id: str, cover_artifact_id: str | None) -> ProjectView | None:
@@ -388,6 +452,7 @@ class Store:
             id=item["id"],
             name=item["name"],
             type=item["type"],
+            directory=str(self._ensure_project_directory(item["id"])),
             favorite=bool(item["favorite"]),
             published=bool(item["published"]),
             cover_artifact_id=item["cover_artifact_id"],
@@ -432,6 +497,7 @@ class Store:
                 (document["type"], now, project_id),
             )
             self.db.commit()
+        self.materialize_project(project_id)
         return {"document": document, "revision": revision, "etag": etag}
 
     @staticmethod
@@ -480,6 +546,8 @@ class Store:
                 )
                 self.db.execute("UPDATE projects SET updated_at=? WHERE id=?", (now, project_id))
             self.db.commit()
+        if project_id:
+            self.materialize_project(project_id)
         return self.artifact_ref(row, project_id)
 
     def link_artifact(self, project_id: str, artifact_id: str, role: str = "asset") -> None:
@@ -489,6 +557,7 @@ class Store:
                 (project_id, artifact_id, role, utcnow()),
             )
             self.db.commit()
+        self.materialize_project(project_id)
 
     def artifact_ref(
         self, row: sqlite3.Row | dict[str, Any], project_id: str | None = None
@@ -568,7 +637,111 @@ class Store:
         return [self.artifact_ref(row, project_id) for row in rows]
 
     def project_artifacts(self, project_id: str) -> list[ArtifactRef]:
-        return self.artifacts(project_id=project_id)
+        items = self.artifacts(project_id=project_id)
+        self.materialize_project(project_id)
+        return items
+
+    def _ensure_project_directory(self, project_id: str) -> Path:
+        """Create the user-visible project workspace under the API artifact root."""
+
+        if not re.fullmatch(PROJECT_ID_PATTERN, project_id):
+            raise ValueError(f"invalid project id: {project_id}")
+        directory = self.project_roots / project_id
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+
+    def project_directory(self, project_id: str) -> Path:
+        """Materialize a project and return its local, user-visible directory."""
+
+        with self.lock:
+            exists = self.db.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone()
+            if not exists:
+                raise FileNotFoundError(project_id)
+            directory = self._ensure_project_directory(project_id)
+            rows = self.db.execute(
+                "SELECT a.* FROM artifacts a JOIN project_artifacts pa ON pa.artifact_id=a.id "
+                "WHERE pa.project_id=? ORDER BY a.created_at ASC,a.id ASC",
+                (project_id,),
+            ).fetchall()
+            self._write_project_manifest(project_id, directory, rows)
+            return directory
+
+    def materialize_project(self, project_id: str) -> Path:
+        """Refresh the user-visible project workspace from canonical store data."""
+
+        return self.project_directory(project_id)
+
+    def _artifact_extension(self, row: sqlite3.Row | dict[str, Any]) -> str:
+        item = dict(row)
+        kind = str(item.get("kind") or "").lower()
+        media_type = str(item.get("media_type") or "").lower()
+        if kind == "cookspritepack":
+            return ".cooksprite"
+        if kind == "frameseq" or media_type.endswith("+json") or media_type == "application/json":
+            return ".json"
+        extension = mimetypes.guess_extension(media_type) or ".bin"
+        return ".jpeg" if extension == ".jpe" else extension
+
+    def _copy_artifact_to_project(self, directory: Path, row: sqlite3.Row | dict[str, Any]) -> str:
+        item = dict(row)
+        filename = f"{item['id']}{self._artifact_extension(item)}"
+        target = directory / filename
+        source = self.blobs / item["sha256"]
+        if source.is_file() and (
+            not target.is_file() or target.stat().st_size != source.stat().st_size
+        ):
+            temporary = target.with_name(f".{filename}.tmp")
+            shutil.copyfile(source, temporary)
+            temporary.replace(target)
+        return filename
+
+    def _write_project_manifest(
+        self,
+        project_id: str,
+        directory: Path,
+        rows: list[sqlite3.Row] | None = None,
+    ) -> None:
+        project_row = self.db.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        document_row = self.db.execute(
+            "SELECT body,revision,etag FROM project_documents WHERE project_id=?", (project_id,)
+        ).fetchone()
+        if not project_row or not document_row:
+            return
+        artifact_rows = rows or self.db.execute(
+            "SELECT a.* FROM artifacts a JOIN project_artifacts pa ON pa.artifact_id=a.id "
+            "WHERE pa.project_id=? ORDER BY a.created_at ASC,a.id ASC",
+            (project_id,),
+        ).fetchall()
+        artifacts = []
+        for row in artifact_rows:
+            item = dict(row)
+            artifacts.append(
+                {
+                    "id": item["id"],
+                    "kind": item["kind"],
+                    "title": item.get("title", ""),
+                    "file": self._copy_artifact_to_project(directory, row),
+                    "trashed": bool(item.get("trashed", 0)),
+                }
+            )
+        payload = {
+            "schema": "cooksprite.project-workspace/v1",
+            "project": {
+                "id": project_row["id"],
+                "name": project_row["name"],
+                "type": project_row["type"],
+                "created_at": project_row["created_at"],
+                "updated_at": project_row["updated_at"],
+            },
+            "document": json.loads(document_row["body"]),
+            "document_revision": document_row["revision"],
+            "document_etag": document_row["etag"],
+            "artifacts": artifacts,
+        }
+        (directory / "project.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
 
     def artifact_bytes(self, artifact_id: str) -> bytes:
         row = self.artifact(artifact_id)
@@ -598,8 +771,8 @@ class Store:
         with self.lock:
             self.db.execute(
                 "INSERT INTO runs(id,status,progress,message,error,artifacts,runtime_id,prompt_id,"
-                "action_id,project_id,request,created_at,updated_at,provenance) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "action_id,project_id,request,created_at,updated_at,provenance,runtime_state) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     run_id,
                     "queued",
@@ -615,6 +788,7 @@ class Store:
                     now,
                     now,
                     json.dumps(provenance or {}),
+                    RunRuntimeState().model_dump_json(),
                 ),
             )
             self.db.commit()
@@ -631,10 +805,13 @@ class Store:
             "runtime_id",
             "prompt_id",
             "provenance",
+            "runtime_state",
         }
         changes = {key: value for key, value in fields.items() if key in allowed}
         if "provenance" in changes and not isinstance(changes["provenance"], str):
             changes["provenance"] = json.dumps(changes["provenance"])
+        if "runtime_state" in changes and not isinstance(changes["runtime_state"], str):
+            changes["runtime_state"] = json.dumps(changes["runtime_state"])
         changes["updated_at"] = utcnow()
         keys = ",".join(f"{key}=?" for key in changes)
         with self.lock:

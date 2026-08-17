@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from typing import ClassVar
 
@@ -7,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from cli.__main__ import parser
 from cooksprite.api.app import create_app
+from cooksprite.comfy.client import ComfyError
 from cooksprite.dev import check_generated, check_tool_packages
 from cooksprite.execution import ExecutionPlan
 from cooksprite.store import Store
@@ -35,6 +37,50 @@ class ProgressComfy:
         return {"status": {"completed": True}}
 
 
+class EventComfy:
+    def __init__(self, _url: str):
+        pass
+
+    @staticmethod
+    def client_id() -> str:
+        return "client-events"
+
+    def submit(self, _graph, client_id=None):
+        assert client_id == "client-events"
+        return "prompt-events"
+
+    def wait(self, _prompt_id, *, progress, client_id, event):
+        assert client_id == "client-events"
+        event({"type": "status", "data": {"status": {"exec_info": {"queue_remaining": 1}}}})
+        event({"type": "execution_start", "data": {"prompt_id": "prompt-events"}})
+        event({"type": "executing", "data": {"node": "1", "prompt_id": "prompt-events"}})
+        event({"type": "executed", "data": {"node": "1", "prompt_id": "prompt-events"}})
+        event({"type": "executing", "data": {"node": "2", "prompt_id": "prompt-events"}})
+        event(
+            {
+                "type": "progress",
+                "data": {"node": "2", "value": 4, "max": 8, "prompt_id": "prompt-events"},
+            }
+        )
+        event({"type": "execution_success", "data": {"prompt_id": "prompt-events"}})
+        return {"status": {"completed": True}}
+
+
+class ErrorEventComfy(EventComfy):
+    def wait(self, _prompt_id, *, progress, client_id, event):
+        event({"type": "execution_start", "data": {"prompt_id": "prompt-events"}})
+        event({"type": "executing", "data": {"node": "1", "prompt_id": "prompt-events"}})
+        detail = {
+            "node": "1",
+            "exception_type": "torch.OutOfMemoryError",
+            "exception_message": "CUDA out of memory while loading checkpoint",
+            "traceback": "CUDA out of memory while loading checkpoint",
+            "prompt_id": "prompt-events",
+        }
+        event({"type": "execution_error", "data": detail})
+        raise ComfyError.from_event(detail)
+
+
 def wait_terminal(store: Store, run_id: str) -> dict:
     for _ in range(100):
         row = store.run(run_id)
@@ -58,6 +104,52 @@ def test_run_supervisor_uses_comfy_client_identity_and_progress(tmp_path):
     assert row["status"] == "succeeded"
     assert row["progress"] == 1
     assert ProgressComfy.submitted_client_id == "client-progress"
+
+
+def test_run_supervisor_keeps_comfy_runtime_events_and_model_state(tmp_path):
+    store = Store(tmp_path)
+    store.create_run("run_events", "rt_events")
+    supervisor = RunSupervisor(store, EventComfy, lambda _runtime_id: None, max_workers=1)
+    supervisor.submit_plan(
+        "run_events",
+        {"id": "rt_events", "base_url": "http://comfy"},
+        ExecutionPlan(
+            graph={
+                "1": {"class_type": "CheckpointLoaderSimple"},
+                "2": {"class_type": "KSampler"},
+            },
+            sinks=[],
+        ),
+    )
+    row = wait_terminal(store, "run_events")
+    supervisor.close()
+    runtime_state = json.loads(row["runtime_state"])
+    assert row["status"] == "succeeded"
+    assert runtime_state["model_status"] == "ready"
+    assert runtime_state["phase"] == "completed"
+    assert runtime_state["current"]["label"] == "Sampler"
+    assert runtime_state["current"]["step"] == 4
+    assert runtime_state["queue_remaining"] == 1
+
+
+def test_run_supervisor_surfaces_out_of_memory_as_structured_runtime_error(tmp_path):
+    store = Store(tmp_path)
+    store.create_run("run_oom", "rt_oom")
+    supervisor = RunSupervisor(store, ErrorEventComfy, lambda _runtime_id: None, max_workers=1)
+    supervisor.submit_plan(
+        "run_oom",
+        {"id": "rt_oom", "base_url": "http://comfy"},
+        ExecutionPlan(graph={"1": {"class_type": "CheckpointLoaderSimple"}}, sinks=[]),
+    )
+    row = wait_terminal(store, "run_oom")
+    supervisor.close()
+    error = json.loads(row["error"])
+    runtime_state = json.loads(row["runtime_state"])
+    assert row["status"] == "failed"
+    assert error["code"] == "out_of_memory"
+    assert "out of memory" in error["message"].lower()
+    assert runtime_state["model_status"] == "failed"
+    assert runtime_state["error"]["node"] == "Model loader"
 
 
 def test_server_restart_marks_unsubmitted_run_as_explicitly_retryable(tmp_path):
@@ -93,3 +185,15 @@ def test_cli_exposes_headless_run_artifact_and_project_export_paths():
     assert wait.action == "wait"
     download = root.parse_args(["artifact", "download", "art_test", "--out", "sprite.png"])
     assert download.action == "download"
+
+
+def test_cli_start_defaults_to_api_frontend_and_managed_comfy():
+    root = parser()
+    start = root.parse_args(["start"])
+    assert start.no_comfy is False
+    assert start.no_frontend is False
+    assert start.port == 8000
+    assert start.frontend_port == 5173
+    no_comfy = root.parse_args(["start", "--no-comfy", "--frontend-port", "5174"])
+    assert no_comfy.no_comfy is True
+    assert no_comfy.frontend_port == 5174

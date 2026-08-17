@@ -312,6 +312,55 @@ class TrackSequenceCreate(BaseModel):
     direction: Direction
 
 
+RuntimePhase = Literal[
+    "queued",
+    "starting",
+    "loading_model",
+    "sampling",
+    "processing",
+    "saving",
+    "completed",
+    "failed",
+    "cancelled",
+    "unknown",
+]
+RuntimeModelStatus = Literal["unknown", "loading", "ready", "failed"]
+RuntimeNodeKind = Literal["model", "conditioning", "sampling", "processing", "artifact", "other"]
+RuntimeNodeStatus = Literal["queued", "executing", "cached", "completed", "failed"]
+
+
+class RuntimeErrorView(BaseModel):
+    code: str
+    message: str
+    node: str | None = None
+    type: str | None = None
+    detail: str | None = None
+
+
+class RuntimeNodeView(BaseModel):
+    label: str
+    kind: RuntimeNodeKind = "other"
+    status: RuntimeNodeStatus = "executing"
+    step: int | None = None
+    total: int | None = None
+    progress: float = Field(default=0, ge=0, le=1)
+
+
+class RunRuntimeState(BaseModel):
+    """The provider-neutral live execution state shown by Web and CLI clients."""
+
+    event: str = "queued"
+    phase: RuntimePhase = "queued"
+    message: str = "queued"
+    queue_remaining: int | None = Field(default=None, ge=0)
+    current: RuntimeNodeView | None = None
+    model_status: RuntimeModelStatus = "unknown"
+    cached_nodes: int = Field(default=0, ge=0)
+    completed_nodes: int = Field(default=0, ge=0)
+    error: RuntimeErrorView | None = None
+    updated_at: str = ""
+
+
 class RunView(BaseModel):
     id: str
     status: Literal["queued", "running", "cancel_requested", "cancelled", "succeeded", "failed"]
@@ -319,7 +368,10 @@ class RunView(BaseModel):
     message: str = ""
     action_id: str | None = None
     project_id: str | None = None
+    runtime_id: str | None = None
+    runtime_snapshot: str | None = None
     artifacts: list[ArtifactRef] = Field(default_factory=list)
+    runtime_state: RunRuntimeState = Field(default_factory=RunRuntimeState)
     error: dict[str, Any] | None = None
     provenance: dict[str, Any] = Field(default_factory=dict)
     created_at: str = ""
@@ -344,6 +396,7 @@ class ProjectView(BaseModel):
     id: str
     name: str
     type: ProjectType
+    directory: str | None = None
     favorite: bool = False
     published: bool = False
     cover_artifact_id: str | None = None

@@ -9,6 +9,12 @@ from threading import RLock
 from typing import Any
 
 from .execution import ExecutionPlan
+from .runtime_state import (
+    apply_runtime_event,
+    initial_runtime_state,
+    runtime_state_for_exception,
+    terminal_runtime_state,
+)
 from .store import Store
 
 TerminalCallback = Callable[[], None]
@@ -85,6 +91,12 @@ class RunSupervisor:
                     status="failed",
                     message=detail.get("message", "background job failed"),
                     error=json.dumps(detail),
+                    runtime_state=terminal_runtime_state(
+                        _json_object((self.store.run(run_id) or {}).get("runtime_state")),
+                        phase="failed",
+                        message=detail.get("message", "background job failed"),
+                        error=detail,
+                    ),
                 )
 
         self._track(run_id, self.executor.submit(execute))
@@ -99,8 +111,9 @@ class RunSupervisor:
         self.store.update_run(
             run_id,
             status="running",
-            message="submitted to ComfyUI",
+            message="connecting to ComfyUI",
             progress=0.02,
+            runtime_state=initial_runtime_state(),
         )
         client = self.comfy_factory(runtime["base_url"])
         client_id = getattr(client, "client_id", lambda: None)()
@@ -110,10 +123,10 @@ class RunSupervisor:
             except TypeError:  # Protocol doubles and older adapters.
                 prompt_id = client.submit(plan.graph)
             self.store.update_run(run_id, prompt_id=prompt_id, progress=0.05)
-            self._wait(client, prompt_id, client_id, run_id)
+            self._wait(client, prompt_id, client_id, run_id, plan.graph)
         except Exception as exc:  # noqa: BLE001 - runtime errors share one API shape.
             self.invalidate_runtime(runtime["id"])
-            self._fail_or_cancel(run_id, exc)
+            self._fail_or_cancel(run_id, exc, plan.graph)
             return
         self._complete(run_id, on_complete)
 
@@ -126,53 +139,136 @@ class RunSupervisor:
     ) -> None:
         client = self.comfy_factory(runtime["base_url"])
         try:
-            self._wait(client, prompt_id, None, run_id)
+            self._wait(client, prompt_id, None, run_id, {})
         except Exception as exc:  # noqa: BLE001 - runtime errors share one API shape.
             self.invalidate_runtime(runtime["id"])
-            self._fail_or_cancel(run_id, exc)
+            self._fail_or_cancel(run_id, exc, {})
             return
         self._complete(run_id, on_complete)
 
-    def _wait(self, client: Any, prompt_id: str, client_id: str | None, run_id: str) -> None:
+    def _wait(
+        self,
+        client: Any,
+        prompt_id: str,
+        client_id: str | None,
+        run_id: str,
+        graph: dict[str, dict[str, Any]],
+    ) -> None:
+        received_event = False
+
+        def event(message: dict[str, Any]) -> None:
+            nonlocal received_event
+            received_event = True
+            row = self.store.run(run_id) or {}
+            previous = _json_object(row.get("runtime_state"))
+            state, ratio = apply_runtime_event(previous, message, graph)
+            fields: dict[str, Any] = {
+                "runtime_state": state,
+                "message": state["message"],
+            }
+            if ratio is not None:
+                fields["progress"] = 0.05 + 0.9 * ratio
+            if state.get("error"):
+                fields["error"] = json.dumps(state["error"])
+            self.store.update_run(run_id, **fields)
+
         def progress(value: float, node: str) -> None:
-            self.store.update_run(
-                run_id,
-                progress=0.05 + 0.9 * max(0.0, min(1.0, value)),
-                message=f"ComfyUI · {node}",
+            if received_event:
+                return
+            event(
+                {
+                    "type": "progress",
+                    "data": {"value": value, "max": 1, "node": node},
+                }
             )
 
         try:
-            client.wait(prompt_id, progress=progress, client_id=client_id)
+            client.wait(
+                prompt_id,
+                progress=progress,
+                client_id=client_id,
+                event=event,
+            )
         except TypeError:  # Protocol doubles and older adapters.
-            client.wait(prompt_id)
+            try:
+                client.wait(prompt_id, progress=progress, client_id=client_id)
+            except TypeError:
+                client.wait(prompt_id)
 
     def _complete(self, run_id: str, on_complete: TerminalCallback | None) -> None:
         record = self.store.run(run_id)
         if record and record["status"] in {"cancel_requested", "cancelled"}:
-            self.store.update_run(run_id, status="cancelled", message="cancelled", progress=1)
+            self.store.update_run(
+                run_id,
+                status="cancelled",
+                message="cancelled",
+                progress=1,
+                runtime_state=terminal_runtime_state(
+                    _json_object(record.get("runtime_state")),
+                    phase="cancelled",
+                    message="cancelled",
+                ),
+            )
             return
         try:
             if on_complete:
                 on_complete()
-            self.store.update_run(run_id, status="succeeded", progress=1, message="completed")
+            self.store.update_run(
+                run_id,
+                status="succeeded",
+                progress=1,
+                message="completed",
+                runtime_state=terminal_runtime_state(
+                    _json_object((self.store.run(run_id) or {}).get("runtime_state")),
+                    phase="completed",
+                    message="completed",
+                ),
+            )
         except Exception as exc:  # noqa: BLE001 - finalization is part of the Run.
+            state, error = runtime_state_for_exception(
+                _json_object((self.store.run(run_id) or {}).get("runtime_state")),
+                exc,
+                {},
+            )
             self.store.update_run(
                 run_id,
                 status="failed",
                 message="artifact finalization failed",
-                error=json.dumps({"code": "artifact_finalization_failed", "message": str(exc)}),
+                error=json.dumps(error),
+                runtime_state=state,
             )
 
-    def _fail_or_cancel(self, run_id: str, exc: Exception) -> None:
+    def _fail_or_cancel(
+        self,
+        run_id: str,
+        exc: Exception,
+        graph: dict[str, dict[str, Any]],
+    ) -> None:
         record = self.store.run(run_id)
         if record and record["status"] == "cancel_requested":
-            self.store.update_run(run_id, status="cancelled", message="cancelled", progress=1)
+            self.store.update_run(
+                run_id,
+                status="cancelled",
+                message="cancelled",
+                progress=1,
+                runtime_state=terminal_runtime_state(
+                    _json_object(record.get("runtime_state")),
+                    phase="cancelled",
+                    message="cancelled",
+                ),
+            )
             return
+        state, error = runtime_state_for_exception(
+            _json_object(record.get("runtime_state")) if record else None,
+            exc,
+            graph,
+        )
         self.store.update_run(
             run_id,
             status="failed",
-            message="ComfyUI execution failed",
-            error=json.dumps({"code": "comfy_execution_failed", "message": str(exc)}),
+            message=error["message"],
+            error=json.dumps(error),
+            runtime_state=state,
         )
 
     def close(self) -> None:
@@ -180,3 +276,15 @@ class RunSupervisor:
 
 
 __all__ = ["RunSupervisor"]
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}

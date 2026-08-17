@@ -3,6 +3,10 @@ export type Locale = "zh-CN" | "en";
 export type ProjectType = "static" | "character" | "tileset";
 export type RunStatus = "queued" | "running" | "cancel_requested" | "cancelled" | "succeeded" | "failed";
 export type ArtifactKind = "Image" | "ImageBatch" | "SpriteSheet" | "FrameSeq" | "Video" | "NormalMap" | "CookSpritePack" | string;
+export type RuntimePhase = "queued" | "starting" | "loading_model" | "sampling" | "processing" | "saving" | "completed" | "failed" | "cancelled" | "unknown";
+export type RuntimeModelStatus = "unknown" | "loading" | "ready" | "failed";
+export type RuntimeNodeKind = "model" | "conditioning" | "sampling" | "processing" | "artifact" | "other";
+export type RuntimeNodeStatus = "queued" | "executing" | "cached" | "completed" | "failed";
 
 export interface LocalizedText { name: string; description: string }
 export interface ActionInput { type: ArtifactKind | ArtifactKind[]; required: boolean; max: number }
@@ -55,6 +59,33 @@ export interface FrameSequenceView {
   sequence: FrameSequenceManifest;
   frames: ArtifactRef[];
 }
+export interface RuntimeErrorView {
+  code: string;
+  message: string;
+  node?: string;
+  type?: string;
+  detail?: string;
+}
+export interface RuntimeNodeView {
+  label: string;
+  kind: RuntimeNodeKind;
+  status: RuntimeNodeStatus;
+  step?: number;
+  total?: number;
+  progress: number;
+}
+export interface RunRuntimeState {
+  event: string;
+  phase: RuntimePhase;
+  message: string;
+  queue_remaining?: number;
+  current?: RuntimeNodeView;
+  model_status: RuntimeModelStatus;
+  cached_nodes: number;
+  completed_nodes: number;
+  error?: RuntimeErrorView;
+  updated_at: string;
+}
 export interface RunView {
   id: string;
   status: RunStatus;
@@ -62,9 +93,12 @@ export interface RunView {
   message: string;
   action_id?: string;
   project_id?: string;
+  runtime_id?: string;
+  runtime_snapshot?: string;
   artifacts: ArtifactRef[];
+  runtime_state: RunRuntimeState;
   provenance: Record<string, unknown>;
-  error?: { code: string; message: string; issues?: string[] };
+  error?: RuntimeErrorView & { issues?: string[] };
   created_at: string;
   updated_at: string;
 }
@@ -73,6 +107,7 @@ export interface ProjectView {
   id: string;
   name: string;
   type: ProjectType;
+  directory?: string;
   favorite: boolean;
   published: boolean;
   cover_artifact_id?: string;
@@ -134,12 +169,46 @@ export interface RuntimeView {
   id: string;
   label: string;
   base_url: string;
+  location: "local" | "remote" | string;
+  transport: string;
   callback_url?: string;
   snapshot?: string;
   status?: RuntimeStatus;
+  active?: boolean;
   error?: string;
   checked_at?: string;
   recipes: RuntimeRecipe[];
+}
+export interface ProjectDirectoryView { project_id: string; path: string; opened: boolean; error?: string }
+export interface LocalProbeCandidate {
+  base_url: string;
+  status: "found" | "unreachable";
+  version?: string;
+  device?: string;
+  models?: number;
+  workflows?: number;
+  nodes?: number;
+  managed?: boolean;
+  error?: string;
+}
+export interface LocalProbeView {
+  status: "found" | "installed" | "unreachable" | "missing";
+  managed_installed: boolean;
+  candidates: LocalProbeCandidate[];
+}
+export interface RuntimeCapabilities {
+  runtime_id: string;
+  snapshot?: string;
+  system: Record<string, unknown>;
+  features: Record<string, unknown>;
+  workflow_templates: unknown;
+  categories: Record<string, { models: Record<string, unknown>[]; workflows: Record<string, unknown>[]; tools: Record<string, unknown>[] }>;
+}
+export interface RuntimeDefaultBinding { workflow_id: string; model_id: string }
+export interface RuntimeDefaultsView {
+  runtime_id: string;
+  defaults: Record<string, RuntimeDefaultBinding>;
+  recipes: Array<{ id: string; label: string; actions: string[]; modes: string[]; model_id: string }>;
 }
 export interface LocalSetupView {
   status: "idle" | "installed" | "installing" | "starting" | "validating" | "ready" | "failed";
@@ -148,7 +217,6 @@ export interface LocalSetupView {
   error?: string;
   directory?: string;
   default_directory: string;
-  model: { id: string; filename: string; size: number; license: string };
 }
 
 export class ApiError extends Error {
@@ -197,6 +265,8 @@ export const api = {
       body: JSON.stringify(document),
     }),
   projectArtifacts: (id: string) => json<ArtifactRef[]>(`/projects/${encodeURIComponent(id)}/artifacts`),
+  projectDirectory: (id: string) => json<ProjectDirectoryView>(`/projects/${encodeURIComponent(id)}/directory`),
+  openProjectDirectory: (id: string) => json<ProjectDirectoryView>(`/projects/${encodeURIComponent(id)}/directory/open`, { method: "POST" }),
   materializeSequence: (id: string, body: { action: AnimationClip["action"]; view: "level" | "top45"; direction: Direction }) =>
     json<FrameSequenceView>(`/projects/${encodeURIComponent(id)}/sequences`, { method: "POST", ...jsonBody(body) }),
   exportProject: (id: string, allowIncomplete = false) =>
@@ -216,10 +286,16 @@ export const api = {
   publish: (projectId: string, coverArtifactId?: string) => json<ProjectView>(`/projects/${encodeURIComponent(projectId)}/publish`, { method: "POST", ...jsonBody({ cover_artifact_id: coverArtifactId }) }),
   gallery: () => json<GalleryItem[]>("/gallery"),
   runtimes: () => json<RuntimeView[]>("/runtimes"),
-  createRuntime: (body: { id: string; label: string; base_url: string; callback_url?: string }) => json<RuntimeView>("/runtimes", { method: "POST", ...jsonBody(body) }),
+  createRuntime: (body: { id: string; label: string; base_url: string; location: "local" | "remote"; transport?: string; callback_url?: string }) => json<RuntimeView>("/runtimes", { method: "POST", ...jsonBody(body) }),
+  selectRuntime: (id: string) => json<{ runtime_id: string; status: RuntimeStatus; error?: string; active: boolean }>(`/runtimes/${encodeURIComponent(id)}/select`, { method: "POST" }),
+  runtimeCapabilities: (id: string) => json<RuntimeCapabilities>(`/runtimes/${encodeURIComponent(id)}/capabilities`),
+  runtimeDefaults: (id: string) => json<RuntimeDefaultsView>(`/runtimes/${encodeURIComponent(id)}/defaults`),
+  setRuntimeDefault: (id: string, actionId: string, body: RuntimeDefaultBinding) =>
+    json<{ runtime_id: string; action_id: string; default: RuntimeDefaultBinding }>(`/runtimes/${encodeURIComponent(id)}/defaults/${encodeURIComponent(actionId)}`, { method: "PUT", ...jsonBody(body) }),
   doctorRuntime: (id: string) => json<{ runtime_id: string; snapshot: string; tool_count: number; recipe_count: number; system: Record<string, unknown>; device?: Record<string, unknown>; models: Record<string, number>; recipes: RuntimeRecipe[] }>(`/runtimes/${encodeURIComponent(id)}/doctor`, { method: "POST" }),
   localSetup: () => json<LocalSetupView>("/setup/local"),
-  installLocal: (body: { directory?: string; with_models: boolean; host?: string; port?: number }) => json<LocalSetupView>("/setup/local", { method: "POST", ...jsonBody(body) }),
+  installLocal: (body: { directory?: string; host?: string; port?: number }) => json<LocalSetupView>("/setup/local", { method: "POST", ...jsonBody(body) }),
+  probeLocal: () => json<LocalProbeView>("/local/probe", { method: "POST" }),
 };
 
 export function subscribeRun(id: string, update: (run: RunView) => void, fail: (error: Error) => void): () => void {

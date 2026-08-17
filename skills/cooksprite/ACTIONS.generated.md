@@ -9,5 +9,8 @@
 | `sheet.slice` | `sheet:SpriteSheet` | `action`, `view`, `direction`, `columns`, `rows`, `frame_width`, `frame_height`, `margin`, `spacing`, `exclude_empty` | `FrameSeq` |
 | `video.sample` | `video:Video` | `action`, `view`, `direction`, `sample_fps`, `max_frames` | `FrameSeq` |
 | `normal.generate` | `source:['Image', 'FrameSeq', 'SpriteSheet']` | `strength`, `flip_y` | `NormalMap` |
+| `image.views` | `source:Image` | - | `ImageBatch` |
+| `image.pixelize` | `source:Image` | `target_width`, `target_height` | `Image` |
+| `image.cutout` | `source:Image` | - | `Image` |
 
 Project export is intentionally not an Action. Use `cspr project export`.

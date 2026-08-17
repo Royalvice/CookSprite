@@ -73,6 +73,19 @@ def _core_image_workflow(
                 "animation": input_ref("animation"),
                 "view": input_ref("view"),
                 "direction": input_ref("direction"),
+                "task": literal("video" if action_id == "animation.generate" else "image"),
+                "mode": literal(mode),
+                "caption": input_ref("prompt"),
+                "action": input_ref("animation"),
+                "camera_preset": input_ref("view"),
+                "orientation": literal("front"),
+                "facing": literal("right"),
+                "model": literal("generic"),
+                "width": literal(512),
+                "height": literal(512),
+                "background": literal("bright fluorescent green near #00FF00"),
+                "edit_instruction": literal(""),
+                "negative_terms": literal(""),
             },
         ),
         ToolNode(
@@ -84,7 +97,7 @@ def _core_image_workflow(
             id="positive",
             tool="comfy.CLIPTextEncode",
             inputs={
-                "text": output_ref("packet", "positive"),
+                "text": output_ref("packet", "prompt"),
                 "clip": output_ref("model", "output_1"),
             },
         ),
@@ -92,7 +105,7 @@ def _core_image_workflow(
             id="negative",
             tool="comfy.CLIPTextEncode",
             inputs={
-                "text": output_ref("packet", "negative"),
+                "text": output_ref("packet", "negative_prompt"),
                 "clip": output_ref("model", "output_1"),
             },
         ),
@@ -271,7 +284,7 @@ def _video_workflow(runtime_id: str, recipe: Recipe) -> WorkflowDefinition:
 
 
 def sealed_tool_descriptor(recipe: Recipe) -> ToolDescriptor | None:
-    if recipe.source != "imported" or not recipe.workflow:
+    if recipe.source not in {"imported", "discovered"} or not recipe.workflow:
         return None
     inputs = []
     for name in recipe.slots:
@@ -279,12 +292,13 @@ def sealed_tool_descriptor(recipe: Recipe) -> ToolDescriptor | None:
             "image": "Image",
             "seed": "Number",
             "count": "Number",
+            "strength": "Number",
         }.get(name, "Text")
         inputs.append(PortDescriptor(name=name, type=port_type, required=False))
     return ToolDescriptor(
         id=f"comfy.sealed.{recipe.id}",
         source="comfy",
-        title=f"Imported workflow · {recipe.label}",
+        title=f"ComfyUI workflow · {recipe.label}",
         inputs=inputs,
         outputs=[PortDescriptor(name="image", type="Image", persistable=True)],
     )
@@ -308,6 +322,7 @@ def _imported_workflow(
         "direction": "Text",
         "count": "Number",
         "seed": "Number",
+        "strength": "Number",
         "pixel_enabled": "Boolean",
     }
     source_slot = ""
@@ -317,13 +332,15 @@ def _imported_workflow(
     sealed_inputs: dict[str, ValueRef] = {}
     for slot in recipe.slots:
         if slot == "text":
-            sealed_inputs[slot] = output_ref("packet", "positive")
+            sealed_inputs[slot] = output_ref("packet", "prompt")
         elif slot == "negative":
-            sealed_inputs[slot] = output_ref("packet", "negative")
+            sealed_inputs[slot] = output_ref("packet", "negative_prompt")
         elif slot == "model":
             sealed_inputs[slot] = literal(recipe.checkpoint or "")
         elif slot in {"seed", "count"}:
             sealed_inputs[slot] = input_ref(slot)
+        elif slot == "strength":
+            sealed_inputs[slot] = input_ref("strength")
         elif slot == "image" and source_slot:
             sealed_inputs[slot] = input_ref(source_slot)
     nodes = [
@@ -338,6 +355,19 @@ def _imported_workflow(
                 "animation": input_ref("animation"),
                 "view": input_ref("view"),
                 "direction": input_ref("direction"),
+                "task": literal("video" if action_id == "animation.generate" else "image"),
+                "mode": literal(mode),
+                "caption": input_ref("prompt"),
+                "action": input_ref("animation"),
+                "camera_preset": input_ref("view"),
+                "orientation": literal("front"),
+                "facing": literal("right"),
+                "model": literal("generic"),
+                "width": literal(512),
+                "height": literal(512),
+                "background": literal("bright fluorescent green near #00FF00"),
+                "edit_instruction": literal(""),
+                "negative_terms": literal(""),
             },
         ),
         ToolNode(id="sealed", tool=descriptor.id, inputs=sealed_inputs),
@@ -385,7 +415,7 @@ def materialize_recipe_workflows(
         definitions = {"sheet.slice:sheet-to-frames": _sheet_workflow(runtime_id, recipe)}
     elif recipe.family == "cooksprite.video":
         definitions = {"video.sample:video-to-frames": _video_workflow(runtime_id, recipe)}
-    elif recipe.source == "imported":
+    elif recipe.source in {"imported", "discovered"} and recipe.workflow:
         for action_id in recipe.actions:
             for mode in recipe.modes:
                 if action_id == "image.generate" and mode not in {"t2i", "i2i"}:

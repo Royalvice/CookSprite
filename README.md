@@ -47,13 +47,24 @@ Skill. End users do not need Node.js:
 
 ```bash
 python -m pip install cooksprite
-cspr install --accept-model-license
+cspr install
 cspr start
 ```
 
-Open `http://127.0.0.1:8000`. The workbench remains visible without a runtime,
-but generation Actions are disabled until a trusted ComfyUI is registered and
-checked:
+`cspr start` starts the managed ComfyUI runtime, CookSprite API, and the Vue
+development frontend. Open `http://127.0.0.1:5173`; the frontend proxies
+CookSprite API requests to port `8000`. If any requested port is occupied,
+CookSprite selects the next available port and prints the actual URLs.
+
+To browse the workbench without starting a local ComfyUI, start the API and
+frontend only:
+
+```bash
+cspr start --no-comfy
+```
+
+The workbench remains visible without a runtime, but generation Actions are
+disabled until a trusted ComfyUI is registered and checked:
 
 ```bash
 cspr comfy import --runtime local --label "Local ComfyUI" --url http://127.0.0.1:8188
@@ -61,14 +72,12 @@ cspr comfy doctor --runtime local
 ```
 
 If ComfyUI is not installed, the Settings page or this explicit command installs
-an isolated pinned runtime, the CookSprite node pack, and a hash-verified default
-SD 1.5 checkpoint. `cspr install` first displays the model identity, source,
-license, size, and destination and requires `--accept-model-license`.
-
-Pass `--no-models` when an existing ComfyUI already has compatible models or
-when only installing the runtime/node pack. Existing ComfyUI installations and
-model directories are never modified by the managed installer. Contributors
-may still run the API and Vite development server separately.
+only an isolated pinned runtime and the CookSprite node pack. It never downloads
+a starter model. Select or register models through the connected ComfyUI;
+existing ComfyUI installations and model directories are never modified by the installer. Contributors
+may still run the API and Vite development server separately with `cspr serve`
+and `npm run dev` when they need independent reload control. Use
+`cspr start --no-frontend` when only the API and ComfyUI are needed.
 Every compatible checkpoint already visible to that ComfyUI becomes a selectable
 text/image Recipe. Existing image-to-video or text-to-video API workflows stay
 in ComfyUI and can be registered as a small Recipe adapter; their declared

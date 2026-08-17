@@ -15,7 +15,27 @@ from websockets.sync.client import connect
 
 
 class ComfyError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "comfy_error",
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.details = details or {}
+
+    @classmethod
+    def from_event(cls, data: dict[str, Any]) -> ComfyError:
+        return cls(
+            str(data.get("exception_message") or data.get("message") or "ComfyUI execution failed"),
+            code="execution_error",
+            details=data,
+        )
+
+
+EventCallback = Callable[[dict[str, Any]], None]
 
 
 class ComfyClient:
@@ -30,6 +50,7 @@ class ComfyClient:
             system.raise_for_status()
             features = c.get(self.base_url + "/features")
             folders = c.get(self.base_url + "/models")
+            workflow_templates = c.get(self.base_url + "/workflow_templates")
             models: dict[str, list[str]] = {}
             if folders.is_success and isinstance(folders.json(), list):
                 for folder in folders.json():
@@ -41,6 +62,9 @@ class ComfyClient:
             "system_stats": system.json(),
             "features": features.json() if features.is_success else {},
             "models": models,
+            "workflow_templates": workflow_templates.json()
+            if workflow_templates.is_success
+            else {},
         }
 
     def submit(self, graph: dict[str, Any], client_id: str | None = None) -> str:
@@ -48,7 +72,20 @@ class ComfyClient:
         if client_id:
             body["client_id"] = client_id
         r = httpx.post(self.base_url + "/prompt", json=body, timeout=20)
-        r.raise_for_status()
+        if not r.is_success:
+            try:
+                raw_detail = r.json()
+            except ValueError:
+                raw_detail = {"message": r.text}
+            detail = raw_detail if isinstance(raw_detail, dict) else {"message": str(raw_detail)}
+            nested_error = detail.get("error") if isinstance(detail.get("error"), dict) else {}
+            error_detail = {**detail, **nested_error}
+            message = error_detail.get("message") or error_detail.get("error") or r.reason_phrase
+            raise ComfyError(
+                str(message),
+                code=str(error_detail.get("type") or "prompt_rejected"),
+                details=error_detail,
+            )
         body = r.json()
         if "prompt_id" not in body:
             raise ComfyError(f"ComfyUI did not return prompt_id: {body}")
@@ -60,7 +97,13 @@ class ComfyClient:
         item = r.json().get(prompt_id)
         if item and item.get("status", {}).get("status_str") == "error":
             messages = item.get("status", {}).get("messages", [])
-            raise ComfyError(f"ComfyUI execution failed: {messages}")
+            detail = self._last_error(messages)
+            message = detail.get("exception_message") or "ComfyUI execution failed"
+            raise ComfyError(
+                str(message),
+                code="execution_error",
+                details=detail or {"messages": messages},
+            )
         return item
 
     def wait(
@@ -70,25 +113,28 @@ class ComfyClient:
         *,
         progress: Callable[[float, str], None] | None = None,
         client_id: str | None = None,
+        event: EventCallback | None = None,
     ) -> dict[str, Any]:
-        if progress and client_id:
+        if client_id:
             try:
-                return self._wait_websocket(prompt_id, client_id, timeout, progress)
+                return self._wait_websocket(prompt_id, client_id, timeout, progress, event)
             except (OSError, TimeoutError, ConnectionClosed):
                 # A proxy may block WebSockets. History polling remains authoritative.
                 pass
-        return self._wait_polling(prompt_id, timeout, progress)
+        return self._wait_polling(prompt_id, timeout, progress, event)
 
     def _wait_polling(
         self,
         prompt_id: str,
         timeout: float,
         progress: Callable[[float, str], None] | None = None,
+        event: EventCallback | None = None,
     ) -> dict[str, Any]:
         end = time.monotonic() + timeout
         while time.monotonic() < end:
             item = self._history(prompt_id)
             if item and item.get("status", {}).get("completed"):
+                self._replay_history(item, event)
                 return item
             if progress:
                 progress(0.0, "waiting for ComfyUI")
@@ -100,7 +146,8 @@ class ComfyClient:
         prompt_id: str,
         client_id: str,
         timeout: float,
-        progress: Callable[[float, str], None],
+        progress: Callable[[float, str], None] | None = None,
+        on_event: EventCallback | None = None,
     ) -> dict[str, Any]:
         parsed = urlsplit(self.base_url)
         websocket_url = urlunsplit(
@@ -120,27 +167,75 @@ class ComfyClient:
                 except TimeoutError:
                     item = self._history(prompt_id)
                     if item and item.get("status", {}).get("completed"):
+                        self._replay_history(item, on_event)
                         return item
                     continue
                 if not isinstance(raw, str):
                     continue
-                event = json.loads(raw)
-                data = event.get("data") or {}
+                message = json.loads(raw)
+                data = message.get("data") or {}
                 if data.get("prompt_id") not in {None, prompt_id}:
                     continue
-                if event.get("type") == "progress":
+                if on_event:
+                    on_event(message)
+                event_type = message.get("type")
+                if event_type == "progress":
                     value = float(data.get("value") or 0)
                     maximum = max(1.0, float(data.get("max") or 1))
-                    progress(min(1.0, value / maximum), str(data.get("node") or "sampling"))
-                elif event.get("type") == "executing" and data.get("node") is None:
+                    if progress:
+                        progress(min(1.0, value / maximum), str(data.get("node") or "sampling"))
+                elif event_type == "progress_state":
+                    active = next(
+                        (
+                            item
+                            for item in (data.get("nodes") or {}).values()
+                            if isinstance(item, dict)
+                            and item.get("state") in {"executing", "running"}
+                        ),
+                        None,
+                    )
+                    if progress and active:
+                        value = float(active.get("value") or 0)
+                        maximum = max(1.0, float(active.get("max") or 1))
+                        progress(
+                            min(1.0, value / maximum), str(active.get("node_id") or "sampling")
+                        )
+                elif event_type == "executing" and data.get("node") is None:
                     item = self._history(prompt_id)
                     if item and item.get("status", {}).get("completed"):
+                        self._replay_history(item, on_event)
                         return item
-                elif event.get("type") == "execution_error":
+                elif event_type == "execution_error":
+                    raise ComfyError.from_event(data)
+                elif event_type == "execution_interrupted":
                     raise ComfyError(
-                        str(data.get("exception_message") or "ComfyUI execution failed")
+                        "ComfyUI execution interrupted",
+                        code="execution_interrupted",
+                        details=data,
                     )
         raise ComfyError("ComfyUI job timed out")
+
+    @staticmethod
+    def _last_error(messages: Any) -> dict[str, Any]:
+        if not isinstance(messages, list):
+            return {}
+        for entry in reversed(messages):
+            if isinstance(entry, (list, tuple)) and len(entry) == 2:
+                name, data = entry
+                if name in {"execution_error", "execution_interrupted"} and isinstance(data, dict):
+                    return data
+        return {}
+
+    @classmethod
+    def _replay_history(cls, item: dict[str, Any], event: EventCallback | None) -> None:
+        if not event:
+            return
+        messages = (item.get("status") or {}).get("messages") or []
+        for entry in messages:
+            if isinstance(entry, (list, tuple)) and len(entry) == 2:
+                name, data = entry
+                if isinstance(data, dict):
+                    event({"type": str(name), "data": data})
 
     @staticmethod
     def client_id() -> str:

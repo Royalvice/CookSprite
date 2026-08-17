@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { PhArchiveTray as ArchiveTray, PhArrowRight as ArrowRight, PhFilmStrip as FilmStrip, PhFunnel as Funnel, PhMagnifyingGlass as MagnifyingGlass, PhSparkle as Sparkle, PhStar as Star, PhTrash as Trash, PhUploadSimple as UploadSimple } from "@phosphor-icons/vue";
 import ArtifactCard from "../components/ArtifactCard.vue";
@@ -22,13 +22,24 @@ const filtered = computed(() => store.allArtifacts.filter((artifact) => {
 }));
 const usage = computed(() => store.allArtifacts.reduce((sum, item) => sum + item.size, 0));
 
-onMounted(async () => { store.allArtifacts = await api.artifacts(`trashed=${showTrash.value}`); });
+async function refreshLibrary() {
+  selected.value = null;
+  preview.value = null;
+  if (!store.currentProject) {
+    store.allArtifacts = [];
+    return;
+  }
+  const params = new URLSearchParams({ project_id: store.currentProject.id, trashed: String(showTrash.value) });
+  store.allArtifacts = await api.artifacts(params.toString());
+}
+onMounted(refreshLibrary);
+watch(() => store.currentProject?.id, refreshLibrary);
 async function importFiles(files: File[]) {
   for (const file of files) await store.upload(file, inferArtifactKind(file) || "Image");
 }
 async function trash(artifact: ArtifactRef) {
   const changed = showTrash.value ? await api.restore(artifact.id) : await api.trash(artifact.id);
-  store.allArtifacts = store.allArtifacts.filter((item) => item.id !== changed.id);
+  await refreshLibrary();
   selected.value = null;
 }
 async function favorite(artifact: ArtifactRef) {
@@ -52,7 +63,7 @@ function useInStudio(artifact: ArtifactRef, intent: "reference" | "animate" | "n
     <div class="library-toolbar panel">
       <label class="search-field"><MagnifyingGlass :size="18" /><span class="visually-hidden">{{ $t("library.search") }}</span><input v-model="search" :placeholder="$t('library.search')" /></label>
       <label class="select-field"><Funnel :size="17" /><select v-model="kind"><option value="all">{{ $t("library.allTypes") }}</option><option v-for="item in ['Image','SpriteSheet','FrameSeq','Video','NormalMap','CookSpritePack']" :key="item">{{ item }}</option></select></label>
-      <button class="text-button" :class="{ active: showTrash }" @click="showTrash = !showTrash; api.artifacts(`trashed=${showTrash}`).then((items) => store.allArtifacts = items)"><Trash :size="17" />{{ $t("library.trash") }}</button>
+      <button class="text-button" :class="{ active: showTrash }" @click="showTrash = !showTrash; refreshLibrary()"><Trash :size="17" />{{ $t("library.trash") }}</button>
     </div>
     <div class="library-layout">
       <section class="library-grid" aria-live="polite">

@@ -18,6 +18,9 @@ ACTION_IDS = (
     "sheet.slice",
     "video.sample",
     "normal.generate",
+    "image.views",
+    "image.pixelize",
+    "image.cutout",
 )
 
 

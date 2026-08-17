@@ -73,6 +73,26 @@ No Comfy prompt ID or filesystem path is public.
 `checked_at`, and a readable live-probe error. A stored capability snapshot is
 not proof that ComfyUI is currently online.
 
+Every live `RunView` also carries `runtime_state`. It is the provider-neutral
+projection of the connected ComfyUI event stream, so Web and CLI clients do not
+need to parse ComfyUI WebSocket payloads:
+
+```json
+{
+  "phase": "sampling",
+  "message": "Sampler · 12/20",
+  "model_status": "ready",
+  "current": {"label": "Sampler", "kind": "sampling", "status": "executing", "step": 12, "total": 20, "progress": 0.6},
+  "queue_remaining": 0
+}
+```
+
+Queue status, model loading, cached/completed nodes, node progress, success,
+interruption, and structured runtime errors are updated through the same SSE
+stream. Errors retain a stable `code` such as `out_of_memory` plus the readable
+provider message and optional node/trace detail; the browser never connects to
+ComfyUI directly.
+
 Errors use a stable detail object:
 
 ```json

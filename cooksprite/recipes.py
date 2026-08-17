@@ -71,6 +71,145 @@ def _model_map(report: dict[str, Any]) -> dict[str, list[str]]:
     return {}
 
 
+def _choices(report: dict[str, Any], node_id: str, name: str) -> set[str]:
+    spec = (report.get("object_info") or {}).get(node_id) or {}
+    value = ((spec.get("input") or {}).get("required") or {}).get(name) or []
+    choices = value[0] if isinstance(value, list) and value and isinstance(value[0], list) else value
+    return {str(item) for item in choices} if isinstance(choices, list) else set()
+
+
+def _unet_recipe(
+    report: dict[str, Any],
+    model: str,
+    *,
+    recipe_id: str,
+    label: str,
+    clip: str,
+    clip_type: str,
+    vae: str,
+    shift: float | None,
+    i2i: bool = False,
+) -> Recipe | None:
+    """Create a sealed adapter only when every selected loader input is real."""
+
+    nodes = set((report.get("object_info") or {}).keys())
+    required = {
+        "UNETLoader",
+        "CLIPLoader",
+        "VAELoader",
+        "CLIPTextEncode",
+        "ConditioningZeroOut",
+        "KSampler",
+        "VAEDecode",
+    }
+    latent_node = "EmptySD3LatentImage"
+    required.add("RepeatLatentBatch" if i2i else latent_node)
+    if shift is not None:
+        required.add("ModelSamplingAuraFlow")
+    if i2i:
+        required.update({"ImageScale", "VAEEncode"})
+    if not required.issubset(nodes):
+        return None
+    if model not in _choices(report, "UNETLoader", "unet_name"):
+        return None
+    if clip not in _choices(report, "CLIPLoader", "clip_name"):
+        return None
+    if clip_type not in _choices(report, "CLIPLoader", "type"):
+        return None
+    if vae not in _choices(report, "VAELoader", "vae_name"):
+        return None
+    workflow: dict[str, Any] = {
+        "model": {
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": model, "weight_dtype": "default"},
+        },
+        "clip": {
+            "class_type": "CLIPLoader",
+            "inputs": {"clip_name": clip, "type": clip_type},
+        },
+        "positive": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"clip": ["clip", 0], "text": ""},
+        },
+        "negative": {
+            "class_type": "ConditioningZeroOut",
+            "inputs": {"conditioning": ["positive", 0]},
+        },
+        "sample": {
+            "class_type": "KSampler",
+            "inputs": {
+                "model": ["model", 0],
+                "seed": 0,
+                "steps": 8,
+                "cfg": 1.0,
+                "sampler_name": "res_multistep" if "res_multistep" in _choices(report, "KSampler", "sampler_name") else "euler",
+                "scheduler": "simple",
+                "positive": ["positive", 0],
+                "negative": ["negative", 0],
+                "latent_image": ["latent", 0],
+                "denoise": 1.0,
+            },
+        },
+        "vae": {"class_type": "VAELoader", "inputs": {"vae_name": vae}},
+        "decode": {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["sample", 0], "vae": ["vae", 0]},
+        },
+    }
+    if shift is not None:
+        workflow["shift"] = {
+            "class_type": "ModelSamplingAuraFlow",
+            "inputs": {"model": ["model", 0], "shift": shift},
+        }
+        workflow["sample"]["inputs"]["model"] = ["shift", 0]
+    if i2i:
+        workflow["source"] = {
+            "class_type": "ImageScale",
+            "inputs": {
+                "image": "",
+                "upscale_method": "nearest-exact",
+                "width": 1024,
+                "height": 1024,
+                "crop": "disabled",
+            },
+        }
+        workflow["encode"] = {
+            "class_type": "VAEEncode",
+            "inputs": {"pixels": ["source", 0], "vae": ["vae", 0]},
+        }
+        workflow["latent"] = {
+            "class_type": "RepeatLatentBatch",
+            "inputs": {"samples": ["encode", 0], "amount": 1},
+        }
+        workflow["sample"]["inputs"]["latent_image"] = ["latent", 0]
+        workflow["sample"]["inputs"]["denoise"] = 0.65
+        slots = {
+            "text": "positive.text",
+            "seed": "sample.seed",
+            "count": "latent.amount",
+            "image": "source.image",
+            "strength": "sample.denoise",
+        }
+    else:
+        workflow["latent"] = {
+            "class_type": latent_node,
+            "inputs": {"width": 1024, "height": 1024, "batch_size": 1},
+        }
+        slots = {"text": "positive.text", "seed": "sample.seed", "count": "latent.batch_size"}
+    return Recipe(
+        id=recipe_id,
+        label=label,
+        family="comfy.image.unet",
+        actions=["image.generate"],
+        modes=["i2i" if i2i else "t2i"],
+        checkpoint=model,
+        workflow=workflow,
+        slots=slots,
+        output=["decode", 0],
+        source="discovered",
+    )
+
+
 def discover_recipes(report: dict[str, Any]) -> list[Recipe]:
     """Build only recipes whose complete structural requirements are present."""
 
@@ -97,6 +236,33 @@ def discover_recipes(report: dict[str, Any]) -> list[Recipe]:
                     checkpoint=checkpoint,
                 )
             )
+
+    # These are explicit model/workflow adapters, not filename-only guesses:
+    # each candidate must be present in ComfyUI's loader choices and every
+    # graph node/port used by the adapter must be discovered in object_info.
+    diffusion_models = set(models.get("diffusion_models", []))
+    if {"UNETLoader", "CLIPLoader", "VAELoader"}.issubset(nodes):
+        profiles = (
+            ("z_image_turbo_bf16.safetensors", "Z-Image-Turbo · BF16", "qwen_3_4b.safetensors", "lumina2", "ae.safetensors", 3.0, "z-image-turbo-bf16"),
+            ("krea2_turbo_bf16.safetensors", "Krea-2 Turbo · BF16", "qwen3vl_4b_bf16.safetensors", "krea2", "qwen_image_vae.safetensors", None, "krea2-turbo-bf16"),
+        )
+        for model, label, clip, clip_type, vae, shift, stem in profiles:
+            if model not in diffusion_models:
+                continue
+            for i2i in (False, True):
+                recipe = _unet_recipe(
+                    report,
+                    model,
+                    recipe_id=f"{stem}-{'i2i' if i2i else 't2i'}",
+                    label=f"{label} · {'I2I' if i2i else 'T2I'}",
+                    clip=clip,
+                    clip_type=clip_type,
+                    vae=vae,
+                    shift=shift,
+                    i2i=i2i,
+                )
+                if recipe:
+                    recipes.append(recipe)
 
     if {"CS_LoadArtifact", "CS_StoreArtifact", "CS_NormalEstimate"}.issubset(nodes):
         recipes.append(
@@ -171,6 +337,11 @@ def runtime_manifest(
     return {
         "schema": RUNTIME_ASSETS_SCHEMA,
         "models": _model_map(report),
+        "model_sources": {},
+        "workflow_templates": report.get("workflow_templates") or {},
+        "features": report.get("features") or {},
+        "system": (report.get("system_stats") or {}).get("system") or {},
+        "defaults": {},
         "recipes": [recipe.dump() for recipe in recipes],
         "callback_url": callback_url,
     }

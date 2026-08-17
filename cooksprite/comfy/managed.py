@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import platform
@@ -10,7 +9,6 @@ import shutil
 import subprocess
 import sys
 import time
-import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 
@@ -18,15 +16,6 @@ from ..version import NODE_PACK_VERSION
 from .client import ComfyClient
 
 PINNED_COMFY_REF = "v0.32.0"
-DEFAULT_MODEL = {
-    "id": "sd15-fp16",
-    "filename": "v1-5-pruned-emaonly-fp16.safetensors",
-    "relative_path": "models/checkpoints/v1-5-pruned-emaonly-fp16.safetensors",
-    "url": "https://huggingface.co/Comfy-Org/stable-diffusion-v1-5-archive/resolve/main/v1-5-pruned-emaonly-fp16.safetensors",
-    "sha256": "e9476a13728cd75d8279f6ec8bad753a66a1957ca375a1464dc63b37db6e3916",
-    "size": 2_132_696_762,
-    "license": "CreativeML Open RAIL-M",
-}
 NVIDIA_TORCH = {
     "index": "configured package index with official PyPI fallback",
     "torch": "2.7.0",
@@ -133,6 +122,7 @@ def install_node_pack(root: str | Path, *, install_dependencies: bool = True) ->
     nodes.mkdir(parents=True, exist_ok=True)
     source = Path(__file__).parents[1] / "nodes"
     shutil.copyfile(source / "cooksprite_nodes.py", nodes / "__init__.py")
+    shutil.copyfile(source / "prompting.py", nodes / "prompting.py")
     shutil.copyfile(source / "requirements.txt", nodes / "requirements.txt")
     (nodes / "VERSION").write_text(NODE_PACK_VERSION + "\n", encoding="utf-8")
     if install_dependencies:
@@ -146,57 +136,18 @@ def install_node_pack(root: str | Path, *, install_dependencies: bool = True) ->
     return nodes
 
 
-def _download_model(comfy: Path, callback: Progress | None = None) -> Path:
-    destination = comfy / DEFAULT_MODEL["relative_path"]
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.exists() and _sha256(destination) == DEFAULT_MODEL["sha256"]:
-        _progress(callback, "default model already verified", 0.9)
-        return destination
-    partial = destination.with_suffix(destination.suffix + ".partial")
-    request = urllib.request.Request(
-        DEFAULT_MODEL["url"], headers={"User-Agent": "CookSprite-Installer/1"}
-    )
-    with urllib.request.urlopen(request, timeout=120) as response, partial.open("wb") as output:
-        total = int(response.headers.get("Content-Length") or DEFAULT_MODEL["size"])
-        received = 0
-        while True:
-            chunk = response.read(8 * 1024 * 1024)
-            if not chunk:
-                break
-            output.write(chunk)
-            received += len(chunk)
-            _progress(
-                callback,
-                f"downloading default model {received / 1024**3:.1f}/{total / 1024**3:.1f} GB",
-                0.55 + 0.3 * min(1.0, received / max(total, 1)),
-            )
-    digest = _sha256(partial)
-    if digest != DEFAULT_MODEL["sha256"]:
-        raise RuntimeError(f"default model checksum mismatch: {digest}")
-    partial.replace(destination)
-    return destination
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def install(
     root: str | Path,
     repo_url: str = "https://github.com/Comfy-Org/ComfyUI.git",
     *,
-    with_models: bool = True,
     python_executable: str | None = None,
     progress: Progress | None = None,
 ) -> Path:
-    """Install an isolated, pinned ComfyUI and the verified starter model.
+    """Install an isolated, pinned ComfyUI and CookSprite node pack.
 
-    This function is never called at CookSprite startup.  It is the explicit
-    setup transaction used by the CLI or the local Settings screen.
+    Model selection and download are deliberately outside this installer. This
+    function is never called at CookSprite startup; it is the explicit setup
+    transaction used by the CLI or the local Settings screen.
     """
 
     root = Path(root).expanduser().resolve()
@@ -244,7 +195,6 @@ def install(
     _pip_install(python, "-r", str(target / "requirements.txt"))
     _progress(progress, "installing CookSprite nodes", 0.48)
     install_node_pack(root)
-    model = _download_model(target, progress) if with_models else None
     metadata = {
         "schema": "cooksprite.managed-comfy/v1",
         "comfy_ref": PINNED_COMFY_REF,
@@ -253,7 +203,7 @@ def install(
         "accelerator": accelerator,
         "dependency_pins": COMFY_DEPENDENCY_PINS,
         "template_bundle": COMFY_TEMPLATE_BUNDLE,
-        "model": DEFAULT_MODEL if model else None,
+        "model": None,
     }
     (root / "install.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

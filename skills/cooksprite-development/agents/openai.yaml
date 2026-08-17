@@ -1,0 +1,4 @@
+interface:
+  display_name: "CookSprite Development"
+  short_description: "Develop CookSprite typed capabilities"
+  default_prompt: "Use $cooksprite-development to add or change a CookSprite capability through its typed Action, Task, Workflow, Tool, ComfyUI, API, CLI, and Vue contracts."

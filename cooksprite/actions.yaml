@@ -201,3 +201,32 @@ actions:
     controls:
       - {id: strength, type: range, default: 1, min: 0, max: 2, step: 0.05, i18n: {zh-CN: {name: 法线强度}, en: {name: Normal strength}}}
       - {id: flip_y, type: toggle, default: false, i18n: {zh-CN: {name: 翻转 Y}, en: {name: Flip Y}}}
+
+  - id: image.views
+    i18n:
+      zh-CN: {name: 创建视角组, description: 从一张参考图创建一组视角图片}
+      en: {name: Create image views, description: Create a batch of views from one reference image}
+    accepts:
+      source: {type: Image, required: true, max: 1}
+    produces: [ImageBatch]
+    controls: []
+
+  - id: image.pixelize
+    i18n:
+      zh-CN: {name: 像素化图片, description: 把高分辨率图片转换为像素化图片}
+      en: {name: Pixelize image, description: Convert a high-resolution image into pixel art}
+    accepts:
+      source: {type: Image, required: true, max: 1}
+    produces: [Image]
+    controls:
+      - {id: target_width, type: number, default: 128, min: 8, max: 4096, step: 1, i18n: {zh-CN: {name: 目标宽度}, en: {name: Target width}}}
+      - {id: target_height, type: number, default: 128, min: 8, max: 4096, step: 1, i18n: {zh-CN: {name: 目标高度}, en: {name: Target height}}}
+
+  - id: image.cutout
+    i18n:
+      zh-CN: {name: 抠图, description: 从图片中提取带透明通道的主体}
+      en: {name: Cut out image, description: Extract the subject as an RGBA image}
+    accepts:
+      source: {type: Image, required: true, max: 1}
+    produces: [Image]
+    controls: []

@@ -5,6 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import os
+import shutil
+import signal
+import socket
+import subprocess
 import sys
 import threading
 import time
@@ -15,7 +20,6 @@ import httpx
 
 from cooksprite.client import CookSpriteClient
 from cooksprite.comfy.managed import (
-    DEFAULT_MODEL,
     install,
     install_node_pack,
     launch,
@@ -63,7 +67,14 @@ def wait_for_run(http: CookSpriteClient, run: dict[str, Any]) -> int:
         if response.status_code >= 400:
             return show(response)
         run = response.json()
-        print(f"{run['status']} {run['progress']:.0%}", file=sys.stderr)
+        runtime_state = run.get("runtime_state") or {}
+        message = runtime_state.get("message") or run.get("message") or ""
+        print(f"{run['status']} {run['progress']:.0%} {message}", file=sys.stderr)
+        if runtime_state.get("error"):
+            print(
+                f"ERROR {runtime_state['error'].get('code')}: {runtime_state['error'].get('message')}",
+                file=sys.stderr,
+            )
     print(json.dumps(run, ensure_ascii=False, indent=2))
     return 0 if run["status"] == "succeeded" else 1
 
@@ -281,22 +292,8 @@ def cmd_dev(args: argparse.Namespace) -> int:
 
 
 def cmd_install(args: argparse.Namespace) -> int:
-    if not args.no_models and not args.accept_model_license:
-        model = DEFAULT_MODEL
-        print(
-            "Default model download requires explicit consent:\n"
-            f"  {model['filename']}\n"
-            f"  source: {model['url']}\n"
-            f"  license: {model['license']}\n"
-            f"  size: {model['size'] / 1024**3:.2f} GiB\n"
-            f"  destination: {Path(args.dir).expanduser() / 'ComfyUI' / model['relative_path']}\n"
-            "Run again with --accept-model-license, or use --no-models.",
-            file=sys.stderr,
-        )
-        return 2
     target = install(
         args.dir,
-        with_models=not args.no_models,
         python_executable=args.python,
         progress=lambda message, value: print(f"{value:>6.1%} {message}", file=sys.stderr),
     )
@@ -304,17 +301,130 @@ def cmd_install(args: argparse.Namespace) -> int:
     return 0
 
 
+def _port_is_listening(host: str, port: int) -> bool:
+    probe_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.15)
+        return sock.connect_ex((probe_host, port)) == 0
+
+
+def _next_available_port(
+    host: str,
+    preferred: int,
+    *,
+    reserved: set[int] | None = None,
+    attempts: int = 100,
+) -> int:
+    reserved = reserved or set()
+    for port in range(preferred, preferred + attempts):
+        if port not in reserved and not _port_is_listening(host, port):
+            return port
+    raise RuntimeError(
+        f"no available port found near {host}:{preferred}; tried {attempts} ports"
+    )
+
+
+def _frontend_dir(requested: str | None) -> Path:
+    candidates = []
+    if requested:
+        candidates.append(Path(requested).expanduser())
+    candidates.extend(
+        [
+            Path.cwd() / "web",
+            Path(__file__).resolve().parents[1] / "web",
+        ]
+    )
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if (resolved / "package.json").is_file():
+            return resolved
+    searched = ", ".join(str(candidate.resolve()) for candidate in candidates)
+    raise RuntimeError(
+        "CookSprite frontend source was not found; pass --frontend-dir <web> "
+        f"or run the packaged frontend separately. searched: {searched}"
+    )
+
+
+def _start_frontend(
+    args: argparse.Namespace,
+    *,
+    frontend_port: int,
+    api_port: int,
+) -> subprocess.Popen[bytes]:
+    frontend_root = _frontend_dir(args.frontend_dir)
+    npm = shutil.which(args.npm)
+    if not npm:
+        raise RuntimeError(
+            f"{args.npm} was not found; install Node.js/npm or pass --no-frontend "
+            "to start only the API and ComfyUI"
+        )
+    command = [
+        npm,
+        "run",
+        "dev",
+        "--",
+        "--host",
+        args.frontend_host,
+        "--port",
+        str(frontend_port),
+        "--strictPort",
+    ]
+    environment = os.environ.copy()
+    proxy_host = "127.0.0.1" if args.host in {"0.0.0.0", "::"} else args.host
+    environment["COOKSPRITE_API_PROXY_TARGET"] = f"http://{proxy_host}:{api_port}"
+    print(
+        f"Starting CookSprite frontend at http://127.0.0.1:{frontend_port} "
+        f"from {frontend_root}",
+        file=sys.stderr,
+    )
+    return subprocess.Popen(
+        command,
+        cwd=frontend_root,
+        env=environment,
+        start_new_session=os.name != "nt",
+    )
+
+
+def _stop_frontend(process: subprocess.Popen[bytes] | None) -> None:
+    if not process or process.poll() is not None:
+        return
+    try:
+        if os.name != "nt":
+            os.killpg(process.pid, signal.SIGTERM)
+        else:
+            process.terminate()
+        process.wait(timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        process.kill()
+
+
 def cmd_start(args: argparse.Namespace) -> int:
     import uvicorn
 
     from cooksprite.api.app import create_app
 
-    comfy_url = args.comfy_url
-    if not comfy_url:
-        launch(args.dir, host=args.comfy_host, port=args.comfy_port, cuda_device=args.cuda_device)
-        comfy_url = f"http://{args.comfy_host}:{args.comfy_port}"
-    wait_until_ready(comfy_url, timeout=args.timeout)
-    api_base = f"http://{args.host}:{args.port}"
+    api_port = _next_available_port(args.host, args.port)
+    frontend_port = None
+    if not args.no_frontend:
+        frontend_port = _next_available_port(
+            args.frontend_host,
+            args.frontend_port,
+            reserved={api_port},
+        )
+    comfy_url = None if args.no_comfy else args.comfy_url
+    runtime_location = "local" if not args.comfy_url else args.runtime_location
+    runtime_transport = "local-process" if not args.comfy_url else args.runtime_transport
+    if not args.no_comfy and not comfy_url:
+        comfy_port = _next_available_port(
+            args.comfy_host,
+            args.comfy_port,
+            reserved={api_port, frontend_port} if frontend_port else {api_port},
+        )
+        launch(args.dir, host=args.comfy_host, port=comfy_port, cuda_device=args.cuda_device)
+        comfy_url = f"http://{args.comfy_host}:{comfy_port}"
+    if comfy_url:
+        wait_until_ready(comfy_url, timeout=args.timeout)
+    api_base = f"http://{args.host}:{api_port}"
 
     def register_runtime() -> None:
         deadline = time.monotonic() + args.timeout
@@ -327,6 +437,8 @@ def cmd_start(args: argparse.Namespace) -> int:
                             "id": args.runtime,
                             "label": args.label,
                             "base_url": comfy_url,
+                            "location": runtime_location,
+                            "transport": runtime_transport,
                             "callback_url": f"{api_base}/api/v1",
                         },
                     )
@@ -336,9 +448,29 @@ def cmd_start(args: argparse.Namespace) -> int:
             except (httpx.HTTPError, OSError):
                 time.sleep(0.25)
 
-    threading.Thread(target=register_runtime, daemon=True).start()
-    uvicorn.run(create_app(args.data_dir), host=args.host, port=args.port)
-    return 0
+    frontend_process = None
+    try:
+        if comfy_url:
+            threading.Thread(target=register_runtime, daemon=True).start()
+        if not args.no_frontend:
+            frontend_process = _start_frontend(
+                args,
+                frontend_port=frontend_port,
+                api_port=api_port,
+            )
+        print(f"Starting CookSprite API at {api_base}", file=sys.stderr)
+        previous_public_api_url = os.environ.get("COOKSPRITE_PUBLIC_API_URL")
+        os.environ["COOKSPRITE_PUBLIC_API_URL"] = f"{api_base}/api/v1"
+        try:
+            uvicorn.run(create_app(args.data_dir), host=args.host, port=api_port)
+        finally:
+            if previous_public_api_url is None:
+                os.environ.pop("COOKSPRITE_PUBLIC_API_URL", None)
+            else:
+                os.environ["COOKSPRITE_PUBLIC_API_URL"] = previous_public_api_url
+        return 0
+    finally:
+        _stop_frontend(frontend_process)
 
 
 def cmd_list(args: argparse.Namespace) -> int:
@@ -376,7 +508,6 @@ def cmd_comfy(args: argparse.Namespace) -> int:
         print(
             install(
                 args.dir,
-                with_models=not args.no_models,
                 python_executable=args.python,
                 progress=lambda message, value: print(f"{value:>6.1%} {message}", file=sys.stderr),
             )
@@ -400,6 +531,29 @@ def cmd_comfy(args: argparse.Namespace) -> int:
         for recipe in report.get("recipes", []):
             print(f"  {recipe['id']:<34} {recipe['label']} [{', '.join(recipe['modes'])}]")
         return 0
+    if args.action == "probe-local":
+        with client(args.api) as http:
+            return show(http.post("/api/v1/local/probe"))
+    if args.action == "select":
+        with client(args.api) as http:
+            return show(http.post(f"/api/v1/runtimes/{args.runtime}/select"))
+    if args.action == "capabilities":
+        with client(args.api) as http:
+            return show(http.get(f"/api/v1/runtimes/{args.runtime}/capabilities"))
+    if args.action == "defaults" and getattr(args, "defaults_command", None) == "set":
+        with client(args.api) as http:
+            return show(
+                http.put(
+                    f"/api/v1/runtimes/{args.runtime}/defaults/{args.action_id}",
+                    json={"workflow_id": args.workflow, "model_id": args.model},
+                )
+            )
+    if args.action == "defaults":
+        if not args.runtime:
+            print("comfy defaults requires --runtime", file=sys.stderr)
+            return 2
+        with client(args.api) as http:
+            return show(http.get(f"/api/v1/runtimes/{args.runtime}/defaults"))
     if args.action == "import":
         with client(args.api) as http:
             return show(
@@ -409,6 +563,8 @@ def cmd_comfy(args: argparse.Namespace) -> int:
                         "id": args.runtime,
                         "label": args.label,
                         "base_url": args.url,
+                        "location": args.location,
+                        "transport": args.transport,
                         "callback_url": args.callback_url,
                     },
                 )
@@ -590,7 +746,6 @@ def parser() -> argparse.ArgumentParser:
     comfy_commands = comfy.add_subparsers(dest="action", required=True)
     comfy_install = comfy_commands.add_parser("install")
     comfy_install.add_argument("dir")
-    comfy_install.add_argument("--no-models", action="store_true")
     comfy_install.add_argument("--python")
     comfy_install.set_defaults(func=cmd_comfy)
     comfy_nodes = comfy_commands.add_parser("install-nodes")
@@ -601,12 +756,37 @@ def parser() -> argparse.ArgumentParser:
     comfy_import.add_argument("--runtime", required=True)
     comfy_import.add_argument("--label", default="ComfyUI")
     comfy_import.add_argument("--url", required=True)
+    comfy_import.add_argument("--location", choices=["local", "remote"], default="remote")
+    comfy_import.add_argument("--transport", default="http")
     comfy_import.add_argument("--callback-url")
     comfy_import.set_defaults(func=cmd_comfy)
     comfy_doctor = comfy_commands.add_parser("doctor")
     comfy_doctor.add_argument("--runtime", required=True)
     comfy_doctor.add_argument("--json", action="store_true")
     comfy_doctor.set_defaults(func=cmd_comfy)
+    comfy_probe = comfy_commands.add_parser("probe-local", help="probe ComfyUI on the API host")
+    comfy_probe.set_defaults(func=cmd_comfy)
+    comfy_select = comfy_commands.add_parser("select", help="select the active ComfyUI runtime")
+    comfy_select.add_argument("--runtime", required=True)
+    comfy_select.set_defaults(func=cmd_comfy)
+    comfy_capabilities = comfy_commands.add_parser(
+        "capabilities", help="show one runtime's discovered capabilities"
+    )
+    comfy_capabilities.add_argument("--runtime", required=True)
+    comfy_capabilities.set_defaults(func=cmd_comfy)
+    comfy_defaults = comfy_commands.add_parser("defaults", help="show or set per-runtime Action defaults")
+    comfy_defaults.add_argument("--runtime")
+    comfy_defaults.add_argument("--action", dest="action_id")
+    comfy_defaults.add_argument("--workflow")
+    comfy_defaults.add_argument("--model")
+    defaults_commands = comfy_defaults.add_subparsers(dest="defaults_command")
+    defaults_set = defaults_commands.add_parser("set", help="set one Action default")
+    defaults_set.add_argument("--runtime", required=True)
+    defaults_set.add_argument("--action", dest="action_id", required=True)
+    defaults_set.add_argument("--workflow", required=True)
+    defaults_set.add_argument("--model", required=True)
+    defaults_set.set_defaults(func=cmd_comfy)
+    comfy_defaults.set_defaults(func=cmd_comfy)
     comfy_run = comfy_commands.add_parser("run")
     comfy_run.add_argument("dir")
     comfy_run.add_argument("--host", default="127.0.0.1")
@@ -629,20 +809,38 @@ def parser() -> argparse.ArgumentParser:
     dev_sync.set_defaults(func=cmd_dev)
 
     install_command = commands.add_parser(
-        "install", help="install isolated ComfyUI, CookSprite nodes, and optional starter model"
+        "install", help="install isolated ComfyUI and CookSprite nodes"
     )
     install_command.add_argument("--dir", default="~/.cooksprite/runtime")
-    install_command.add_argument("--no-models", action="store_true")
-    install_command.add_argument("--accept-model-license", action="store_true")
     install_command.add_argument("--python")
     install_command.set_defaults(func=cmd_install)
 
-    start = commands.add_parser("start", help="start CookSprite and a local or remote ComfyUI")
+    start = commands.add_parser(
+        "start",
+        help="start the API and frontend, plus a managed or existing ComfyUI runtime",
+    )
     start.add_argument("--dir", default="~/.cooksprite/runtime")
     start.add_argument("--data-dir", default="~/.cooksprite/data")
     start.add_argument("--host", default="127.0.0.1")
     start.add_argument("--port", type=int, default=8000)
-    start.add_argument("--comfy-url", help="use an existing local or remote ComfyUI")
+    comfy_start = start.add_mutually_exclusive_group()
+    comfy_start.add_argument(
+        "--no-comfy",
+        action="store_true",
+        help="start only the CookSprite API and frontend; leave ComfyUI offline",
+    )
+    start.add_argument(
+        "--no-frontend",
+        action="store_true",
+        help="start the API and ComfyUI without starting the Vite frontend",
+    )
+    start.add_argument("--frontend-dir", help="frontend web directory containing package.json")
+    start.add_argument("--frontend-host", default="127.0.0.1")
+    start.add_argument("--frontend-port", type=int, default=5173)
+    start.add_argument("--npm", default="npm", help="npm executable used to start Vite")
+    comfy_start.add_argument("--comfy-url", help="use an existing local or remote ComfyUI")
+    start.add_argument("--runtime-location", choices=["local", "remote"], default="remote")
+    start.add_argument("--runtime-transport", default="http")
     start.add_argument("--comfy-host", default="127.0.0.1")
     start.add_argument("--comfy-port", type=int, default=8188)
     start.add_argument("--cuda-device", type=int)

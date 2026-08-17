@@ -261,7 +261,7 @@ def run() -> None:
             page.locator(".runtime-list article").filter(has_text="Local ComfyUI")
         ).to_contain_text("就绪")
         expect(page.locator(".managed-setup-card")).to_contain_text("本机环境已就绪")
-        expect(page.locator(".managed-setup-card")).to_contain_text(
+        expect(page.locator(".managed-setup-card")).not_to_contain_text(
             "v1-5-pruned-emaonly-fp16.safetensors"
         )
         assert_page_geometry(page, "settings-1440")

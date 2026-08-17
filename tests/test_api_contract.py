@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import importlib
+import json
+import re
 import time
+from pathlib import Path
 from typing import ClassVar
 
 from fastapi.testclient import TestClient
@@ -11,6 +15,22 @@ from cooksprite.catalog import builtin_tools
 from cooksprite.compiler import CompileError, Compiler
 from cooksprite.domain import ValueRef, WorkflowRevision
 from cooksprite.execution import ExecutionPlan
+
+
+def test_project_id_uses_name_prefix_and_short_uuid(tmp_path):
+    client = TestClient(create_app(tmp_path))
+
+    first = client.post(
+        "/api/v1/projects", json={"name": "Test 1 / Hero!", "type": "character"}
+    ).json()
+    second = client.post(
+        "/api/v1/projects", json={"name": "Test 1 / Hero!", "type": "character"}
+    ).json()
+
+    assert re.fullmatch(r"prj_test_1_hero_[0-9a-f]{8}", first["id"])
+    assert re.fullmatch(r"prj_test_1_hero_[0-9a-f]{8}", second["id"])
+    assert first["id"] != second["id"]
+    assert Path(first["directory"]).name == first["id"]
 
 
 class FakeComfy:
@@ -150,6 +170,63 @@ def test_persisted_fake_runtime_stays_offline_in_normal_process(tmp_path):
     assert all(not action["available"] for action in product_client.get("/api/v1/actions").json())
 
 
+def test_runtime_identity_capabilities_and_project_workspace(tmp_path, monkeypatch):
+    FakeComfy.online = True
+    c = TestClient(create_app(tmp_path, FakeComfy, allow_test_runtime=True))
+    response = c.post(
+        "/api/v1/runtimes",
+        json={
+            "id": "h20-gpu0",
+            "label": "H20-baidu · GPU0",
+            "base_url": "http://127.0.0.1:18188",
+            "location": "remote",
+            "transport": "ssh-tunnel",
+        },
+    )
+    assert response.status_code == 200
+    assert c.post("/api/v1/runtimes/h20-gpu0/doctor").status_code == 200
+    listed = c.get("/api/v1/runtimes").json()
+    assert len(listed) == 1
+    assert listed[0]["location"] == "remote"
+    assert listed[0]["transport"] == "ssh-tunnel"
+    assert listed[0]["active"] is True
+
+    # Reconnecting the same stable ID updates one row instead of appending one.
+    assert c.post(
+        "/api/v1/runtimes",
+        json={
+            "id": "h20-gpu0",
+            "label": "H20-baidu · GPU0 (updated)",
+            "base_url": "http://127.0.0.1:18188",
+            "location": "remote",
+            "transport": "ssh-tunnel",
+        },
+    ).status_code == 200
+    assert len(c.get("/api/v1/runtimes").json()) == 1
+    capabilities = c.get("/api/v1/runtimes/h20-gpu0/capabilities").json()
+    assert set(capabilities["categories"]) == {"image", "text", "video", "tools"}
+    assert capabilities["categories"]["image"]["models"][0]["source"] == "User existing"
+
+    project = c.post("/api/v1/projects", json={"name": "Workspace", "type": "static"}).json()
+    directory = Path(project["directory"])
+    assert directory.is_dir()
+    artifact = c.post(
+        "/api/v1/artifacts",
+        params={"project_id": project["id"], "kind": "Image", "title": "hero.png"},
+        content=b"not-a-real-image-but-a-typed-test-artifact",
+    ).json()
+    assert (directory / f"{artifact['id']}.png").is_file()
+    manifest = json.loads((directory / "project.json").read_text(encoding="utf-8"))
+    assert manifest["project"]["id"] == project["id"]
+    assert manifest["artifacts"][0]["id"] == artifact["id"]
+    assert c.get(f"/api/v1/projects/{project['id']}/directory").json()["path"] == str(directory)
+
+    module = importlib.import_module("cooksprite.api.app")
+    monkeypatch.setattr(module.subprocess, "Popen", lambda *args, **kwargs: None)
+    opened = c.post(f"/api/v1/projects/{project['id']}/directory/open").json()
+    assert opened["opened"] is True
+
+
 def test_versioned_definitions_candidates_and_comfy_compilation(tmp_path):
     c = TestClient(create_app(tmp_path, FakeComfy, allow_test_runtime=True))
     ready(c)
@@ -187,10 +264,14 @@ def test_versioned_definitions_candidates_and_comfy_compilation(tmp_path):
             break
         time.sleep(0.02)
     assert state["status"] == "succeeded"
+    assert state["runtime_state"]["phase"] == "completed"
     graph = FakeComfy.submitted[-1]
     assert any(n["class_type"] == "CS_NormalEstimate" for n in graph.values())
     assert any(n["class_type"] == "CS_StoreArtifact" for n in graph.values())
     assert "private-prompt" not in str(state)
+    events = c.get("/api/v1/runs/" + run.json()["id"] + "/events")
+    assert events.status_code == 200
+    assert '"runtime_state"' in events.text
 
 
 def test_rejects_nonpersistable_workflow_output(tmp_path):

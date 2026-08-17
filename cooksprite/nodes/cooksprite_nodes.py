@@ -8,45 +8,33 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import tempfile
 import urllib.parse
 import urllib.request
 
 import numpy as np
-import torch
 from PIL import Image
 
-CATEGORY_PROMPTS = {
-    "character": "a single full-body game character, centered, complete silhouette",
-    "weapon": "a single game weapon, centered, fully visible",
-    "prop": "a single game prop, centered, fully visible",
-    "terrain": "a seamless game terrain tile, orthographic",
-    "scene": "a single isolated game environment element",
-    "vfx": "a single game visual effect, centered",
-}
-ACTION_PROMPTS = {
-    "idle": "idle breathing animation keyframes",
-    "walk": "walk cycle animation keyframes",
-    "run": "run cycle animation keyframes",
-    "attack": "attack animation keyframes",
-    "cast": "spell casting animation keyframes",
-    "hit": "hit reaction animation keyframes",
-    "jump": "jump animation keyframes",
-    "death": "fall down animation keyframes",
-}
-DIRECTION_PROMPTS = {
-    "n": "facing north, rear view",
-    "ne": "facing north-east",
-    "e": "facing east, side view",
-    "se": "facing south-east",
-    "s": "facing south, front view",
-    "sw": "facing south-west",
-    "w": "facing west, side view",
-    "nw": "facing north-west",
-}
+try:  # Prompt Tool tests and API tooling do not need the compute-only torch dependency.
+    import torch
+except ImportError:  # pragma: no cover - ComfyUI always supplies torch at node runtime.
+    torch = None
+
+from .prompting import (
+    Action,
+    ImagePromptRequest,
+    ModelFamily,
+    MotionDirection,
+    PromptMode,
+    SpritePromptCompiler,
+    VideoPromptRequest,
+)
 
 
 def _tensor(image: Image.Image):
+    if torch is None:
+        raise RuntimeError("CookSprite media nodes require ComfyUI's torch runtime")
     pixels = np.array(image, dtype=np.float32, copy=True) / 255.0
     return torch.from_numpy(pixels).unsqueeze(0)
 
@@ -136,7 +124,12 @@ class CS_StoreArtifact:
 
 
 class CS_CompilePromptPacket:
-    """Compile CookSprite prompt engineering inside the compute plane."""
+    """Compile a model-neutral CookSprite prompt packet inside ComfyUI.
+
+    The seven required fields are the original node contract.  The optional
+    scalar fields extend it without invalidating already-saved Comfy graphs.
+    No model, CLIP encoder, or API call is touched here.
+    """
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -149,41 +142,102 @@ class CS_CompilePromptPacket:
                 "animation": ("STRING", {"default": "idle"}),
                 "view": ("STRING", {"default": "level"}),
                 "direction": ("STRING", {"default": "s"}),
-            }
+            },
+            "optional": {
+                "task": ("STRING", {"default": "image"}),
+                "mode": ("STRING", {"default": "t2i"}),
+                "caption": ("STRING", {"default": "", "multiline": True}),
+                "action": ("STRING", {"default": "idle"}),
+                "camera_preset": ("STRING", {"default": "eye_level"}),
+                "orientation": ("STRING", {"default": "front"}),
+                "facing": ("STRING", {"default": "right"}),
+                "model": ("STRING", {"default": "generic"}),
+                "width": ("INT", {"default": 512, "min": 1, "max": 8192}),
+                "height": ("INT", {"default": 512, "min": 1, "max": 8192}),
+                "background": ("STRING", {"default": "bright fluorescent green near #00FF00"}),
+                "edit_instruction": ("STRING", {"default": "", "multiline": True}),
+                "negative_terms": ("STRING", {"default": "", "multiline": True}),
+            },
         }
 
-    RETURN_TYPES = ("STRING", "STRING")
-    RETURN_NAMES = ("positive", "negative")
+    RETURN_TYPES = ("STRING", "STRING", "STRING")
+    RETURN_NAMES = ("prompt", "negative_prompt", "metadata")
     FUNCTION = "compile"
     CATEGORY = "CookSprite/Prompt"
 
-    def compile(self, action_id, prompt, category, style, animation, view, direction):
-        user = str(prompt or "").strip()
-        negative = (
-            "cropped, cut off, multiple views, contact sheet, text, watermark, logo, "
-            "photographic background, gradient background, shadow on background"
+    def compile(
+        self,
+        action_id,
+        prompt,
+        category,
+        style,
+        animation,
+        view,
+        direction,
+        task="image",
+        mode="t2i",
+        caption="",
+        action="",
+        camera_preset="eye_level",
+        orientation="front",
+        facing="right",
+        model="generic",
+        width=512,
+        height=512,
+        background="bright fluorescent green near #00FF00",
+        edit_instruction="",
+        negative_terms="",
+    ):
+        compiler = SpritePromptCompiler()
+        task_value = str(task or "").strip().lower()
+        action_value = str(action or animation or "idle").strip().lower()
+        caption_value = str(caption or prompt or category or "game sprite asset").strip()
+        terms = tuple(
+            item.strip()
+            for item in re.split(r"[,\n]", str(negative_terms or ""))
+            if item.strip()
         )
-        if action_id == "animation.generate":
-            parts = [
-                ACTION_PROMPTS.get(str(animation), "animation keyframes"),
-                "orthographic game sprite",
-                "45 degree top-down view" if view == "top45" else "level view",
-                DIRECTION_PROMPTS.get(str(direction), "front view"),
-                "preserve the same character identity, outfit, proportions and colors",
-                "one pose per image",
-                "flat pure chroma green background, RGB 0 255 0",
-            ]
+        if task_value == "video" or str(action_id).startswith("animation"):
+            result = compiler.compile_video(
+                VideoPromptRequest(
+                    caption=caption_value,
+                    action=action_value,
+                    mode=mode or "i2v",
+                    orientation=orientation or "front",
+                    facing=facing or "right",
+                    camera_preset=camera_preset or ("top45" if view == "top45" else "level"),
+                    direction={
+                        "n": "away_from_camera",
+                        "s": "in_place",
+                    }.get(str(direction), "in_place"),
+                    model=model or ModelFamily.GENERIC.value,
+                    resolution=(int(width), int(height)),
+                    background=background or "bright fluorescent green near #00FF00",
+                    negative_terms=terms,
+                )
+            )
         else:
-            parts = [
-                CATEGORY_PROMPTS.get(str(category), "a single game asset"),
-                "pixel art, crisp hard pixel edges, limited palette, no antialiasing"
-                if style == "pixel"
-                else "clean game concept art",
-                "flat pure chroma green background, RGB 0 255 0",
-            ]
-        if user:
-            parts.insert(0, user)
-        return (", ".join(parts), negative)
+            result = compiler.compile_image(
+                ImagePromptRequest(
+                    caption=caption_value,
+                    mode=mode or "t2i",
+                    style=style or "pixel",
+                    category=category or "character",
+                    camera_preset=camera_preset or ("top45" if view == "top45" else "level"),
+                    orientation=orientation or "front",
+                    facing=facing or "right",
+                    resolution=(int(width), int(height)),
+                    background=background or "bright fluorescent green near #00FF00",
+                    edit_instruction=edit_instruction or None,
+                    negative_terms=terms,
+                )
+            )
+        metadata = json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True)
+        return (result.prompt, result.negative_prompt, metadata)
+
+
+# Semantic development alias.  It is intentionally not a second Comfy node.
+CS_PromptEnhance = CS_CompilePromptPacket
 
 
 class CS_Pixelize:
