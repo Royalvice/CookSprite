@@ -550,6 +550,8 @@ def test_prompt_tool_is_model_neutral_and_deterministic():
     assert first.metadata["compiler_version"] == "sprite_prompt_package_v1"
     assert first.camera_contract.pitch_deg == 25
     assert "clip" not in first.prompt.lower()
+    assert "2D game illustration" not in first.prompt
+    assert "pure green-screen background (#00FF00)" in first.prompt
     video = compiler.compile_video(VideoPromptRequest(caption="soup knight", action="walk"))
     assert video.task == "video"
     assert video.metadata["action"] == "walk"
@@ -564,6 +566,8 @@ def test_prompt_node_preserves_old_inputs_and_returns_three_generic_text_ports()
     )
     assert prompt.startswith("Create one complete asset")
     assert "extra characters" in negative
+    assert "pure green-screen background (#00FF00)" in prompt
+    assert "2D game illustration" not in prompt
     assert '"compiler_version": "sprite_prompt_package_v1"' in metadata
     assert CS_CompilePromptPacket.RETURN_TYPES == ("STRING", "STRING", "STRING")
     assert CS_CompilePromptPacket.RETURN_NAMES == ("prompt", "negative_prompt", "metadata")

@@ -23,6 +23,7 @@ except ImportError:  # pragma: no cover - ComfyUI always supplies torch at node 
 
 from .prompting import (
     Action,
+    DEFAULT_GREEN_SCREEN_BACKGROUND,
     ImagePromptRequest,
     ModelFamily,
     MotionDirection,
@@ -154,7 +155,7 @@ class CS_CompilePromptPacket:
                 "model": ("STRING", {"default": "generic"}),
                 "width": ("INT", {"default": 512, "min": 1, "max": 8192}),
                 "height": ("INT", {"default": 512, "min": 1, "max": 8192}),
-                "background": ("STRING", {"default": "bright fluorescent green near #00FF00"}),
+                "background": ("STRING", {"default": DEFAULT_GREEN_SCREEN_BACKGROUND}),
                 "edit_instruction": ("STRING", {"default": "", "multiline": True}),
                 "negative_terms": ("STRING", {"default": "", "multiline": True}),
             },
@@ -184,7 +185,7 @@ class CS_CompilePromptPacket:
         model="generic",
         width=512,
         height=512,
-        background="bright fluorescent green near #00FF00",
+        background=DEFAULT_GREEN_SCREEN_BACKGROUND,
         edit_instruction="",
         negative_terms="",
     ):
@@ -212,7 +213,7 @@ class CS_CompilePromptPacket:
                     }.get(str(direction), "in_place"),
                     model=model or ModelFamily.GENERIC.value,
                     resolution=(int(width), int(height)),
-                    background=background or "bright fluorescent green near #00FF00",
+                    background=background or DEFAULT_GREEN_SCREEN_BACKGROUND,
                     negative_terms=terms,
                 )
             )
@@ -227,7 +228,7 @@ class CS_CompilePromptPacket:
                     orientation=orientation or "front",
                     facing=facing or "right",
                     resolution=(int(width), int(height)),
-                    background=background or "bright fluorescent green near #00FF00",
+                    background=background or DEFAULT_GREEN_SCREEN_BACKGROUND,
                     edit_instruction=edit_instruction or None,
                     negative_terms=terms,
                 )

@@ -20,6 +20,7 @@ from .domain import (
     WorkflowDefinition,
     WorkflowRevision,
 )
+from .prompting import DEFAULT_GREEN_SCREEN_BACKGROUND
 from .recipes import Recipe, recipe_mode
 from .store import Store
 
@@ -83,7 +84,7 @@ def _core_image_workflow(
                 "model": literal("generic"),
                 "width": literal(512),
                 "height": literal(512),
-                "background": literal("bright fluorescent green near #00FF00"),
+                "background": literal(DEFAULT_GREEN_SCREEN_BACKGROUND),
                 "edit_instruction": literal(""),
                 "negative_terms": literal(""),
             },
@@ -365,7 +366,7 @@ def _imported_workflow(
                 "model": literal("generic"),
                 "width": literal(512),
                 "height": literal(512),
-                "background": literal("bright fluorescent green near #00FF00"),
+                "background": literal(DEFAULT_GREEN_SCREEN_BACKGROUND),
                 "edit_instruction": literal(""),
                 "negative_terms": literal(""),
             },

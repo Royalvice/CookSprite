@@ -154,6 +154,7 @@ class CameraContract:
 
 DEFAULT_IMAGE_NEGATIVE = "extra characters, unrelated objects, cast shadow, floor, text, logo, watermark"
 DEFAULT_VIDEO_NEGATIVE = "camera movement, scene change, extra characters, text, watermark"
+DEFAULT_GREEN_SCREEN_BACKGROUND = "pure green-screen background (#00FF00)"
 
 CATEGORY_TEXT = {
     "character": "one complete full-body game character with a clear silhouette",
@@ -175,7 +176,7 @@ class ImagePromptRequest:
     orientation: Orientation | str = Orientation.FRONT
     facing: str = "right"
     resolution: tuple[int, int] = (512, 512)
-    background: str = "bright fluorescent green near #00FF00"
+    background: str = DEFAULT_GREEN_SCREEN_BACKGROUND
     edit_instruction: str | None = None
     negative_terms: tuple[str, ...] = field(default_factory=tuple)
     camera: CameraContract | None = None
@@ -213,7 +214,7 @@ class VideoPromptRequest:
     model: ModelFamily | str = ModelFamily.GENERIC
     resolution: tuple[int, int] = (512, 512)
     duration_seconds: float | None = 5.0
-    background: str = "bright fluorescent green near #00FF00"
+    background: str = DEFAULT_GREEN_SCREEN_BACKGROUND
     action_detail: str | None = None
     negative_terms: tuple[str, ...] = field(default_factory=tuple)
     camera: CameraContract | None = None
@@ -291,7 +292,7 @@ IMAGE_STYLE_TEXT = {
         "selective dark outlines, a limited palette and controlled highlights"
     ),
     RenderStyle.HIGH_RES: (
-        "high-resolution non-pixel 2D game illustration with clean anti-aliased contours, "
+        "high-resolution non-pixel art with clean anti-aliased contours, "
         "flat cel-shaded material planes, controlled highlights and detailed surface construction"
     ),
 }
@@ -352,7 +353,7 @@ class SpritePromptCompiler:
         if edit_line:
             prompt_parts.append(edit_line)
         prompt_parts.append(
-            f"Composition: one complete subject centered with a stable baseline on {request.background}; no floor or scene."
+            f"Composition: one complete subject centered on a {request.background}; no floor, scene, or background detail."
         )
         negative = _negative_prompt(request.negative_terms, DEFAULT_IMAGE_NEGATIVE)
         request_id = f"image-{style.value}-{camera.preset.value}-{orientation.value}-{mode.value}-{width}x{height}"
@@ -580,6 +581,7 @@ def _negative_prompt(extra: Iterable[str], base: str) -> str:
 
 __all__ = [
     "COMPILER_VERSION",
+    "DEFAULT_GREEN_SCREEN_BACKGROUND",
     "Action",
     "CameraContract",
     "CameraPreset",
