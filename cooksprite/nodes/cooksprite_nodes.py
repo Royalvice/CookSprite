@@ -158,6 +158,7 @@ class CS_CompilePromptPacket:
                 "background": ("STRING", {"default": DEFAULT_GREEN_SCREEN_BACKGROUND}),
                 "edit_instruction": ("STRING", {"default": "", "multiline": True}),
                 "negative_terms": ("STRING", {"default": "", "multiline": True}),
+                "compile_prompt": ("BOOLEAN", {"default": True}),
             },
         }
 
@@ -188,7 +189,21 @@ class CS_CompilePromptPacket:
         background=DEFAULT_GREEN_SCREEN_BACKGROUND,
         edit_instruction="",
         negative_terms="",
+        compile_prompt=True,
     ):
+        if not compile_prompt:
+            raw_prompt = str(prompt if prompt is not None else caption or "")
+            metadata = json.dumps(
+                {
+                    "compiler_enabled": False,
+                    "task": str(task or "image").strip().lower(),
+                    "mode": str(mode or "t2i").strip().lower(),
+                    "prompt": raw_prompt,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            return (raw_prompt, "", metadata)
         compiler = SpritePromptCompiler()
         task_value = str(task or "").strip().lower()
         action_value = str(action or animation or "idle").strip().lower()

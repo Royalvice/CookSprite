@@ -195,6 +195,26 @@
           "type": "text"
         },
         {
+          "advanced": false,
+          "default": true,
+          "i18n": {
+            "en": {
+              "description": "Use the CookSprite compiler; off sends your exact text unchanged",
+              "name": "Prompt Compiler"
+            },
+            "zh-CN": {
+              "description": "开启后使用 CookSprite Prompt Compiler；关闭后原文直传",
+              "name": "提示词强化"
+            }
+          },
+          "id": "prompt_compile",
+          "max": null,
+          "min": null,
+          "options": [],
+          "step": null,
+          "type": "toggle"
+        },
+        {
           "advanced": true,
           "default": 0.65,
           "i18n": {
@@ -298,6 +318,26 @@
           "options": [],
           "step": null,
           "type": "text"
+        },
+        {
+          "advanced": false,
+          "default": true,
+          "i18n": {
+            "en": {
+              "description": "Use the CookSprite compiler; off sends your exact text unchanged",
+              "name": "Prompt Compiler"
+            },
+            "zh-CN": {
+              "description": "开启后使用 CookSprite Prompt Compiler；关闭后原文直传",
+              "name": "提示词强化"
+            }
+          },
+          "id": "prompt_compile",
+          "max": null,
+          "min": null,
+          "options": [],
+          "step": null,
+          "type": "toggle"
         },
         {
           "advanced": false,
@@ -1946,6 +1986,9 @@
             "category": {
               "type": "string"
             },
+            "compile_prompt": {
+              "type": "boolean"
+            },
             "direction": {
               "type": "string"
             },
@@ -1986,13 +2029,13 @@
               "type": "integer"
             }
           },
-          "schema_hash": "67e695c770791d6b414f1e0523dc00cd1bcaca2021292d0a120d2f23edf404c8",
+          "schema_hash": "858f78cd499067a8d3fdf872b542ddddc1797652ad324552cc704fe48efae8b2",
           "source": "cooksprite",
           "title": "Compile a model-neutral Sprite prompt packet",
           "version": 1
         }
       ],
-      "version": "1.1.0",
+      "version": "1.2.0",
       "workflows": []
     },
     {

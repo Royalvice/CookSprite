@@ -99,6 +99,7 @@ CORE_NODES = {
             "background": "STRING",
             "edit_instruction": "STRING",
             "negative_terms": "STRING",
+            "compile_prompt": "BOOLEAN",
         },
         ["STRING", "STRING", "STRING"],
     ),
@@ -348,6 +349,7 @@ def test_asset_type_and_style_are_compiled_as_comfy_prompt_packet_and_graph_poli
     )
     assert pixel_packet["inputs"]["category"] == "weapon"
     assert pixel_packet["inputs"]["style"] == "pixel"
+    assert pixel_packet["inputs"]["compile_prompt"] is True
     assert smooth_packet["inputs"]["category"] == "terrain"
     assert smooth_packet["inputs"]["style"] == "smooth"
     assert (
@@ -571,6 +573,55 @@ def test_prompt_node_preserves_old_inputs_and_returns_three_generic_text_ports()
     assert '"compiler_version": "sprite_prompt_package_v1"' in metadata
     assert CS_CompilePromptPacket.RETURN_TYPES == ("STRING", "STRING", "STRING")
     assert CS_CompilePromptPacket.RETURN_NAMES == ("prompt", "negative_prompt", "metadata")
+
+
+def test_prompt_compiler_can_be_disabled_without_changing_user_text():
+    node = CS_CompilePromptPacket()
+    prompt, negative, metadata = node.compile(
+        "image.generate",
+        "一个枪手  with exact spacing",
+        "character",
+        "smooth",
+        "idle",
+        "level",
+        "s",
+        compile_prompt=False,
+    )
+    assert prompt == "一个枪手  with exact spacing"
+    assert negative == ""
+    assert json.loads(metadata) == {
+        "compiler_enabled": False,
+        "mode": "t2i",
+        "prompt": "一个枪手  with exact spacing",
+        "task": "image",
+    }
+
+
+def test_action_prompt_compiler_toggle_reaches_comfy_graph(tmp_path):
+    client = ready_client(tmp_path)
+    project = client.post("/api/v1/projects", json={"type": "static"}).json()
+    action = client.get("/api/v1/actions/image.generate").json()
+    response = client.post(
+        "/api/v1/actions/image.generate/runs",
+        json={
+            "project": project["id"],
+            "inputs": {},
+            "values": {
+                "model": action["models"][0]["id"],
+                "prompt": "raw user prompt",
+                "prompt_compile": False,
+            },
+        },
+    )
+    assert response.status_code == 202
+    assert wait(client, response.json()["id"])["status"] == "succeeded"
+    packet = next(
+        node
+        for node in ProtocolComfy.submitted[-1].values()
+        if node["class_type"] == "CS_CompilePromptPacket"
+    )
+    assert packet["inputs"]["prompt"] == "raw user prompt"
+    assert packet["inputs"]["compile_prompt"] is False
 
 
 def test_runtime_defaults_select_the_configured_recipe_when_model_is_omitted(tmp_path):

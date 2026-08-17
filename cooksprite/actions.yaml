@@ -36,6 +36,12 @@ actions:
         i18n:
           zh-CN: {name: 描述, description: 写下你想创作的内容}
           en: {name: Prompt, description: Describe what you want to create}
+      - id: prompt_compile
+        type: toggle
+        default: true
+        i18n:
+          zh-CN: {name: 提示词强化, description: 开启后使用 CookSprite Prompt Compiler；关闭后原文直传}
+          en: {name: Prompt Compiler, description: Use the CookSprite compiler; off sends your exact text unchanged}
       - id: strength
         type: range
         default: 0.65
@@ -76,6 +82,12 @@ actions:
         i18n:
           zh-CN: {name: 动画描述, description: 可补充动作、节奏和角色要求}
           en: {name: Motion prompt, description: Optional motion, timing, and character details}
+      - id: prompt_compile
+        type: toggle
+        default: true
+        i18n:
+          zh-CN: {name: 提示词强化, description: 开启后使用 CookSprite Prompt Compiler；关闭后原文直传}
+          en: {name: Prompt Compiler, description: Use the CookSprite compiler; off sends your exact text unchanged}
       - id: action
         type: select
         default: walk

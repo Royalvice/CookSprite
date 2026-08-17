@@ -981,6 +981,13 @@ def create_app(
                     "the selected model/workflow does not support these text/image inputs",
                 ),
             )
+        # Re-materialize the small built-in adapter on each run.  Existing
+        # runtime manifests may point at an older revision; unchanged graphs
+        # reuse their revision while code-level contract changes become
+        # available without asking the user to re-doctor ComfyUI.
+        selected_recipe = materialize_recipe_workflows(
+            store, runtime["id"], runtime["snapshot"], selected_recipe
+        )
         project = ensure_action_project_type(project, action_id, values)
         run_id = f"run_{uuid.uuid4().hex}"
         payload = {
@@ -1020,7 +1027,8 @@ def create_app(
                 for workflow in workflow_revisions.values()
             ],
             "packages": tool_packages.versions(),
-            "prompt_compiler": COMPILER_VERSION,
+            "prompt_compiler": COMPILER_VERSION if values.get("prompt_compile", True) else None,
+            "prompt_compiler_enabled": bool(values.get("prompt_compile", True)),
             "runtime_snapshot": runtime["snapshot"],
         }
         store.create_run(

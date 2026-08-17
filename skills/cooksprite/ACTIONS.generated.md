@@ -3,8 +3,8 @@
 
 | Action | Inputs | Values | Outputs |
 | --- | --- | --- | --- |
-| `image.generate` | `reference:Image` | `category`, `style`, `prompt`, `strength`, `count`, `seed` | `Image` |
-| `animation.generate` | `character:Image` | `prompt`, `action`, `view`, `direction`, `count`, `seed` | `FrameSeq` |
+| `image.generate` | `reference:Image` | `category`, `style`, `prompt`, `prompt_compile`, `strength`, `count`, `seed` | `Image` |
+| `animation.generate` | `character:Image` | `prompt`, `prompt_compile`, `action`, `view`, `direction`, `count`, `seed` | `FrameSeq` |
 | `frame.redraw` | `frame:Image` | `prompt`, `strength`, `count` | `ImageBatch` |
 | `sheet.slice` | `sheet:SpriteSheet` | `action`, `view`, `direction`, `columns`, `rows`, `frame_width`, `frame_height`, `margin`, `spacing`, `exclude_empty` | `FrameSeq` |
 | `video.sample` | `video:Video` | `action`, `view`, `direction`, `sample_fps`, `max_frames` | `FrameSeq` |
