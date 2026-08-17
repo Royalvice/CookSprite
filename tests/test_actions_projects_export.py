@@ -460,6 +460,8 @@ def test_imported_image_recipe_requires_bridge_pixel_policy_and_receives_it(tmp_
                 "style": "pixel",
                 "count": 1,
                 "seed": -1,
+                "prompt": "raw imported prompt",
+                "prompt_compile": False,
             },
         },
     )
@@ -468,6 +470,11 @@ def test_imported_image_recipe_requires_bridge_pixel_policy_and_receives_it(tmp_
     graph = ProtocolComfy.submitted[-1]
     assert any(node["class_type"] == "ImportedSampler" for node in graph.values())
     assert any(node["class_type"] == "CS_Pixelize" for node in graph.values())
+    packet = next(
+        node for node in graph.values() if node["class_type"] == "CS_CompilePromptPacket"
+    )
+    assert packet["inputs"]["prompt"] == "raw imported prompt"
+    assert packet["inputs"]["compile_prompt"] is False
 
 
 def test_action_request_compiles_to_real_comfy_graph_and_artifact_store(tmp_path):
