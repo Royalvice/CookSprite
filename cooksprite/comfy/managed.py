@@ -121,8 +121,19 @@ def install_node_pack(root: str | Path, *, install_dependencies: bool = True) ->
     nodes = comfy / "custom_nodes" / "cooksprite"
     nodes.mkdir(parents=True, exist_ok=True)
     source = Path(__file__).parents[1] / "nodes"
-    shutil.copyfile(source / "cooksprite_nodes.py", nodes / "__init__.py")
-    shutil.copyfile(source / "prompting.py", nodes / "prompting.py")
+    # Keep the installed package extensible: copy the complete node tree,
+    # including algorithm subpackages and non-Python provenance/preset files.
+    # The historical single-file ComfyUI entrypoint remains ``__init__.py``.
+    for source_file in source.rglob("*"):
+        if not source_file.is_file() or source_file.name == "requirements.txt":
+            continue
+        relative = source_file.relative_to(source)
+        if relative == Path("__init__.py"):
+            continue
+        target_relative = Path("__init__.py") if relative == Path("cooksprite_nodes.py") else relative
+        target = nodes / target_relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source_file, target)
     shutil.copyfile(source / "requirements.txt", nodes / "requirements.txt")
     (nodes / "VERSION").write_text(NODE_PACK_VERSION + "\n", encoding="utf-8")
     if install_dependencies:
