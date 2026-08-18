@@ -127,14 +127,14 @@
         },
         {
           "advanced": false,
-          "default": "pixel",
+          "default": "2d_action_game",
           "i18n": {
             "en": {
-              "description": "Pixel compiles both prompt intent and pixel post-processing",
+              "description": "Choose a character style template; other assets keep their existing styles",
               "name": "Style"
             },
             "zh-CN": {
-              "description": "像素会同时编译提示词和像素化后处理",
+              "description": "角色使用风格模板；其他素材保留原有风格选项",
               "name": "风格"
             }
           },
@@ -146,11 +146,81 @@
               "example": null,
               "i18n": {
                 "en": {
-                  "description": "Pixel-art prompt intent plus nearest-neighbor pixel post-processing",
+                  "description": "Ultra-realistic high-resolution character render",
+                  "name": "Ultra-realistic"
+                },
+                "zh-CN": {
+                  "description": "高分辨率超写实角色渲染",
+                  "name": "超写实"
+                }
+              },
+              "id": "ultra_realistic"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Polished high-resolution 2D action-game character illustration",
+                  "name": "2D action game"
+                },
+                "zh-CN": {
+                  "description": "高分辨率 2D 动作游戏角色插画",
+                  "name": "2D 动作游戏"
+                }
+              },
+              "id": "2d_action_game"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Polished high-resolution stylized 3D character render",
+                  "name": "Stylized 3D"
+                },
+                "zh-CN": {
+                  "description": "高分辨率风格化 3D 角色渲染",
+                  "name": "风格化 3D"
+                }
+              },
+              "id": "stylized_3d"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Polished high-resolution anime character illustration with cel shading",
+                  "name": "Anime"
+                },
+                "zh-CN": {
+                  "description": "带赛璐璐着色的高分辨率动漫角色插画",
+                  "name": "动漫"
+                }
+              },
+              "id": "anime"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Crisp pixel-art character sprite with deliberate pixel clusters and a limited color palette",
+                  "name": "Pixel art"
+                },
+                "zh-CN": {
+                  "description": "有意组织像素簇和有限配色的清晰像素角色",
+                  "name": "像素艺术"
+                }
+              },
+              "id": "pixel_art"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Existing pixel style for non-character assets",
                   "name": "Pixel"
                 },
                 "zh-CN": {
-                  "description": "像素提示词加最近邻像素化后处理",
+                  "description": "其他素材的原有像素风格选项",
                   "name": "像素"
                 }
               },
@@ -160,11 +230,11 @@
               "example": null,
               "i18n": {
                 "en": {
-                  "description": "Keep the model's original smooth rendered output",
+                  "description": "Existing smooth style for non-character assets",
                   "name": "Non-pixel"
                 },
                 "zh-CN": {
-                  "description": "保留模型原始的平滑绘制结果",
+                  "description": "其他素材保留模型原始的平滑绘制结果",
                   "name": "非像素"
                 }
               },
@@ -199,12 +269,12 @@
           "default": true,
           "i18n": {
             "en": {
-              "description": "Use the CookSprite compiler; off sends your exact text unchanged",
-              "name": "Prompt Compiler"
+              "description": "Use the CookSprite prompt template; off sends your exact text unchanged",
+              "name": "Prompt Template"
             },
             "zh-CN": {
-              "description": "开启后使用 CookSprite Prompt Compiler；关闭后原文直传",
-              "name": "提示词强化"
+              "description": "开启后使用 CookSprite 提示词模板；关闭后原文直传",
+              "name": "提示词模板"
             }
           },
           "id": "prompt_compile",
@@ -324,12 +394,12 @@
           "default": true,
           "i18n": {
             "en": {
-              "description": "Use the CookSprite compiler; off sends your exact text unchanged",
-              "name": "Prompt Compiler"
+              "description": "Use the CookSprite prompt template; off sends your exact text unchanged",
+              "name": "Prompt Template"
             },
             "zh-CN": {
-              "description": "开启后使用 CookSprite Prompt Compiler；关闭后原文直传",
-              "name": "提示词强化"
+              "description": "开启后使用 CookSprite 提示词模板；关闭后原文直传",
+              "name": "提示词模板"
             }
           },
           "id": "prompt_compile",
@@ -1771,8 +1841,8 @@
             }
           },
           "id": "target_width",
-          "max": 4096.0,
-          "min": 8.0,
+          "max": 512.0,
+          "min": 16.0,
           "options": [],
           "step": 1.0,
           "type": "number"
@@ -1791,8 +1861,8 @@
             }
           },
           "id": "target_height",
-          "max": 4096.0,
-          "min": 8.0,
+          "max": 512.0,
+          "min": 16.0,
           "options": [],
           "step": 1.0,
           "type": "number"
@@ -2035,25 +2105,23 @@
           "version": 1
         }
       ],
-      "version": "1.2.0",
+      "version": "1.3.0",
       "workflows": []
     },
     {
       "id": "image",
       "license": "Apache-2.0",
       "lowerings": {
-        "cooksprite.isolate_on_green": "CS_IsolateOnGreen",
-        "cooksprite.pixelize": "CS_Pixelize"
+        "cooksprite.isolate_on_green": "CS_IsolateOnGreen"
       },
       "node_classes": [
-        "CS_Pixelize",
         "CS_IsolateOnGreen"
       ],
       "recipes": [
         "comfy.core-checkpoint"
       ],
       "requirements": [
-        "scipy>=1.11"
+        "scipy>=1.11,<2"
       ],
       "tasks": [
         "image.generate",
@@ -2061,41 +2129,6 @@
         "animation.generate"
       ],
       "tools": [
-        {
-          "id": "cooksprite.pixelize",
-          "inputs": [
-            {
-              "name": "image",
-              "persistable": false,
-              "required": true,
-              "type": "Image"
-            }
-          ],
-          "outputs": [
-            {
-              "name": "image",
-              "persistable": true,
-              "required": true,
-              "type": "Image"
-            }
-          ],
-          "package_id": "image",
-          "params_schema": {
-            "enabled": {
-              "type": "boolean"
-            },
-            "target_height": {
-              "type": "integer"
-            },
-            "target_width": {
-              "type": "integer"
-            }
-          },
-          "schema_hash": "87bb83262324b5380c41e06db6c3f25a575229937983df9749cf289e9219f761",
-          "source": "cooksprite",
-          "title": "Pixelize",
-          "version": 1
-        },
         {
           "id": "cooksprite.isolate_on_green",
           "inputs": [
@@ -2132,6 +2165,282 @@
         "image.generate:i2i",
         "frame.redraw:i2i",
         "animation.generate:i2v"
+      ]
+    },
+    {
+      "id": "pixel",
+      "license": "MIT",
+      "lowerings": {
+        "cooksprite.pixel_snap": "CS_PixelSnap",
+        "cooksprite.pixelize": "CS_Pixelize"
+      },
+      "node_classes": [
+        "CS_Pixelize",
+        "CS_PixelSnap"
+      ],
+      "recipes": [
+        "cooksprite.pixel"
+      ],
+      "requirements": [
+        "numpy>=1.26,<3",
+        "opencv-python-headless>=4.9,<5",
+        "Pillow>=10,<13",
+        "PyYAML>=6,<7",
+        "scikit-image>=0.22,<1",
+        "scipy>=1.11,<2"
+      ],
+      "tasks": [
+        "image.pixelize"
+      ],
+      "tools": [
+        {
+          "id": "cooksprite.pixelize",
+          "inputs": [
+            {
+              "name": "image",
+              "persistable": false,
+              "required": true,
+              "type": "Image"
+            },
+            {
+              "name": "mask",
+              "persistable": false,
+              "required": false,
+              "type": "Mask"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "image",
+              "persistable": true,
+              "required": true,
+              "type": "Image"
+            },
+            {
+              "name": "mask",
+              "persistable": false,
+              "required": true,
+              "type": "Mask"
+            }
+          ],
+          "package_id": "pixel",
+          "params_schema": {
+            "padding_x": {
+              "max": 256,
+              "min": -1,
+              "type": "integer"
+            },
+            "padding_y": {
+              "max": 256,
+              "min": -1,
+              "type": "integer"
+            },
+            "palette_budget": {
+              "max": 256,
+              "min": 0,
+              "type": "integer"
+            },
+            "profile": {
+              "enum": [
+                "production",
+                "fidelity",
+                "balanced",
+                "graphic"
+              ],
+              "type": "string"
+            },
+            "target_height": {
+              "max": 512,
+              "min": 16,
+              "type": "integer"
+            },
+            "target_width": {
+              "max": 512,
+              "min": 16,
+              "type": "integer"
+            },
+            "variants": {
+              "type": "boolean"
+            }
+          },
+          "schema_hash": "38e54e8e7c5e22601088e69acbe145193f8b2847c59fe1afb72093409ebf31db",
+          "source": "cooksprite",
+          "title": "Pixelize with the deterministic CookSprite pixel compiler",
+          "version": 1
+        },
+        {
+          "id": "cooksprite.pixel_snap",
+          "inputs": [
+            {
+              "name": "image",
+              "persistable": false,
+              "required": true,
+              "type": "Image"
+            },
+            {
+              "name": "mask",
+              "persistable": false,
+              "required": false,
+              "type": "Mask"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "image",
+              "persistable": true,
+              "required": true,
+              "type": "Image"
+            },
+            {
+              "name": "mask",
+              "persistable": false,
+              "required": true,
+              "type": "Mask"
+            }
+          ],
+          "package_id": "pixel",
+          "params_schema": {
+            "constrained_warp": {
+              "type": "boolean"
+            },
+            "grid_mode": {
+              "enum": [
+                "auto",
+                "manual"
+              ],
+              "type": "string"
+            },
+            "palette_budget": {
+              "max": 256,
+              "min": 2,
+              "type": "integer"
+            },
+            "phase_x": {
+              "type": "number"
+            },
+            "phase_y": {
+              "type": "number"
+            },
+            "pixel_size_x": {
+              "min": 0,
+              "type": "number"
+            },
+            "pixel_size_y": {
+              "min": 0,
+              "type": "number"
+            },
+            "target_height": {
+              "max": 512,
+              "min": 0,
+              "type": "integer"
+            },
+            "target_width": {
+              "max": 512,
+              "min": 0,
+              "type": "integer"
+            }
+          },
+          "schema_hash": "c7e3d9847b9d571f20bfbbd2f89e9891f63eda0bb03118f813b760d304a04535",
+          "source": "cooksprite",
+          "title": "Recover a native pseudo-pixel grid",
+          "version": 1
+        }
+      ],
+      "version": "1.0.0",
+      "workflows": [
+        "image.pixelize:image-to-image"
+      ]
+    },
+    {
+      "id": "alpha",
+      "license": "MIT",
+      "lowerings": {
+        "cooksprite.remove_background": "CS_RemoveBackground"
+      },
+      "node_classes": [
+        "CS_RemoveBackground"
+      ],
+      "recipes": [
+        "cooksprite.alpha"
+      ],
+      "requirements": [
+        "rembg>=2.0.78,<3",
+        "onnxruntime-gpu>=1.23.2,<1.24",
+        "Pillow>=10,<13"
+      ],
+      "tasks": [
+        "image.cutout"
+      ],
+      "tools": [
+        {
+          "id": "cooksprite.remove_background",
+          "inputs": [
+            {
+              "name": "image",
+              "persistable": false,
+              "required": true,
+              "type": "Image"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "image",
+              "persistable": true,
+              "required": true,
+              "type": "Image"
+            },
+            {
+              "name": "mask",
+              "persistable": false,
+              "required": true,
+              "type": "Mask"
+            }
+          ],
+          "package_id": "alpha",
+          "params_schema": {
+            "alpha_matting": {
+              "type": "boolean"
+            },
+            "alpha_matting_background_threshold": {
+              "max": 255,
+              "min": 0,
+              "type": "integer"
+            },
+            "alpha_matting_erode_size": {
+              "max": 64,
+              "min": 0,
+              "type": "integer"
+            },
+            "alpha_matting_foreground_threshold": {
+              "max": 255,
+              "min": 0,
+              "type": "integer"
+            },
+            "batch_size": {
+              "max": 64,
+              "min": 1,
+              "type": "integer"
+            },
+            "model": {
+              "default": "u2net",
+              "enum": [
+                "u2net",
+                "u2netp",
+                "isnet-anime",
+                "birefnet-general"
+              ],
+              "type": "string"
+            }
+          },
+          "schema_hash": "18bd4162abb45b4ed870b3546389ed34407c6dd9bdf9cef9b327197d97d186bd",
+          "source": "cooksprite",
+          "title": "Remove image background with rembg",
+          "version": 1
+        }
+      ],
+      "version": "1.0.0",
+      "workflows": [
+        "image.cutout:image-to-image"
       ]
     },
     {

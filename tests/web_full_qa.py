@@ -332,10 +332,52 @@ def test_settings_and_create(qa: QARun, browser: Browser) -> None:
         )
 
         prompt = page.locator("#prompt")
-        prompt.fill("x" * 650)
+        long_prompt = "x" * 650
+        prompt.fill(long_prompt)
         qa.step(
-            "prompt length is bounded",
-            lambda: assert_true(len(prompt.input_value()) <= 600, "prompt exceeded 600 characters"),
+            "prompt accepts arbitrary length",
+            lambda: assert_true(
+                prompt.input_value() == long_prompt,
+                "prompt was truncated by the frontend",
+            ),
+            page,
+        )
+        compiler = page.locator(".creation-deck .prompt-compiler-toggle").first
+        reference_box = page.locator(".image-reference-panel").bounding_box()
+        prompt_box = prompt.bounding_box()
+        compiler_box = compiler.bounding_box()
+        first_segment_box = page.locator(".creation-deck .segmented-control").first.bounding_box()
+        qa.step(
+            "reference and prompt compiler follow the description",
+            lambda: assert_true(
+                reference_box is not None
+                and prompt_box is not None
+                and compiler_box is not None
+                and first_segment_box is not None
+                and prompt_box["y"] + prompt_box["height"] <= reference_box["y"]
+                and reference_box["y"] < compiler_box["y"] < first_segment_box["y"],
+                "image creation controls are in the wrong order",
+            ),
+            page,
+        )
+        compiler.click()
+        page.locator(".creation-deck .segmented-control button").first.hover()
+        qa.step(
+            "prompt compiler off disables asset controls",
+            lambda: (
+                expect(compiler).to_have_attribute("aria-pressed", "false"),
+                expect(page.locator(".creation-deck .segmented-control button:disabled")).to_have_count(8),
+                expect(page.locator(".hover-example")).to_have_count(0),
+            ),
+            page,
+        )
+        compiler.click()
+        qa.step(
+            "prompt compiler on restores asset controls",
+            lambda: (
+                expect(compiler).to_have_attribute("aria-pressed", "true"),
+                expect(page.locator(".creation-deck .segmented-control button:disabled")).to_have_count(0),
+            ),
             page,
         )
         prompt.fill("a soup knight with a copper ladle")

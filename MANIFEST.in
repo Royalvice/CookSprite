@@ -1,5 +1,5 @@
 include AGENTS.md
-recursive-include cooksprite *.py *.yaml *.json *.svg *.txt
+recursive-include cooksprite *.py *.yaml *.json *.svg *.txt *.in *.lock *.md LICENSE
 recursive-include cli *.py
 recursive-include skills/cooksprite *.md
 recursive-include web *.html *.json *.ts *.vue *.css *.svg *.txt *.woff2 *.hdr

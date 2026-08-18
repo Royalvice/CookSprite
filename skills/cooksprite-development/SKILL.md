@@ -24,6 +24,30 @@ Action → Task → Workflow → Tool → ComfyUI node → Artifact
 - Fake Runtime fixtures may test protocol code only; real capability claims require
   a real ComfyUI API run.
 
+## Dependency boundary
+
+Maintain exactly two Python environments: the repository `.venv` for the
+CookSprite API/CLI/compiler and the managed ComfyUI `.venv` for ComfyUI,
+PyTorch, and Tool Package node dependencies. Keep them disjoint; never add a
+node-only dependency to `pyproject.toml`, and never import CookSprite API code
+from a ComfyUI node.
+
+The root `uv.lock` locks CookSprite. `cooksprite/comfy/requirements.in` plus
+the generated `cooksprite/nodes/requirements.txt` lock the managed ComfyUI
+environment into `cooksprite/comfy/requirements.lock`. After changing a Tool
+Package or custom node, run:
+
+```bash
+cspr dev sync
+cspr comfy lock
+cspr comfy sync ~/.cooksprite/runtime
+```
+
+Do not install an unpinned package with bare `pip` into either environment.
+Remote or user-owned ComfyUI environments are not synchronized by this
+workflow; update their node pack only through an explicit, user-approved
+operation.
+
 ## SOP
 
 ### 1. Onboard a model
@@ -65,6 +89,13 @@ video, mask, or prompt computation in the API.
 Use a flat typed Tool DAG. Declare every input, model slot, output, and
 persistable port. A Workflow must compile to an independent ComfyUI API graph;
 it must not nest another Workflow or leak raw Comfy values across its boundary.
+
+For a runtime-provided API-format graph, register one compact Recipe instead
+of adding an Action/API branch. Declare its semantic `slots`, `slot_types`, and
+typed `output`; CookSprite's shared Recipe Assembler injects the Prompt Tool,
+seals the graph, and adds the declared post-processing policy. Extra scalar
+workflow inputs are passed as Action request `params` and are rejected unless
+the selected Workflow declares them.
 
 ### 5. Build a Tool package and node
 

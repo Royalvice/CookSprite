@@ -20,12 +20,21 @@ import httpx
 
 from cooksprite.client import CookSpriteClient
 from cooksprite.comfy.managed import (
+    check_dependencies,
     install,
     install_node_pack,
     launch,
+    lock_dependencies,
+    sync_dependencies,
     wait_until_ready,
 )
-from cooksprite.dev import check_generated, check_tool_packages, sync_generated
+from cooksprite.dev import (
+    check_generated,
+    check_tool_packages,
+    sync_generated,
+    sync_node_requirements,
+)
+from cooksprite.environment import check_project, lock_project, sync_project
 
 TERMINAL = {"succeeded", "failed", "cancelled"}
 
@@ -120,6 +129,7 @@ def cmd_action_run(args: argparse.Namespace) -> int:
         "project": args.project,
         "inputs": parse_pairs(args.input, lists=True),
         "values": parse_pairs(args.value),
+        "params": parse_pairs(args.param),
     }
     with client(args.api) as http:
         response = http.post(f"/api/v1/actions/{args.id}/runs", json=payload)
@@ -289,6 +299,49 @@ def cmd_dev(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+
+
+def cmd_env(args: argparse.Namespace) -> int:
+    try:
+        if args.action == "check":
+            check_project(args.project_dir)
+            check_dependencies()
+            print(
+                json.dumps(
+                    {
+                        "cooksprite": "locked",
+                        "comfyui": "locked",
+                        "project": str(Path(args.project_dir).resolve()),
+                    }
+                )
+            )
+            return 0
+        if args.action == "lock":
+            lock_project(args.project_dir)
+            sync_node_requirements(args.project_dir)
+            lock_dependencies(
+                progress=lambda message, value: print(
+                    f"{value:>6.1%} {message}", file=sys.stderr
+                )
+            )
+            print(json.dumps({"cooksprite": "uv.lock", "comfyui": "requirements.lock"}))
+            return 0
+        if args.action == "sync":
+            sync_project(args.project_dir)
+            python = sync_dependencies(
+                args.comfy_dir,
+                update_lock=args.update_lock,
+                progress=lambda message, value: print(
+                    f"{value:>6.1%} {message}", file=sys.stderr
+                ),
+            )
+            install_node_pack(args.comfy_dir, install_dependencies=False)
+            print(json.dumps({"cooksprite": str(Path(args.project_dir).resolve() / ".venv"), "comfyui": str(python)}))
+            return 0
+    except (OSError, RuntimeError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    return 2
 
 
 def cmd_install(args: argparse.Namespace) -> int:
@@ -516,6 +569,27 @@ def cmd_comfy(args: argparse.Namespace) -> int:
     if args.action == "install-nodes":
         print(install_node_pack(args.dir, install_dependencies=not args.no_deps))
         return 0
+    if args.action == "lock":
+        sync_node_requirements()
+        print(
+            lock_dependencies(
+                progress=lambda message, value: print(
+                    f"{value:>6.1%} {message}", file=sys.stderr
+                )
+            )
+        )
+        return 0
+    if args.action == "sync":
+        python = sync_dependencies(
+            args.dir,
+            update_lock=args.update_lock,
+            progress=lambda message, value: print(
+                f"{value:>6.1%} {message}", file=sys.stderr
+            ),
+        )
+        nodes = install_node_pack(args.dir, install_dependencies=False)
+        print(json.dumps({"python": str(python), "nodes": str(nodes), "lock": "requirements.lock"}))
+        return 0
     if args.action == "doctor":
         with client(args.api) as http:
             response = http.post(f"/api/v1/runtimes/{args.runtime}/doctor")
@@ -531,9 +605,11 @@ def cmd_comfy(args: argparse.Namespace) -> int:
         for recipe in report.get("recipes", []):
             print(f"  {recipe['id']:<34} {recipe['label']} [{', '.join(recipe['modes'])}]")
         return 0
-    if args.action == "probe-local":
+    if args.action in {"probe", "probe-local"}:
         with client(args.api) as http:
-            return show(http.post("/api/v1/local/probe"))
+            body = {"base_url": args.url} if getattr(args, "url", None) else None
+            endpoint = "/api/v1/comfyui/probe"
+            return show(http.post(endpoint, json=body) if body else http.post(endpoint))
     if args.action == "select":
         with client(args.api) as http:
             return show(http.post(f"/api/v1/runtimes/{args.runtime}/select"))
@@ -566,6 +642,7 @@ def cmd_comfy(args: argparse.Namespace) -> int:
                         "location": args.location,
                         "transport": args.transport,
                         "callback_url": args.callback_url,
+                        "directory": args.directory,
                     },
                 )
             )
@@ -611,6 +688,7 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--project", required=True)
     run.add_argument("--input", action="append", default=[])
     run.add_argument("--value", action="append", default=[])
+    run.add_argument("--param", action="append", default=[])
     run.add_argument("--wait", action="store_true")
     run.set_defaults(func=cmd_action_run)
 
@@ -752,19 +830,33 @@ def parser() -> argparse.ArgumentParser:
     comfy_nodes.add_argument("dir", help="existing ComfyUI directory or managed root")
     comfy_nodes.add_argument("--no-deps", action="store_true")
     comfy_nodes.set_defaults(func=cmd_comfy)
+    comfy_lock = comfy_commands.add_parser(
+        "lock", help="resolve the ComfyUI and CookSprite node dependency lock"
+    )
+    comfy_lock.set_defaults(func=cmd_comfy)
+    comfy_sync = comfy_commands.add_parser(
+        "sync", help="sync a managed ComfyUI .venv and update its CookSprite nodes"
+    )
+    comfy_sync.add_argument("dir", help="managed runtime directory containing ComfyUI/")
+    comfy_sync.add_argument("--update-lock", action="store_true")
+    comfy_sync.set_defaults(func=cmd_comfy)
     comfy_import = comfy_commands.add_parser("import")
-    comfy_import.add_argument("--runtime", required=True)
+    comfy_import.add_argument("--runtime")
     comfy_import.add_argument("--label", default="ComfyUI")
     comfy_import.add_argument("--url", required=True)
     comfy_import.add_argument("--location", choices=["local", "remote"], default="remote")
     comfy_import.add_argument("--transport", default="http")
     comfy_import.add_argument("--callback-url")
+    comfy_import.add_argument("--directory", help="local ComfyUI checkout, when auto-discovery cannot find it")
     comfy_import.set_defaults(func=cmd_comfy)
     comfy_doctor = comfy_commands.add_parser("doctor")
     comfy_doctor.add_argument("--runtime", required=True)
     comfy_doctor.add_argument("--json", action="store_true")
     comfy_doctor.set_defaults(func=cmd_comfy)
-    comfy_probe = comfy_commands.add_parser("probe-local", help="probe ComfyUI on the API host")
+    comfy_probe = comfy_commands.add_parser(
+        "probe", aliases=["probe-local"], help="probe ComfyUI at an explicit URL"
+    )
+    comfy_probe.add_argument("--url", help="explicit ComfyUI URL")
     comfy_probe.set_defaults(func=cmd_comfy)
     comfy_select = comfy_commands.add_parser("select", help="select the active ComfyUI runtime")
     comfy_select.add_argument("--runtime", required=True)
@@ -807,6 +899,22 @@ def parser() -> argparse.ArgumentParser:
     dev_check.set_defaults(func=cmd_dev)
     dev_sync = dev_commands.add_parser("sync")
     dev_sync.set_defaults(func=cmd_dev)
+
+    env = commands.add_parser(
+        "env", help="check, lock, or sync the two isolated CookSprite environments"
+    )
+    env_commands = env.add_subparsers(dest="action", required=True)
+    env_check = env_commands.add_parser("check")
+    env_check.add_argument("--project-dir", default=".")
+    env_check.set_defaults(func=cmd_env)
+    env_lock = env_commands.add_parser("lock")
+    env_lock.add_argument("--project-dir", default=".")
+    env_lock.set_defaults(func=cmd_env)
+    env_sync = env_commands.add_parser("sync")
+    env_sync.add_argument("--project-dir", default=".")
+    env_sync.add_argument("--comfy-dir", default="~/.cooksprite/runtime")
+    env_sync.add_argument("--update-lock", action="store_true")
+    env_sync.set_defaults(func=cmd_env)
 
     install_command = commands.add_parser(
         "install", help="install isolated ComfyUI and CookSprite nodes"

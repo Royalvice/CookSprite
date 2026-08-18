@@ -169,10 +169,18 @@ def test_server_restart_marks_unsubmitted_run_as_explicitly_retryable(tmp_path):
 def test_registry_projections_and_node_package_manifest_are_in_sync(tmp_path):
     assert check_generated()
     report = check_tool_packages()
-    assert report["tools"] == 9
+    assert report["tools"] == 11
     client = TestClient(create_app(tmp_path, allow_test_runtime=True))
     packages = client.get("/api/v1/tool-packages").json()
-    assert {item["id"] for item in packages} == {"bridge", "prompt", "image", "frames", "normal"}
+    assert {item["id"] for item in packages} == {
+        "bridge",
+        "prompt",
+        "image",
+        "pixel",
+        "alpha",
+        "frames",
+        "normal",
+    }
     assert all(item["lowerings"] for item in packages)
 
 
@@ -197,3 +205,17 @@ def test_cli_start_defaults_to_api_frontend_and_managed_comfy():
     no_comfy = root.parse_args(["start", "--no-comfy", "--frontend-port", "5174"])
     assert no_comfy.no_comfy is True
     assert no_comfy.frontend_port == 5174
+
+
+def test_cli_exposes_two_environment_lock_and_sync_commands():
+    root = parser()
+    comfy_lock = root.parse_args(["comfy", "lock"])
+    assert comfy_lock.action == "lock"
+    comfy_sync = root.parse_args(["comfy", "sync", "/tmp/comfy-runtime", "--update-lock"])
+    assert comfy_sync.action == "sync"
+    assert comfy_sync.update_lock is True
+    env_sync = root.parse_args(
+        ["env", "sync", "--project-dir", ".", "--comfy-dir", "/tmp/comfy-runtime"]
+    )
+    assert env_sync.action == "sync"
+    assert env_sync.comfy_dir == "/tmp/comfy-runtime"

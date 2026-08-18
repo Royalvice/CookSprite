@@ -67,17 +67,30 @@ The workbench remains visible without a runtime, but generation Actions are
 disabled until a trusted ComfyUI is registered and checked:
 
 ```bash
-cspr comfy import --runtime local --label "Local ComfyUI" --url http://127.0.0.1:8188
-cspr comfy doctor --runtime local
+cspr comfy probe-local --url http://127.0.0.1:8188
+cspr comfy import --label "Local ComfyUI" --url http://127.0.0.1:8188 --location local
+cspr comfy doctor --runtime <runtime-id-from-the-response>
 ```
 
+The Settings page uses the same compact flow: enter one ComfyUI URL, then
+choose local or remote. Runtime IDs are generated from the endpoint when
+omitted, existing local directories are inferred from the process serving the
+URL, and a remote URL is probe-only. If a remote host lacks CookSprite nodes,
+install them on that host with `cspr comfy install-nodes <ComfyUI directory>`
+and reconnect; CookSprite never writes into a remote filesystem from a URL.
+
 If ComfyUI is not installed, the Settings page or this explicit command installs
-only an isolated pinned runtime and the CookSprite node pack. It never downloads
-a starter model. Select or register models through the connected ComfyUI;
+only an isolated pinned runtime and the CookSprite node pack from the locked
+ComfyUI dependency set. It never downloads a starter model. Select or register models through the connected ComfyUI;
 existing ComfyUI installations and model directories are never modified by the installer. Contributors
 may still run the API and Vite development server separately with `cspr serve`
 and `npm run dev` when they need independent reload control. Use
 `cspr start --no-frontend` when only the API and ComfyUI are needed.
+
+Dependency updates are explicit and locked. After adding a Tool Package or
+custom node, run `cspr dev sync`, then `cspr env lock` and
+`cspr env sync --comfy-dir ~/.cooksprite/runtime`. A normal ComfyUI sync refuses
+to use a stale lock.
 Every compatible checkpoint already visible to that ComfyUI becomes a selectable
 text/image Recipe. Existing image-to-video or text-to-video API workflows stay
 in ComfyUI and can be registered as a small Recipe adapter; their declared

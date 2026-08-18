@@ -178,24 +178,35 @@ export interface RuntimeView {
   error?: string;
   checked_at?: string;
   recipes: RuntimeRecipe[];
+  nodes_installed?: boolean;
+  cooksprite_nodes?: number;
+  node_install_available?: boolean;
 }
 export interface ProjectDirectoryView { project_id: string; path: string; opened: boolean; error?: string }
-export interface LocalProbeCandidate {
+export interface ComfyProbeCandidate {
   base_url: string;
   status: "found" | "unreachable";
+  directory?: string;
   version?: string;
   device?: string;
   models?: number;
   workflows?: number;
   nodes?: number;
   managed?: boolean;
+  cooksprite_nodes?: number;
+  nodes_installed?: boolean;
+  directory_found?: boolean;
   error?: string;
 }
-export interface LocalProbeView {
+export interface ComfyProbeView {
   status: "found" | "installed" | "unreachable" | "missing";
   managed_installed: boolean;
-  candidates: LocalProbeCandidate[];
+  candidates: ComfyProbeCandidate[];
 }
+/** @deprecated Use ComfyProbeCandidate. */
+export type LocalProbeCandidate = ComfyProbeCandidate;
+/** @deprecated Use ComfyProbeView. */
+export type LocalProbeView = ComfyProbeView;
 export interface RuntimeCapabilities {
   runtime_id: string;
   snapshot?: string;
@@ -217,6 +228,15 @@ export interface LocalSetupView {
   error?: string;
   directory?: string;
   default_directory: string;
+  method?: "already_running" | "comfy-cli" | "python";
+  snapshot?: string;
+  runtime_id?: string;
+}
+export interface RuntimeRestartManualView {
+  runtime_id: string;
+  status: "manual_required";
+  message: string;
+  restart_required: boolean;
 }
 
 export class ApiError extends Error {
@@ -246,7 +266,7 @@ export const api = {
   health: () => json<HealthView>("/health"),
   actions: () => json<ActionDescriptor[]>("/actions"),
   action: (id: string) => json<ActionDescriptor>(`/actions/${encodeURIComponent(id)}`),
-  runAction: (id: string, body: { project: string; inputs: Record<string, string | string[]>; values: Record<string, unknown> }) =>
+  runAction: (id: string, body: { project: string; inputs: Record<string, string | string[]>; values: Record<string, unknown>; params?: Record<string, unknown> }) =>
     json<RunView>(`/actions/${encodeURIComponent(id)}/runs`, { method: "POST", ...jsonBody(body) }),
   run: (id: string) => json<RunView>(`/runs/${encodeURIComponent(id)}`),
   cancel: (id: string) => json<RunView>(`/runs/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
@@ -286,16 +306,22 @@ export const api = {
   publish: (projectId: string, coverArtifactId?: string) => json<ProjectView>(`/projects/${encodeURIComponent(projectId)}/publish`, { method: "POST", ...jsonBody({ cover_artifact_id: coverArtifactId }) }),
   gallery: () => json<GalleryItem[]>("/gallery"),
   runtimes: () => json<RuntimeView[]>("/runtimes"),
-  createRuntime: (body: { id: string; label: string; base_url: string; location: "local" | "remote"; transport?: string; callback_url?: string }) => json<RuntimeView>("/runtimes", { method: "POST", ...jsonBody(body) }),
+  createRuntime: (body: { id?: string; label?: string; base_url: string; location: "local" | "remote"; transport?: string; callback_url?: string; directory?: string }) => json<RuntimeView>("/runtimes", { method: "POST", ...jsonBody(body) }),
+  deleteRuntime: (id: string) => json<{ runtime_id: string; deleted: boolean; active_runtime_id?: string; message: string }>(`/runtimes/${encodeURIComponent(id)}`, { method: "DELETE" }),
   selectRuntime: (id: string) => json<{ runtime_id: string; status: RuntimeStatus; error?: string; active: boolean }>(`/runtimes/${encodeURIComponent(id)}/select`, { method: "POST" }),
   runtimeCapabilities: (id: string) => json<RuntimeCapabilities>(`/runtimes/${encodeURIComponent(id)}/capabilities`),
   runtimeDefaults: (id: string) => json<RuntimeDefaultsView>(`/runtimes/${encodeURIComponent(id)}/defaults`),
   setRuntimeDefault: (id: string, actionId: string, body: RuntimeDefaultBinding) =>
     json<{ runtime_id: string; action_id: string; default: RuntimeDefaultBinding }>(`/runtimes/${encodeURIComponent(id)}/defaults/${encodeURIComponent(actionId)}`, { method: "PUT", ...jsonBody(body) }),
   doctorRuntime: (id: string) => json<{ runtime_id: string; snapshot: string; tool_count: number; recipe_count: number; system: Record<string, unknown>; device?: Record<string, unknown>; models: Record<string, number>; recipes: RuntimeRecipe[] }>(`/runtimes/${encodeURIComponent(id)}/doctor`, { method: "POST" }),
+  installRuntimeNodes: (id: string) => json<{ runtime_id: string; status: "installed" | "manual_required"; message: string; command?: string; restart_required: boolean }>(`/runtimes/${encodeURIComponent(id)}/nodes/install`, { method: "POST" }),
+  restartRuntime: (id: string) => json<LocalSetupView | RuntimeRestartManualView>(`/runtimes/${encodeURIComponent(id)}/restart`, { method: "POST" }),
   localSetup: () => json<LocalSetupView>("/setup/local"),
   installLocal: (body: { directory?: string; host?: string; port?: number }) => json<LocalSetupView>("/setup/local", { method: "POST", ...jsonBody(body) }),
-  probeLocal: () => json<LocalProbeView>("/local/probe", { method: "POST" }),
+  startLocal: (body: { base_url?: string; directory?: string; host?: string; port?: number }) => json<LocalSetupView>("/local/start", { method: "POST", ...jsonBody(body) }),
+  probeComfy: (baseUrl?: string) => json<ComfyProbeView>("/comfyui/probe", { method: "POST", ...(baseUrl ? jsonBody({ base_url: baseUrl }) : {}) }),
+  /** @deprecated Use probeComfy. */
+  probeLocal: (baseUrl?: string) => json<ComfyProbeView>("/local/probe", { method: "POST", ...(baseUrl ? jsonBody({ base_url: baseUrl }) : {}) }),
 };
 
 export function subscribeRun(id: string, update: (run: RunView) => void, fail: (error: Error) => void): () => void {

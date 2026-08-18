@@ -1,0 +1,40 @@
+# CookSprite managed ComfyUI runtime inputs.
+#
+# This file is intentionally small: it mirrors the required dependencies of
+# the pinned ComfyUI ref and includes the generated CookSprite node manifest.
+# The resolved, cross-platform lock is requirements.lock.  Models are never
+# dependencies and are never installed here.
+
+# ComfyUI v0.32.0 required runtime dependencies.
+comfyui-frontend-package==1.48.7
+comfyui-workflow-templates==0.11.39
+comfyui-embedded-docs==0.5.9
+torch==2.7.0
+torchsde
+torchvision==0.22.0
+torchaudio==2.7.0
+numpy>=1.25.0
+einops
+transformers>=4.50.3
+tokenizers>=0.13.3
+sentencepiece
+safetensors>=0.4.2
+aiohttp>=3.11.8
+yarl>=1.18.0
+pyyaml
+Pillow
+tqdm
+psutil
+alembic
+SQLAlchemy==2.0.52
+filelock
+av>=16.0.0
+comfy-kitchen==0.2.30
+comfy-aimdo==0.4.13
+requests
+simpleeval>=1.0.0
+blake3
+
+# Tool package requirements are the only additional dependencies allowed in
+# the managed ComfyUI environment. Keep this include after `cspr dev sync`.
+-r ../nodes/requirements.txt

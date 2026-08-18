@@ -14,19 +14,26 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.responses import Response as BinaryResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .. import __version__
-from ..action_graphs import bind_action_task, materialize_recipe_workflows, sealed_tool_descriptor
+from ..action_graphs import bind_action_task, materialize_recipe_workflows
 from ..bridge import ArtifactBridge, BridgeError
 from ..comfy import ComfyClient
+from ..comfy.discovery import LOOPBACK_HOSTS, discover_comfy_directory, validate_comfy_directory
 from ..comfy.managed import install as install_managed_comfy
+from ..comfy.managed import (
+    install_node_pack,
+    launch_with_preference,
+    restart_with_preference,
+    wait_until_ready,
+)
 from ..comfy.managed import launch as launch_managed_comfy
-from ..comfy.managed import wait_until_ready
 from ..compiler import CompileError, Compiler
 from ..domain import (
     ActionDescriptor,
@@ -56,11 +63,13 @@ from ..example_catalog import register_action_examples
 from ..execution import ExecutionPlan
 from ..package import PackageError, build_package
 from ..prompting import COMPILER_VERSION
+from ..recipe_assembler import sealed_tool_descriptor
 from ..recipes import (
     Recipe,
     discover_recipes,
     imported_recipe_is_compatible,
     manifest_from_assets,
+    recipe_contract_is_valid,
     recipe_for,
     recipes_from_runtime,
     runtime_manifest,
@@ -75,13 +84,28 @@ SEQUENCE_ACTIONS = {"animation.generate", "sheet.slice", "video.sample"}
 TEST_RUNTIME_VERSIONS = {"test", "demo-test", "cooksprite-test-runtime"}
 
 
+def _runtime_id(label: str, base_url: str) -> str:
+    """Create a stable short id so users never need to invent one."""
+
+    host = urlsplit(base_url).hostname or "comfy"
+    safe_host = "".join(char if char.isalnum() else "-" for char in host).strip("-")
+    digest = hashlib.sha256(base_url.rstrip("/").encode()).hexdigest()[:8]
+    return f"rt_{(safe_host or label or 'comfy')[:24]}_{digest}"
+
+
+COOKSPRITE_NODE_CLASSES = {
+    node_class for package in tool_packages.manifests for node_class in package.node_classes
+}
+
+
 class RuntimeCreate(BaseModel):
-    id: str
-    label: str
+    id: str | None = None
+    label: str = "ComfyUI"
     base_url: str
     location: Literal["local", "remote"] = "remote"
     transport: str = "http"
     callback_url: str | None = None
+    directory: str | None = None
 
 
 class RecipeCreate(BaseModel):
@@ -92,8 +116,11 @@ class RecipeCreate(BaseModel):
     modes: list[str]
     workflow: dict[str, Any]
     slots: dict[str, str]
+    slot_types: dict[str, str] = Field(default_factory=dict)
     output: list[Any]
     checkpoint: str | None = None
+    output_name: str = "image"
+    output_type: str = "Image"
 
 
 class RuntimeDefaultBinding(BaseModel):
@@ -105,6 +132,22 @@ class LocalSetupCreate(BaseModel):
     directory: str | None = None
     host: str = "127.0.0.1"
     port: int = 8188
+
+
+class ComfyProbeCreate(BaseModel):
+    base_url: str = "http://127.0.0.1:8188"
+
+
+# Kept as an import-level compatibility alias for clients that used the old
+# local-only name before probing was made location-neutral.
+LocalProbeCreate = ComfyProbeCreate
+
+
+class LocalStartCreate(BaseModel):
+    base_url: str = "http://127.0.0.1:8188"
+    directory: str | None = None
+    host: str | None = None
+    port: int | None = Field(default=None, ge=1, le=65535)
 
 
 class PublishCreate(BaseModel):
@@ -146,6 +189,10 @@ def _dynamic_tools(raw: list[tuple[str, dict[str, Any]]]) -> list[ToolDescriptor
                 "VAE": "VAE",
                 "LATENT": "LATENT",
                 "CONDITIONING": "CONDITIONING",
+                # ComfyUI's official background-removal model handle is an
+                # internal graph value.  It never crosses the CookSprite
+                # artifact boundary, so keep it as an opaque scalar slot.
+                "BACKGROUND_REMOVAL": "Text",
             }.get(raw_type, "Text")
 
         result.append(
@@ -166,7 +213,11 @@ def _dynamic_tools(raw: list[tuple[str, dict[str, Any]]]) -> list[ToolDescriptor
                         "name": f"output_{index}",
                         "type": port_type(value),
                         "required": True,
-                        "persistable": False,
+                        # A decoded ComfyUI media output is already a typed
+                        # artifact candidate.  The compiler adds the single
+                        # CS_StoreArtifact sink; no pixel/cutout transform is
+                        # implied by this flag.
+                        "persistable": port_type(value) in {"Image", "Video", "Mask"},
                     }
                     for index, value in enumerate(outputs)
                 ],
@@ -214,6 +265,7 @@ def create_app(
         "message": "managed ComfyUI is installed" if managed_install_present else "",
         "error": None,
         "directory": str(default_managed_root) if managed_install_present else None,
+        "method": None,
     }
     runtime_cache: dict[str, dict[str, Any]] = {}
     runtime_cache_lock = threading.RLock()
@@ -226,6 +278,21 @@ def create_app(
         except (TypeError, json.JSONDecodeError):
             return []
         return value if isinstance(value, list) else []
+
+    def runtime_node_status(runtime: dict[str, Any] | None) -> tuple[bool, int]:
+        if not runtime:
+            return False, 0
+        try:
+            tools = json.loads(runtime.get("tools") or "[]")
+        except (TypeError, json.JSONDecodeError):
+            tools = []
+        present = {
+            str(item.get("title") or item.get("id", "")).removeprefix("comfy.")
+            for item in tools
+            if isinstance(item, dict)
+        }
+        installed = COOKSPRITE_NODE_CLASSES.issubset(present)
+        return installed, len(COOKSPRITE_NODE_CLASSES.intersection(present))
 
     def bridge_for(runtime: dict[str, Any] | None) -> ArtifactBridge:
         manifest = manifest_from_assets(runtime_assets(runtime))
@@ -298,6 +365,7 @@ def create_app(
             assets,
             runtime.get("location", "remote"),
             runtime.get("transport", "http"),
+            runtime.get("directory"),
         )
 
     def persist_runtime_report(
@@ -359,6 +427,7 @@ def create_app(
             assets,
             runtime.get("location", "remote"),
             runtime.get("transport", "http"),
+            runtime.get("directory"),
         )
         invalidate_runtime(runtime["id"])
         return snapshot, dynamic, recipes
@@ -457,6 +526,21 @@ def create_app(
                 404,
                 _detail("runtime_not_found", f"unknown runtime {runtime_id}"),
             )
+        if runtime.get("location", "remote") == "local" and not runtime.get("directory"):
+            directory = discover_comfy_directory(runtime["base_url"])
+            if directory:
+                store.put_runtime(
+                    runtime["id"],
+                    runtime["label"],
+                    runtime["base_url"],
+                    runtime.get("snapshot", ""),
+                    json.loads(runtime.get("tools") or "[]"),
+                    runtime_assets(runtime),
+                    runtime.get("location", "remote"),
+                    runtime.get("transport", "http"),
+                    directory,
+                )
+                runtime = store.runtime(runtime_id) or runtime
         return runtime
 
     def runtime_tools(runtime: dict[str, Any]) -> list[ToolDescriptor]:
@@ -909,8 +993,9 @@ def create_app(
     )
     def action(action_id: str) -> ActionDescriptor:
         runtime = live_runtime()
+        runtime_recipes = recipes_from_runtime(runtime)
         descriptor = registry.view(
-            action_id, runtime, runtime_tool_ids(runtime), recipes_from_runtime(runtime)
+            action_id, runtime, runtime_tool_ids(runtime), runtime_recipes
         )
         if not descriptor:
             raise HTTPException(404, _detail("action_not_found", "unknown Action"))
@@ -929,6 +1014,16 @@ def create_app(
             registry.validate_request(registered, request.inputs, values)
         except RegistryError as exc:
             raise HTTPException(422, _detail("action_request_invalid", str(exc))) from exc
+        control_ids = {control.id for control in registered.controls} | {"model", "runtime"}
+        conflicts = sorted(control_ids.intersection(request.params))
+        if conflicts:
+            raise HTTPException(
+                422,
+                _detail(
+                    "workflow_param_conflict",
+                    f"workflow params cannot replace Action values: {conflicts}",
+                ),
+            )
         normalized_inputs = validate_artifact_inputs(registered, request.inputs)
         if action_id == "normal.generate":
             expanded: list[str] = []
@@ -940,8 +1035,9 @@ def create_app(
                     expanded.append(artifact_id)
             normalized_inputs["source"] = expanded
         runtime = selected_runtime(values)
+        runtime_recipes = recipes_from_runtime(runtime)
         descriptor = registry.view(
-            action_id, runtime, runtime_tool_ids(runtime), recipes_from_runtime(runtime)
+            action_id, runtime, runtime_tool_ids(runtime), runtime_recipes
         )
         if not descriptor or not descriptor.available:
             raise HTTPException(
@@ -974,13 +1070,25 @@ def create_app(
             )
         selected_recipe = recipe_for(runtime, recipe_id)
         if not selected_recipe or not supports(selected_recipe, action_id, normalized_inputs):
-            raise HTTPException(
-                409,
-                _detail(
-                    "recipe_incompatible",
-                    "the selected model/workflow does not support these text/image inputs",
-                ),
-            )
+            if selected_recipe:
+                selected_recipe = next(
+                    (
+                        candidate
+                        for candidate in runtime_recipes
+                        if candidate.family == selected_recipe.family
+                        and candidate.checkpoint == selected_recipe.checkpoint
+                        and supports(candidate, action_id, normalized_inputs)
+                    ),
+                    None,
+                )
+            if not selected_recipe:
+                raise HTTPException(
+                    409,
+                    _detail(
+                        "recipe_incompatible",
+                        "the selected model/workflow does not support these text/image inputs",
+                    ),
+                )
         # Re-materialize the small built-in adapter on each run.  Existing
         # runtime manifests may point at an older revision; unchanged graphs
         # reuse their revision while code-level contract changes become
@@ -994,6 +1102,7 @@ def create_app(
             "project": request.project,
             "inputs": normalized_inputs,
             "values": values,
+            "params": request.params,
         }
         try:
             task_revision, workflow_revisions, task_inputs = bind_action_task(
@@ -1004,6 +1113,7 @@ def create_app(
                 action_id,
                 normalized_inputs,
                 values,
+                request.params,
             )
             compiled = Compiler(
                 runtime_tools(runtime),
@@ -1600,66 +1710,229 @@ def create_app(
     def gc() -> dict[str, int]:
         return {"removed_blobs": store.gc()}
 
-    @app.post("/api/v1/local/probe")
-    def probe_local_comfy() -> dict[str, Any]:
-        """Probe only the API host's explicitly local candidates.
+    def _local_start_target(request: LocalStartCreate) -> tuple[str, str, int, str]:
+        parsed = urlsplit(request.base_url.strip())
+        hostname = (parsed.hostname or "").lower()
+        if hostname not in LOOPBACK_HOSTS:
+            raise HTTPException(
+                422,
+                _detail(
+                    "local_start_requires_loopback",
+                    "ComfyUI can be started here only for a loopback address",
+                ),
+            )
+        if parsed.scheme not in {"", "http"}:
+            raise HTTPException(
+                422,
+                _detail("local_start_scheme_invalid", "local ComfyUI startup requires http"),
+            )
+        host = request.host or parsed.hostname or "127.0.0.1"
+        port = int(request.port or parsed.port or 8188)
+        display_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+        base_url = f"http://{display_host}:{port}"
 
-        This does not inspect or classify remote URLs. A loopback URL supplied
-        by a user remains whatever Runtime location the user declared.
+        directory = validate_comfy_directory(request.directory) if request.directory else None
+        if request.directory and not directory:
+            raise HTTPException(
+                422,
+                _detail("local_comfy_directory_invalid", "the supplied ComfyUI directory is not a valid checkout"),
+            )
+        if not directory:
+            for runtime in store.runtimes():
+                if (
+                    runtime.get("location", "remote") == "local"
+                    and str(runtime.get("base_url", "")).rstrip("/") == base_url.rstrip("/")
+                ):
+                    directory = validate_comfy_directory(runtime.get("directory"))
+                    if directory:
+                        break
+        directory = discover_comfy_directory(base_url, directory)
+        if not directory and port == 8188:
+            directory = validate_comfy_directory(default_managed_root)
+        if not directory:
+            raise HTTPException(
+                409,
+                _detail(
+                    "local_comfy_directory_not_found",
+                    "no local ComfyUI checkout was found; connect it once with its directory or install the managed runtime",
+                ),
+            )
+        return base_url, host, port, directory
+
+    @app.post("/api/v1/local/start", status_code=202)
+    def start_local_comfy(request: LocalStartCreate) -> dict[str, Any]:
+        base_url, host, port, directory = _local_start_target(request)
+        with setup_lock:
+            if setup_state["status"] in {"installing", "starting", "validating"}:
+                raise HTTPException(
+                    409, _detail("setup_in_progress", "local ComfyUI setup is already running")
+                )
+            setup_state.update(
+                status="starting",
+                progress=0.05,
+                message="starting local ComfyUI",
+                error=None,
+                directory=directory,
+                method=None,
+            )
+
+        def start_worker() -> None:
+            method = "already_running"
+            try:
+                try:
+                    app.state.comfy_factory(base_url).ping()
+                except Exception:  # noqa: BLE001 - the next step is the explicit local start.
+                    launch = launch_with_preference(directory, host=host, port=port)
+                    method = launch.method
+                    with setup_lock:
+                        setup_state.update(
+                            status="starting",
+                            progress=0.35,
+                            message=f"ComfyUI started with {method}; waiting for API",
+                            method=method,
+                        )
+                    report = wait_until_ready(base_url, timeout=300)
+                else:
+                    report = app.state.comfy_factory(base_url).doctor()
+
+                existing = next(
+                    (
+                        runtime
+                        for runtime in store.runtimes()
+                        if runtime.get("location", "remote") == "local"
+                        and str(runtime.get("base_url", "")).rstrip("/") == base_url.rstrip("/")
+                    ),
+                    None,
+                )
+                runtime_id = existing["id"] if existing else _runtime_id("Local ComfyUI", base_url)
+                store.put_runtime(
+                    runtime_id,
+                    existing["label"] if existing else "Local ComfyUI",
+                    base_url,
+                    existing.get("snapshot", "") if existing else "",
+                    json.loads(existing.get("tools") or "[]") if existing else [],
+                    runtime_assets(existing) if existing else [],
+                    "local",
+                    "local-process",
+                    directory,
+                )
+                runtime = store.runtime(runtime_id)
+                if not runtime:
+                    raise RuntimeError("local runtime registration failed")
+                with setup_lock:
+                    setup_state.update(
+                        status="validating",
+                        progress=0.85,
+                        message="validating local ComfyUI capabilities",
+                        method=method,
+                    )
+                snapshot, _, recipes = persist_runtime_report(runtime, report)
+                with setup_lock:
+                    setup_state.update(
+                        status="ready",
+                        progress=1.0,
+                        message=f"local ComfyUI is ready with {len(recipes)} compatible recipe(s)",
+                        error=None,
+                        method=method,
+                        snapshot=snapshot,
+                        runtime_id=runtime_id,
+                    )
+            except Exception as exc:  # noqa: BLE001 - normalized UI lifecycle boundary.
+                with setup_lock:
+                    setup_state.update(
+                        status="failed",
+                        progress=1.0,
+                        message="local ComfyUI startup failed",
+                        error=str(exc),
+                        method=method,
+                    )
+
+        threading.Thread(target=start_worker, daemon=True, name="cooksprite-local-comfy-start").start()
+        return local_setup_status()
+
+    @app.post("/api/v1/comfyui/probe")
+    @app.post("/api/v1/local/probe", include_in_schema=False)
+    def probe_comfyui(request: ComfyProbeCreate | None = None) -> dict[str, Any]:
+        """Probe the explicitly supplied ComfyUI URL, local or remote.
+
+        Runtime location is a connection choice, not something inferred by
+        this probe. Local installation/start controls are exposed only when
+        CookSprite can identify a local checkout for the same URL.
         """
 
+        request = request or ComfyProbeCreate()
+        base_url = request.base_url.strip().rstrip("/")
         configured = [
             runtime
             for runtime in store.runtimes()
-            if runtime.get("location", "remote") == "local"
+            if str(runtime.get("base_url", "")).rstrip("/") == base_url
         ]
-        candidates: list[dict[str, Any]] = []
-        urls = {str(runtime["base_url"]) for runtime in configured}
-        urls.add("http://127.0.0.1:8188")
+        known_runtime = configured[0] if configured else None
+        known_directory = known_runtime.get("directory") if known_runtime else None
         managed_installed = (default_managed_root / "install.json").is_file() and (
             default_managed_root / "ComfyUI" / "main.py"
         ).is_file()
-        for base_url in sorted(urls):
-            try:
-                # Keep the button responsive when the usual local port is not
-                # listening. The full doctor call fans out to several ComfyUI
-                # endpoints and is only useful after this cheap liveness check.
-                client = app.state.comfy_factory(base_url)
-                ping = getattr(client, "ping", None)
-                if callable(ping):
-                    ping()
-                report = app.state.comfy_factory(base_url).doctor()
-                system = (report.get("system_stats") or {}).get("system") or {}
-                candidates.append(
-                    {
-                        "base_url": base_url,
-                        "status": "found",
-                        "version": system.get("comfyui_version"),
-                        "device": system.get("device"),
-                        "models": sum(
-                            len(items)
-                            for items in (report.get("models") or {}).values()
-                            if isinstance(items, list)
-                        ),
-                        "workflows": len(report.get("workflow_templates") or {}),
-                        "nodes": len(report.get("object_info") or {}),
-                        "managed": base_url == f"http://127.0.0.1:{LocalSetupCreate.model_fields['port'].default}",
-                    }
-                )
-            except Exception as exc:  # noqa: BLE001 - probe returns a user-readable state.
-                candidates.append(
-                    {"base_url": base_url, "status": "unreachable", "error": str(exc)}
-                )
-        if any(item["status"] == "found" for item in candidates):
-            status = "found"
-        elif managed_installed or configured:
-            status = "installed" if managed_installed else "unreachable"
-        else:
-            status = "missing"
+        default_local_url = f"http://127.0.0.1:{LocalSetupCreate.model_fields['port'].default}"
+        directory = discover_comfy_directory(base_url, known_directory)
+        managed = bool(
+            directory
+            and (
+                directory == str(default_managed_root / "ComfyUI")
+                or (known_runtime and known_runtime.get("location", "remote") == "local")
+            )
+        ) or base_url == default_local_url
+        try:
+            # Keep the button responsive when the endpoint is offline. The
+            # full doctor call fans out to several ComfyUI endpoints and is
+            # only useful after this cheap liveness check.
+            client = app.state.comfy_factory(base_url)
+            ping = getattr(client, "ping", None)
+            if callable(ping):
+                ping()
+            report = app.state.comfy_factory(base_url).doctor()
+            system = (report.get("system_stats") or {}).get("system") or {}
+            present_nodes = {
+                name
+                for name in (report.get("object_info") or {})
+                if name in COOKSPRITE_NODE_CLASSES
+            }
+            candidate = {
+                "base_url": base_url,
+                "status": "found",
+                "version": system.get("comfyui_version"),
+                "device": system.get("device"),
+                "models": sum(
+                    len(items)
+                    for items in (report.get("models") or {}).values()
+                    if isinstance(items, list)
+                ),
+                "workflows": len(report.get("workflow_templates") or {}),
+                "nodes": len(report.get("object_info") or {}),
+                "cooksprite_nodes": len(present_nodes),
+                "nodes_installed": COOKSPRITE_NODE_CLASSES.issubset(present_nodes),
+                "directory_found": bool(directory),
+                "directory": directory,
+                "managed": managed,
+            }
+        except Exception as exc:  # noqa: BLE001 - probe returns a user-readable state.
+            candidate = {
+                "base_url": base_url,
+                "status": "unreachable",
+                "error": str(exc),
+                "directory_found": bool(directory),
+                "directory": directory,
+                "managed": managed,
+            }
+        status = candidate["status"]
+        if status == "unreachable":
+            if managed_installed and managed:
+                status = "unreachable"
+            elif managed:
+                status = "missing"
         return {
             "status": status,
             "managed_installed": managed_installed,
-            "candidates": candidates,
+            "candidates": [candidate],
         }
 
     # Contributor/debug surface. Ordinary Web/CLI/Skill users do not need it.
@@ -1667,7 +1940,7 @@ def create_app(
     def local_setup_status() -> dict[str, Any]:
         with setup_lock:
             state = dict(setup_state)
-        if state["status"] in {"installed", "ready"}:
+        if state["status"] in {"installed", "ready"} and state.get("directory") == str(default_managed_root):
             runtime = store.runtime("local-managed")
             if runtime and probe_runtime(runtime)["status"] == "ready":
                 state.update(
@@ -1742,6 +2015,7 @@ def create_app(
                     ],
                     "local",
                     "local-process",
+                    str(root),
                 )
                 runtime = runtime_or_404(runtime_id)
                 _, _, recipes = persist_runtime_report(runtime, report)
@@ -1769,7 +2043,16 @@ def create_app(
         # the UI. Keep its validated snapshot until the new doctor succeeds so
         # a failed reconnect cannot silently take a previously-ready runtime
         # offline. A changed URL intentionally invalidates the old snapshot.
-        existing = store.runtime(request.id)
+        runtime_id = request.id or next(
+            (
+                row["id"]
+                for row in store.runtimes()
+                if row.get("base_url") == request.base_url
+                and row.get("location", "remote") == request.location
+            ),
+            _runtime_id(request.label, request.base_url),
+        )
+        existing = store.runtime(runtime_id)
         same_endpoint = bool(existing and existing.get("base_url") == request.base_url)
         existing_assets = runtime_assets(existing) if same_endpoint else []
         existing_manifest = manifest_from_assets(existing_assets)
@@ -1785,8 +2068,13 @@ def create_app(
                 if not (isinstance(item, dict) and item.get("schema") == manifest["schema"])
             ]
             existing_assets.insert(0, manifest)
+        directory = request.directory or (existing.get("directory") if same_endpoint and existing else None)
+        if request.location == "local":
+            directory = discover_comfy_directory(request.base_url, directory)
+        else:
+            directory = None
         store.put_runtime(
-            request.id,
+            runtime_id,
             request.label,
             request.base_url,
             existing.get("snapshot", "") if same_endpoint and existing else "",
@@ -1794,15 +2082,32 @@ def create_app(
             existing_assets,
             request.location,
             request.transport,
+            directory,
         )
-        invalidate_runtime(request.id)
+        invalidate_runtime(runtime_id)
         return {
-            "id": request.id,
+            "id": runtime_id,
             "label": request.label,
             "base_url": request.base_url,
             "location": request.location,
             "transport": request.transport,
+            "directory": directory,
             "snapshot": existing.get("snapshot") if same_endpoint and existing else None,
+        }
+
+    @app.delete("/api/v1/runtimes/{runtime_id}")
+    def delete_runtime(runtime_id: str) -> dict[str, Any]:
+        runtime = runtime_or_404(runtime_id)
+        try:
+            active_runtime_id = store.delete_runtime(runtime_id)
+        except RuntimeError as exc:
+            raise HTTPException(409, _detail("runtime_in_use", str(exc))) from exc
+        invalidate_runtime(runtime_id)
+        return {
+            "runtime_id": runtime_id,
+            "deleted": True,
+            "active_runtime_id": active_runtime_id,
+            "message": f"runtime {runtime['label']} removed; no ComfyUI process was stopped",
         }
 
     @app.get("/api/v1/runtimes")
@@ -1813,7 +2118,9 @@ def create_app(
             active_runtime_id = fallback["id"] if fallback else None
         result = []
         for row in store.runtimes():
+            row = runtime_or_404(row["id"])
             state = probe_runtime(row)
+            nodes_installed, cooksprite_nodes = runtime_node_status(row)
             result.append(
                 {
                     **{
@@ -1826,6 +2133,9 @@ def create_app(
                     "callback_url": callback_for(row),
                     "recipes": [recipe.dump() for recipe in recipes_from_runtime(row)],
                     "active": row["id"] == active_runtime_id,
+                    "nodes_installed": nodes_installed,
+                    "cooksprite_nodes": cooksprite_nodes,
+                    "node_install_available": bool(row.get("directory")),
                 }
             )
         return result
@@ -1948,6 +2258,113 @@ def create_app(
             "models": model_counts,
         }
 
+    @app.post("/api/v1/runtimes/{runtime_id}/nodes/install")
+    def install_runtime_nodes(runtime_id: str) -> dict[str, Any]:
+        """Install CookSprite nodes only when the ComfyUI checkout is local."""
+
+        runtime = runtime_or_404(runtime_id)
+        directory = validate_comfy_directory(runtime.get("directory"))
+        if not directory:
+            return {
+                "runtime_id": runtime_id,
+                "status": "manual_required",
+                "message": "Install CookSprite nodes on the remote ComfyUI host, then reconnect.",
+                "command": "cspr comfy install-nodes <ComfyUI directory>",
+                "restart_required": False,
+            }
+        target = install_node_pack(directory, install_dependencies=False)
+        return {
+            "runtime_id": runtime_id,
+            "status": "installed",
+            "directory": directory,
+            "node_directory": str(target),
+            "message": "CookSprite nodes installed; restart ComfyUI to load them.",
+            "restart_required": True,
+        }
+
+    @app.post("/api/v1/runtimes/{runtime_id}/restart", status_code=202)
+    def restart_runtime(runtime_id: str) -> dict[str, Any]:
+        """Restart a local ComfyUI process so newly installed nodes are loaded."""
+
+        runtime = runtime_or_404(runtime_id)
+        if runtime.get("location", "remote") != "local":
+            return {
+                "runtime_id": runtime_id,
+                "status": "manual_required",
+                "message": "Remote ComfyUI cannot be restarted from this CookSprite host.",
+                "restart_required": True,
+            }
+        base_url, host, port, directory = _local_start_target(
+            LocalStartCreate(base_url=runtime["base_url"], directory=runtime.get("directory"))
+        )
+        active_runs = store.active_run_count(runtime_id)
+        if active_runs:
+            raise HTTPException(
+                409,
+                _detail(
+                    "runtime_in_use",
+                    f"cannot restart ComfyUI while {active_runs} run(s) are active",
+                ),
+            )
+        with setup_lock:
+            if setup_state["status"] in {"installing", "starting", "validating"}:
+                raise HTTPException(
+                    409, _detail("setup_in_progress", "local ComfyUI lifecycle operation is already running")
+                )
+            setup_state.update(
+                status="starting",
+                progress=0.05,
+                message="restarting local ComfyUI",
+                error=None,
+                directory=directory,
+                method=None,
+                runtime_id=runtime_id,
+            )
+
+        def restart_worker() -> None:
+            try:
+                launch = restart_with_preference(directory, host=host, port=port)
+                with setup_lock:
+                    setup_state.update(
+                        status="starting",
+                        progress=0.35,
+                        message=f"ComfyUI restarted with {launch.method}; waiting for API",
+                        method=launch.method,
+                    )
+                report = wait_until_ready(base_url, timeout=300)
+                refreshed = store.runtime(runtime_id)
+                if not refreshed:
+                    raise RuntimeError("runtime was removed while ComfyUI was restarting")
+                with setup_lock:
+                    setup_state.update(
+                        status="validating",
+                        progress=0.85,
+                        message="validating restarted ComfyUI capabilities",
+                        method=launch.method,
+                    )
+                snapshot, _, recipes = persist_runtime_report(refreshed, report)
+                with setup_lock:
+                    setup_state.update(
+                        status="ready",
+                        progress=1.0,
+                        message=f"ComfyUI restarted with {len(recipes)} compatible recipe(s)",
+                        error=None,
+                        method=launch.method,
+                        snapshot=snapshot,
+                        runtime_id=runtime_id,
+                    )
+            except Exception as exc:  # noqa: BLE001 - normalized UI lifecycle boundary.
+                with setup_lock:
+                    setup_state.update(
+                        status="failed",
+                        progress=1.0,
+                        message="ComfyUI restart failed",
+                        error=str(exc),
+                    )
+
+        threading.Thread(target=restart_worker, daemon=True, name="cooksprite-comfy-restart").start()
+        return local_setup_status()
+
     @app.post("/api/v1/runtimes/{runtime_id}/recipes", status_code=201)
     def import_recipe(runtime_id: str, body: RecipeCreate) -> dict[str, Any]:
         runtime = runtime_or_404(runtime_id)
@@ -1986,11 +2403,20 @@ def create_app(
                     nodes=missing,
                 ),
             )
+        candidate = Recipe(**body.model_dump(), source="imported")
+        if not recipe_contract_is_valid(candidate):
+            raise HTTPException(
+                422,
+                _detail(
+                    "recipe_invalid",
+                    "recipe slots/output do not satisfy a supported CookSprite contract",
+                ),
+            )
         recipe = materialize_recipe_workflows(
             store,
             runtime["id"],
             runtime["snapshot"],
-            Recipe(**body.model_dump(), source="imported"),
+            candidate,
         )
         recipes = [item for item in recipes_from_runtime(runtime) if item.id != recipe.id]
         recipes.append(recipe)
@@ -2016,6 +2442,7 @@ def create_app(
             assets,
             runtime.get("location", "remote"),
             runtime.get("transport", "http"),
+            runtime.get("directory"),
         )
         invalidate_runtime(runtime_id)
         return recipe.dump()

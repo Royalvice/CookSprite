@@ -277,6 +277,10 @@ class ActionRunCreate(BaseModel):
     project: str
     inputs: dict[str, str | list[str]] = Field(default_factory=dict)
     values: dict[str, Any] = Field(default_factory=dict)
+    # Runtime Recipe slots that are not stable Action controls. This keeps
+    # model/workflow-specific knobs out of the public Action registry while
+    # giving CLI, agents, and future Web controls one typed path.
+    params: dict[str, Any] = Field(default_factory=dict)
 
 
 class ProjectExportCreate(BaseModel):

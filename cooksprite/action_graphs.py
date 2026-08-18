@@ -10,31 +10,23 @@ import secrets
 from typing import Any
 
 from .domain import (
-    PortDescriptor,
     TaskDefinition,
     TaskRevision,
-    ToolDescriptor,
     ToolNode,
     ValueRef,
     WorkflowCall,
     WorkflowDefinition,
     WorkflowRevision,
 )
-from .prompting import DEFAULT_GREEN_SCREEN_BACKGROUND
-from .recipes import Recipe, recipe_mode
+from .recipe_assembler import (
+    assemble_recipe_workflow,
+    input_ref,
+    literal,
+    output_ref,
+    prompt_packet,
+)
+from .recipes import OFFICIAL_ALPHA_MODEL, Recipe, recipe_mode
 from .store import Store
-
-
-def literal(value: Any) -> ValueRef:
-    return ValueRef(literal=value)
-
-
-def input_ref(name: str) -> ValueRef:
-    return ValueRef(input=name)
-
-
-def output_ref(node: str, output: str) -> ValueRef:
-    return ValueRef(node=node, output=output)
 
 
 def _core_image_workflow(
@@ -64,33 +56,7 @@ def _core_image_workflow(
         inputs[source_slot] = "Image"
 
     nodes = [
-        ToolNode(
-            id="packet",
-            tool="cooksprite.compile_prompt_packet",
-            params={
-                "action_id": literal(action_id),
-                "prompt": input_ref("prompt"),
-                "category": input_ref("category"),
-                "style": input_ref("style"),
-                "animation": input_ref("animation"),
-                "view": input_ref("view"),
-                "direction": input_ref("direction"),
-                "task": literal("video" if action_id == "animation.generate" else "image"),
-                "mode": literal(mode),
-                "caption": input_ref("prompt"),
-                "compile_prompt": input_ref("prompt_compile"),
-                "action": input_ref("animation"),
-                "camera_preset": input_ref("view"),
-                "orientation": literal("front"),
-                "facing": literal("right"),
-                "model": literal("generic"),
-                "width": literal(512),
-                "height": literal(512),
-                "background": literal(DEFAULT_GREEN_SCREEN_BACKGROUND),
-                "edit_instruction": literal(""),
-                "negative_terms": literal(""),
-            },
-        ),
+        prompt_packet(action_id, mode),
         ToolNode(
             id="model",
             tool="comfy.CheckpointLoaderSimple",
@@ -188,31 +154,43 @@ def _core_image_workflow(
                     "vae": output_ref("model", "output_2"),
                 },
             ),
-            ToolNode(
-                id="isolate",
-                tool="cooksprite.isolate_on_green",
-                inputs={"image": output_ref("decode", "output_0")},
-                params={"tolerance": literal(0.22)},
-            ),
-            ToolNode(
-                id="pixel",
-                tool="cooksprite.pixelize",
-                inputs={"image": output_ref("isolate", "image")},
-                params={
-                    "target_width": literal(128),
-                    "target_height": literal(128),
-                    "enabled": input_ref("pixel_enabled"),
-                },
-            ),
         ]
     )
+    final_ref = output_ref("decode", "output_0")
+    if action_id != "image.generate":
+        nodes.extend(
+            [
+                ToolNode(
+                    id="isolate",
+                    tool="cooksprite.isolate_on_green",
+                    inputs={"image": output_ref("decode", "output_0")},
+                    params={"tolerance": literal(0.22)},
+                ),
+                ToolNode(
+                    id="pixel",
+                    tool="cooksprite.pixelize",
+                    inputs={"image": output_ref("isolate", "image")},
+                    params={
+                        "target_width": literal(128),
+                        "target_height": literal(128),
+                        "profile": literal("production"),
+                        "palette_budget": literal(0),
+                        "padding_x": literal(-1),
+                        "padding_y": literal(-1),
+                        "variants": literal(False),
+                        "enabled": input_ref("pixel_enabled"),
+                    },
+                ),
+            ]
+        )
+        final_ref = output_ref("pixel", "image")
     return WorkflowDefinition(
         id=f"{recipe.id}.{action_id}.{mode}",
         title=f"{recipe.label} · {action_id} · {mode}",
         runtime_id=runtime_id,
         inputs=inputs,
         nodes=nodes,
-        outputs={"image": output_ref("pixel", "image")},
+        outputs={"image": final_ref},
         output_sources={"image": input_ref(source_slot)} if source_slot else {},
     )
 
@@ -286,115 +264,74 @@ def _video_workflow(runtime_id: str, recipe: Recipe) -> WorkflowDefinition:
     )
 
 
-def sealed_tool_descriptor(recipe: Recipe) -> ToolDescriptor | None:
-    if recipe.source not in {"imported", "discovered"} or not recipe.workflow:
-        return None
-    inputs = []
-    for name in recipe.slots:
-        port_type = {
-            "image": "Image",
-            "seed": "Number",
-            "count": "Number",
-            "strength": "Number",
-        }.get(name, "Text")
-        inputs.append(PortDescriptor(name=name, type=port_type, required=False))
-    return ToolDescriptor(
-        id=f"comfy.sealed.{recipe.id}",
-        source="comfy",
-        title=f"ComfyUI workflow · {recipe.label}",
-        inputs=inputs,
-        outputs=[PortDescriptor(name="image", type="Image", persistable=True)],
+def _pixel_workflow(runtime_id: str, recipe: Recipe) -> WorkflowDefinition:
+    """Build the smallest standalone graph for the pixelize Action."""
+
+    return WorkflowDefinition(
+        id=f"{recipe.id}.image.pixelize",
+        title=f"{recipe.label} · image.pixelize",
+        runtime_id=runtime_id,
+        inputs={"source": "Image", "target_width": "Number", "target_height": "Number"},
+        nodes=[
+            ToolNode(
+                id="pixel",
+                tool="cooksprite.pixelize",
+                inputs={"image": input_ref("source")},
+                params={
+                    "target_width": input_ref("target_width"),
+                    "target_height": input_ref("target_height"),
+                    "profile": literal("production"),
+                    "palette_budget": literal(0),
+                    "padding_x": literal(-1),
+                    "padding_y": literal(-1),
+                    "variants": literal(False),
+                    "enabled": literal(True),
+                },
+            )
+        ],
+        outputs={"image": output_ref("pixel", "image")},
+        output_sources={"image": input_ref("source")},
     )
 
 
-def _imported_workflow(
-    runtime_id: str,
-    recipe: Recipe,
-    action_id: str,
-    mode: str,
-) -> WorkflowDefinition:
-    descriptor = sealed_tool_descriptor(recipe)
-    if not descriptor:
-        raise ValueError("imported Recipe has no sealed Tool")
-    inputs: dict[str, str] = {
-        "prompt": "Text",
-        "category": "Text",
-        "style": "Text",
-        "animation": "Text",
-        "view": "Text",
-        "direction": "Text",
-        "prompt_compile": "Boolean",
-        "count": "Number",
-        "seed": "Number",
-        "strength": "Number",
-        "pixel_enabled": "Boolean",
-    }
-    source_slot = ""
-    if mode in {"i2i", "i2v"}:
-        source_slot = "reference" if action_id == "image.generate" else "source"
-        inputs[source_slot] = "Image"
-    sealed_inputs: dict[str, ValueRef] = {}
-    for slot in recipe.slots:
-        if slot == "text":
-            sealed_inputs[slot] = output_ref("packet", "prompt")
-        elif slot == "negative":
-            sealed_inputs[slot] = output_ref("packet", "negative_prompt")
-        elif slot == "model":
-            sealed_inputs[slot] = literal(recipe.checkpoint or "")
-        elif slot in {"seed", "count"}:
-            sealed_inputs[slot] = input_ref(slot)
-        elif slot == "strength":
-            sealed_inputs[slot] = input_ref("strength")
-        elif slot == "image" and source_slot:
-            sealed_inputs[slot] = input_ref(source_slot)
-    nodes = [
-        ToolNode(
-            id="packet",
-            tool="cooksprite.compile_prompt_packet",
-            params={
-                "action_id": literal(action_id),
-                "prompt": input_ref("prompt"),
-                "category": input_ref("category"),
-                "style": input_ref("style"),
-                "animation": input_ref("animation"),
-                "view": input_ref("view"),
-                "direction": input_ref("direction"),
-                "task": literal("video" if action_id == "animation.generate" else "image"),
-                "mode": literal(mode),
-                "caption": input_ref("prompt"),
-                "compile_prompt": input_ref("prompt_compile"),
-                "action": input_ref("animation"),
-                "camera_preset": input_ref("view"),
-                "orientation": literal("front"),
-                "facing": literal("right"),
-                "model": literal("generic"),
-                "width": literal(512),
-                "height": literal(512),
-                "background": literal(DEFAULT_GREEN_SCREEN_BACKGROUND),
-                "edit_instruction": literal(""),
-                "negative_terms": literal(""),
-            },
-        ),
-        ToolNode(id="sealed", tool=descriptor.id, inputs=sealed_inputs),
-        ToolNode(
-            id="pixel",
-            tool="cooksprite.pixelize",
-            inputs={"image": output_ref("sealed", "image")},
-            params={
-                "target_width": literal(128),
-                "target_height": literal(128),
-                "enabled": input_ref("pixel_enabled"),
-            },
-        ),
-    ]
+def _cutout_workflow(runtime_id: str, recipe: Recipe) -> WorkflowDefinition:
+    """Build ComfyUI's official BiRefNet background-removal workflow."""
+
     return WorkflowDefinition(
-        id=f"{recipe.id}.{action_id}.{mode}",
-        title=f"{recipe.label} · {action_id} · {mode}",
+        id=f"{recipe.id}.image.cutout",
+        title=f"{recipe.label} · image.cutout",
         runtime_id=runtime_id,
-        inputs=inputs,
-        nodes=nodes,
-        outputs={"image": output_ref("pixel", "image")},
-        output_sources={"image": input_ref(source_slot)} if source_slot else {},
+        inputs={"source": "Image"},
+        nodes=[
+            ToolNode(
+                id="load_model",
+                tool="comfy.LoadBackgroundRemovalModel",
+                inputs={"bg_removal_name": literal(OFFICIAL_ALPHA_MODEL)},
+            ),
+            ToolNode(
+                id="remove_background",
+                tool="comfy.RemoveBackground",
+                inputs={
+                    "bg_removal_model": output_ref("load_model", "output_0"),
+                    "image": input_ref("source"),
+                },
+            ),
+            ToolNode(
+                id="invert_mask",
+                tool="comfy.InvertMask",
+                inputs={"mask": output_ref("remove_background", "output_0")},
+            ),
+            ToolNode(
+                id="join_alpha",
+                tool="comfy.JoinImageWithAlpha",
+                inputs={
+                    "image": input_ref("source"),
+                    "alpha": output_ref("invert_mask", "output_0"),
+                },
+            ),
+        ],
+        outputs={"image": output_ref("join_alpha", "output_0")},
+        output_sources={"image": input_ref("source")},
     )
 
 
@@ -420,16 +357,14 @@ def materialize_recipe_workflows(
         definitions = {"sheet.slice:sheet-to-frames": _sheet_workflow(runtime_id, recipe)}
     elif recipe.family == "cooksprite.video":
         definitions = {"video.sample:video-to-frames": _video_workflow(runtime_id, recipe)}
+    elif recipe.family == "cooksprite.pixel":
+        definitions = {"image.pixelize:image-to-image": _pixel_workflow(runtime_id, recipe)}
+    elif recipe.family == "cooksprite.alpha":
+        definitions = {"image.cutout:image-to-image": _cutout_workflow(runtime_id, recipe)}
     elif recipe.source in {"imported", "discovered"} and recipe.workflow:
         for action_id in recipe.actions:
             for mode in recipe.modes:
-                if action_id == "image.generate" and mode not in {"t2i", "i2i"}:
-                    continue
-                if action_id == "frame.redraw" and mode != "i2i":
-                    continue
-                if action_id == "animation.generate" and mode not in {"i2v", "t2v"}:
-                    continue
-                definitions[f"{action_id}:{mode}"] = _imported_workflow(
+                definitions[f"{action_id}:{mode}"] = assemble_recipe_workflow(
                     runtime_id, recipe, action_id, mode
                 )
     if not definitions:
@@ -470,12 +405,58 @@ def bind_action_task(
     action_id: str,
     artifacts: dict[str, list[str]],
     values: dict[str, Any],
+    params: dict[str, Any] | None = None,
 ) -> tuple[TaskRevision, dict[tuple[str, int], WorkflowRevision], dict[str, ValueRef]]:
     workflow_ref = recipe.workflow_for(action_id, artifacts)
     if not workflow_ref:
         mode = recipe_mode(action_id, artifacts)
         raise ValueError(f"recipe {recipe.id} has no typed workflow for {action_id}:{mode}")
     workflow = _workflow_revision(store, workflow_ref)
+    params = dict(params or {})
+    reserved = {
+        "prompt",
+        "category",
+        "style",
+        "action",
+        "animation",
+        "view",
+        "direction",
+        "prompt_compile",
+        "count",
+        "seed",
+        "strength",
+        "pixel_enabled",
+        "flip_y",
+        "columns",
+        "rows",
+        "frame_width",
+        "frame_height",
+        "margin",
+        "spacing",
+        "exclude_empty",
+        "sample_fps",
+        "max_frames",
+        "model",
+        "runtime",
+    }
+    conflicts = sorted(set(params).intersection(reserved))
+    if conflicts:
+        raise ValueError(f"workflow params conflict with stable Action values: {conflicts}")
+    unknown = sorted(set(params) - set(workflow.inputs))
+    if unknown:
+        raise ValueError(f"workflow params are not declared by the selected Recipe: {unknown}")
+    for name, value in params.items():
+        port_type = workflow.inputs[name]
+        if port_type == "Text":
+            valid = isinstance(value, str)
+        elif port_type == "Number":
+            valid = isinstance(value, (int, float)) and not isinstance(value, bool)
+        elif port_type == "Boolean":
+            valid = isinstance(value, bool)
+        else:
+            valid = False
+        if not valid:
+            raise ValueError(f"workflow param {name} must be a scalar {port_type}")
     calls: list[WorkflowCall] = []
     task_inputs: dict[str, str] = {}
     run_inputs: dict[str, ValueRef] = {}
@@ -497,44 +478,55 @@ def bind_action_task(
     seed = int(values.get("seed", -1))
     if seed < 0:
         seed = secrets.randbelow(2**63 - 1)
-    prepared = {
-        "prompt": str(values.get("prompt") or ""),
-        "category": str(values.get("category") or ""),
-        "style": str(values.get("style") or "smooth"),
-        "animation": str(values.get("action") or "idle"),
-        "view": str(values.get("view") or "level"),
-        "direction": str(values.get("direction") or "s"),
-        "prompt_compile": bool(values.get("prompt_compile", True)),
-        "count": max(1, min(int(values.get("count", 1)), 16)),
-        "seed": seed,
-        "strength": max(0.01, min(float(values.get("strength", 0.65)), 1.0)),
-        "pixel_enabled": action_id == "image.generate" and values.get("style") == "pixel",
-        "flip_y": bool(values.get("flip_y", False)),
-        "columns": int(values.get("columns", 0)),
-        "rows": int(values.get("rows", 0)),
-        "frame_width": int(values.get("frame_width", 64)),
-        "frame_height": int(values.get("frame_height", 64)),
-        "margin": int(values.get("margin", 0)),
-        "spacing": int(values.get("spacing", 0)),
-        "exclude_empty": bool(values.get("exclude_empty", True)),
-        "sample_fps": float(values.get("sample_fps", 12)),
-        "max_frames": int(values.get("max_frames", 48)),
-    }
+    # Keep every Action value so a Recipe can declare a new workflow slot
+    # without another API-side allow-list.  The aliases below normalize the
+    # stable product controls to the semantic names used by old recipes.
+    prepared = {**values, **params}
+    prepared.update(
+        {
+            "prompt": str(values.get("prompt") or ""),
+            "category": str(values.get("category") or ""),
+            "style": str(values.get("style") or "2d_action_game"),
+            "animation": str(values.get("action") or "idle"),
+            "view": str(values.get("view") or "level"),
+            "direction": str(values.get("direction") or "s"),
+            "prompt_compile": bool(values.get("prompt_compile", True)),
+            "count": max(1, min(int(values.get("count", 1)), 16)),
+            "seed": seed,
+            "strength": max(0.01, min(float(values.get("strength", 0.65)), 1.0)),
+            "pixel_enabled": action_id != "image.generate" and values.get("style") == "pixel",
+            "flip_y": bool(values.get("flip_y", False)),
+            "columns": int(values.get("columns", 0)),
+            "rows": int(values.get("rows", 0)),
+            "frame_width": int(values.get("frame_width", 64)),
+            "frame_height": int(values.get("frame_height", 64)),
+            "margin": int(values.get("margin", 0)),
+            "spacing": int(values.get("spacing", 0)),
+            "exclude_empty": bool(values.get("exclude_empty", True)),
+            "sample_fps": float(values.get("sample_fps", 12)),
+            "max_frames": int(values.get("max_frames", 48)),
+            "target_width": int(values.get("target_width", 128)),
+            "target_height": int(values.get("target_height", 128)),
+        }
+    )
 
     for index, (slot, artifact_id) in enumerate(source_slots):
         call_id = f"step_{index + 1}"
         call_inputs: dict[str, ValueRef] = {}
         if slot:
             input_name = slot if action_id != "normal.generate" else f"source_{index}"
-            task_inputs[input_name] = "Image" if action_id != "video.sample" else "Video"
-            if action_id == "sheet.slice":
-                task_inputs[input_name] = "SpriteSheet"
-            run_inputs[input_name] = ValueRef(artifact=artifact_id)
             workflow_slot = (
                 "source"
                 if action_id in {"normal.generate", "frame.redraw", "animation.generate"}
                 else slot
             )
+            port_type = workflow.inputs.get(workflow_slot)
+            if not port_type:
+                raise ValueError(
+                    f"Recipe {recipe.id} does not declare artifact input {workflow_slot}"
+                )
+            task_inputs[input_name] = port_type
+            run_inputs[input_name] = ValueRef(artifact=artifact_id)
             call_inputs[workflow_slot] = input_ref(input_name)
         for name, port_type in workflow.inputs.items():
             if name in call_inputs:

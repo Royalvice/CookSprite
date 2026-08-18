@@ -7,20 +7,8 @@ MANIFEST = ToolPackageManifest(
     id="image",
     version="1.0.0",
     license="Apache-2.0",
-    requirements=["scipy>=1.11"],
+    requirements=["scipy>=1.11,<2"],
     tools=[
-        tool(
-            "image",
-            "pixelize",
-            "Pixelize",
-            [("image", "Image")],
-            [("image", "Image", True)],
-            {
-                "target_width": {"type": "integer"},
-                "target_height": {"type": "integer"},
-                "enabled": {"type": "boolean"},
-            },
-        ),
         tool(
             "image",
             "isolate_on_green",
@@ -31,10 +19,9 @@ MANIFEST = ToolPackageManifest(
         ),
     ],
     lowerings={
-        "cooksprite.pixelize": "CS_Pixelize",
         "cooksprite.isolate_on_green": "CS_IsolateOnGreen",
     },
-    node_classes=["CS_Pixelize", "CS_IsolateOnGreen"],
+    node_classes=["CS_IsolateOnGreen"],
     workflows=[
         "image.generate:t2i",
         "image.generate:i2i",

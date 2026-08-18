@@ -49,13 +49,30 @@ cspr action run animation.generate \
   --wait
 ```
 
+If the selected runtime Recipe exposes an additional scalar input, pass it
+without changing the Action shape:
+
+```bash
+cspr action run image.generate \
+  --project prj_x \
+  --value model=rt_local:recipe-id \
+  --value prompt="a chef" \
+  --param style_hint="high contrast rim light" \
+  --wait
+```
+
+`--param` is only accepted when the selected Recipe declares that Workflow
+input and its CookSprite scalar type matches. It cannot replace stable Action
+controls.
+
 This is the exact public request shape:
 
 ```json
 {
   "project": "prj_x",
   "inputs": {"character": "art_x"},
-  "values": {"action": "walk", "view": "level", "direction": "s", "model": "rt_local:core-image-<checkpoint-hash>", "count": 8}
+  "values": {"action": "walk", "view": "level", "direction": "s", "model": "rt_local:core-image-<checkpoint-hash>", "count": 8},
+  "params": {}
 }
 ```
 

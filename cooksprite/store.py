@@ -56,7 +56,8 @@ class Store:
                     tools TEXT NOT NULL DEFAULT '[]',
                     assets TEXT NOT NULL DEFAULT '[]',
                     location TEXT NOT NULL DEFAULT 'remote',
-                    transport TEXT NOT NULL DEFAULT 'http'
+                    transport TEXT NOT NULL DEFAULT 'http',
+                    directory TEXT
                 );
                 CREATE TABLE IF NOT EXISTS definitions (
                     kind TEXT NOT NULL,
@@ -136,6 +137,7 @@ class Store:
             self._ensure_column("definitions", "body_hash", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column("runtimes", "location", "TEXT NOT NULL DEFAULT 'remote'")
             self._ensure_column("runtimes", "transport", "TEXT NOT NULL DEFAULT 'http'")
+            self._ensure_column("runtimes", "directory", "TEXT")
             definition_rows = self.db.execute(
                 "SELECT kind,id,revision,body FROM definitions WHERE body_hash=''"
             ).fetchall()
@@ -277,6 +279,52 @@ class Store:
             ).fetchone()
         return str(row["value"]) if row else None
 
+    def delete_runtime(self, runtime_id: str) -> str | None:
+        """Remove one saved connection without touching its process or artifacts."""
+
+        with self.lock:
+            row = self.db.execute("SELECT id FROM runtimes WHERE id=?", (runtime_id,)).fetchone()
+            if not row:
+                raise FileNotFoundError(runtime_id)
+            running = self.db.execute(
+                "SELECT COUNT(*) AS count FROM runs "
+                "WHERE runtime_id=? AND status IN ('queued','running','cancel_requested')",
+                (runtime_id,),
+            ).fetchone()["count"]
+            if running:
+                raise RuntimeError(f"runtime {runtime_id} has {running} active run(s)")
+            active = self.db.execute(
+                "SELECT value FROM settings WHERE key='active_runtime_id'"
+            ).fetchone()
+            active_id = str(active["value"]) if active else None
+            self.db.execute("DELETE FROM runtimes WHERE id=?", (runtime_id,))
+            next_id: str | None = active_id
+            if active_id == runtime_id:
+                next_row = self.db.execute(
+                    "SELECT id FROM runtimes ORDER BY CASE WHEN snapshot IS NOT NULL "
+                    "AND snapshot != '' THEN 0 ELSE 1 END, id LIMIT 1"
+                ).fetchone()
+                next_id = str(next_row["id"]) if next_row else None
+                if next_id:
+                    self.db.execute(
+                        "INSERT INTO settings(key,value) VALUES('active_runtime_id',?) "
+                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                        (next_id,),
+                    )
+                else:
+                    self.db.execute("DELETE FROM settings WHERE key='active_runtime_id'")
+            self.db.commit()
+            return next_id
+
+    def active_run_count(self, runtime_id: str) -> int:
+        with self.lock:
+            row = self.db.execute(
+                "SELECT COUNT(*) AS count FROM runs "
+                "WHERE runtime_id=? AND status IN ('queued','running','cancel_requested')",
+                (runtime_id,),
+            ).fetchone()
+        return int(row["count"])
+
     def put_runtime(
         self,
         runtime_id: str,
@@ -287,11 +335,13 @@ class Store:
         assets: list | None = None,
         location: str = "remote",
         transport: str = "http",
+        directory: str | None = None,
     ) -> None:
         with self.lock:
             self.db.execute(
                 "INSERT OR REPLACE INTO runtimes "
-                "(id,label,base_url,snapshot,tools,assets,location,transport) VALUES(?,?,?,?,?,?,?,?)",
+                "(id,label,base_url,snapshot,tools,assets,location,transport,directory) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
                 (
                     runtime_id,
                     label,
@@ -301,6 +351,7 @@ class Store:
                     json.dumps(assets or []),
                     location,
                     transport,
+                    directory,
                 ),
             )
             self.db.commit()

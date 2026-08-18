@@ -53,6 +53,7 @@ def remove_background_batch(
         ) from exc
     rgb = np.clip(value[..., :3], 0.0, 1.0)
     source_alpha = value[..., 3] if value.shape[-1] > 3 else None
+    source_height, source_width = rgb.shape[1:3]
     foreground: list[np.ndarray] = []
     masks: list[np.ndarray] = []
     for start in range(0, len(rgb), int(batch_size)):
@@ -70,7 +71,13 @@ def remove_background_batch(
                 )
             except Exception as exc:
                 raise RuntimeError(f"rembg inference failed for model '{model}': {exc}") from exc
-            rgba = np.asarray(Image.open(io.BytesIO(output)).convert("RGBA"), dtype=np.float32) / 255.0
+            result = Image.open(io.BytesIO(output)).convert("RGBA")
+            # rembg normally restores the source size, but model adapters may
+            # return their internal working size. CookSprite artifacts keep
+            # the source geometry, so normalize only inside the Comfy node.
+            if result.size != (source_width, source_height):
+                result = result.resize((source_width, source_height), Image.Resampling.LANCZOS)
+            rgba = np.asarray(result, dtype=np.float32) / 255.0
             alpha = np.clip(rgba[..., 3], 0.0, 1.0)
             if source_alpha is not None:
                 alpha *= np.clip(source_alpha[index], 0.0, 1.0)

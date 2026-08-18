@@ -103,7 +103,11 @@ export const useStudioStore = defineStore("studio", () => {
 
   async function refreshRuntimes() {
     runtimes.value = await api.runtimes();
-    activeRuntimeId.value = runtimes.value.find((item) => item.active)?.id || activeRuntimeId.value || runtimes.value[0]?.id || "";
+    const selected = runtimes.value.find((item) => item.active)?.id;
+    const retained = runtimes.value.some((item) => item.id === activeRuntimeId.value)
+      ? activeRuntimeId.value
+      : "";
+    activeRuntimeId.value = selected || retained || runtimes.value[0]?.id || "";
     return runtimes.value;
   }
 
@@ -229,7 +233,7 @@ export const useStudioStore = defineStore("studio", () => {
     }, async (reason) => { error.value = readableError(reason); if (actionId) await refreshRuntime(); });
   }
 
-  async function runAction(actionId: string, inputs: Record<string, string | string[]>, values: Record<string, unknown>) {
+  async function runAction(actionId: string, inputs: Record<string, string | string[]>, values: Record<string, unknown>, params: Record<string, unknown> = {}) {
     const projectType: ProjectType = actionId === "animation.generate"
       ? "character"
       : actionId === "image.generate" && values.category === "terrain" && (!currentProject.value || currentProject.value.type === "static")
@@ -241,7 +245,12 @@ export const useStudioStore = defineStore("studio", () => {
     error.value = "";
     let run: RunView;
     try {
-      run = await api.runAction(actionId, { project: project.id, inputs, values });
+      run = await api.runAction(actionId, {
+        project: project.id,
+        inputs,
+        values,
+        ...(Object.keys(params).length ? { params } : {}),
+      });
       if (project.type !== projectType) {
         const [updatedProject, updatedDocument] = await Promise.all([
           api.project(project.id),

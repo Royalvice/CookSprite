@@ -44,6 +44,24 @@ Action → Task → Workflow → Tool → cooksprite.* / comfy.* ComfyUI nodes
 - A **Recipe** binds an Action to a validated Task/Workflow, models, and one
   immutable runtime snapshot. Runtime changes require a new revision.
 
+When introducing a new model, first find and validate the smallest official
+inference example and its official ComfyUI/API workflow. If no official
+workflow is available, use a well-maintained, high-star open-source pipeline
+as the starting point. Do not write a workflow from scratch by default.
+Preserve the upstream graph and version/provenance information, then add only
+the CookSprite adapter, parameter mapping, Recipe registration, and required
+typed post-processing.
+
+Recipe assembly is API-owned and generic. Runtime-discovered/imported ComfyUI
+graphs declare semantic slots, slot types, and one typed output; the shared
+`RecipeAssembler` turns any such Recipe into the same Prompt Tool → sealed
+workflow → CookSprite post-process DAG. Do not add a model-specific branch to
+the API for a new raw workflow. Stable Action controls stay in the registry;
+workflow-specific scalar knobs travel through the reserved `params` map and
+must match a declared Workflow input. An undeclared or wrongly typed parameter
+is an explicit error. Only a new computation requires a Tool package and
+custom-node implementation.
+
 Tool ports use CookSprite domain types such as `Image`, `Mask`, `FrameSeq`,
 `SpriteSheet`, `NormalMap`, and `SpritePair`, represented by shared Python
 schema classes. Raw Comfy values, filesystem paths, temporary URLs, and
@@ -119,6 +137,35 @@ completable by CLI against `/api/v1`, without starting a frontend or browser.
 - Model downloads are never a startup side effect. An install command must show
   model identity, source, license, size, destination, and obtain explicit
   consent before downloading. Installation must be resumable and verifiable.
+
+## Dependency and environment boundary
+
+CookSprite owns exactly two Python environments:
+
+- the repository `.venv`, containing only CookSprite API, CLI, compiler, and
+  development dependencies from `pyproject.toml` and `uv.lock`;
+- the managed ComfyUI runtime `.venv`, containing only the pinned ComfyUI
+  runtime, PyTorch/accelerator packages, and dependencies declared by the
+  registered CookSprite Tool Packages.
+
+These environments are deliberately disjoint. API/CLI code must not import
+Torch, ComfyUI, rembg, ONNX runtimes, or media-compute libraries. ComfyUI
+nodes must not depend on the CookSprite API environment. Models and caches are
+data, never Python dependencies.
+
+The ComfyUI environment is resolved from `cooksprite/comfy/requirements.in`
+and installed from its generated `requirements.lock`. Tool Package manifests
+are the only source for CookSprite node dependencies; the node requirements
+file and ComfyUI lock are generated, not hand-maintained. A new or changed
+custom node is incomplete until `cspr dev sync`, `cspr comfy lock`, and a
+locked `cspr comfy sync <runtime>` succeed. `uv` is required to refresh locks;
+an existing lock may be installed with the release fallback when `uv` is not
+available.
+
+Do not add a dependency to both environments for convenience. Do not install
+unlocked packages with bare `pip` into a managed environment. External or
+remote ComfyUI installations remain user-owned; CookSprite may inspect them,
+but only an explicit node installation may modify their environment.
 
 ## Project rules
 

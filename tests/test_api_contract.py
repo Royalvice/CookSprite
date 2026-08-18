@@ -33,6 +33,14 @@ def test_project_id_uses_name_prefix_and_short_uuid(tmp_path):
     assert Path(first["directory"]).name == first["id"]
 
 
+def test_image_action_uses_the_fixed_front_eye_level_camera_contract(tmp_path):
+    client = TestClient(create_app(tmp_path))
+
+    action = client.get("/api/v1/actions/image.generate").json()
+
+    assert "camera" not in {control["id"] for control in action["controls"]}
+
+
 class FakeComfy:
     submitted: ClassVar[list[dict]] = []
     online: ClassVar[bool] = True
@@ -83,6 +91,98 @@ def ready(c):
         == 200
     )
     assert c.post("/api/v1/runtimes/rt_test/doctor").status_code == 200
+
+
+def test_runtime_id_is_generated_from_endpoint_when_user_omits_it(tmp_path):
+    client = TestClient(create_app(tmp_path, FakeComfy, allow_test_runtime=True))
+
+    response = client.post(
+        "/api/v1/runtimes",
+        json={"label": "Desk ComfyUI", "base_url": "http://fake"},
+    )
+
+    assert response.status_code == 200
+    assert re.fullmatch(r"rt_fake_[0-9a-f]{8}", response.json()["id"])
+
+
+def test_comfy_probe_accepts_a_single_explicit_local_or_remote_url(tmp_path):
+    client = TestClient(create_app(tmp_path, FakeComfy, allow_test_runtime=True))
+
+    response = client.post("/api/v1/comfyui/probe", json={"base_url": "http://gpu.example:8188"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "found"
+    assert body["candidates"][0]["base_url"] == "http://gpu.example:8188"
+    assert body["candidates"][0]["models"] == 1
+    assert body["candidates"][0]["managed"] is False
+
+    # Keep the pre-existing endpoint available to older CLI clients.
+    legacy = client.post("/api/v1/local/probe", json={"base_url": "http://gpu.example:8188"})
+    assert legacy.status_code == 200
+    assert legacy.json()["candidates"][0]["base_url"] == "http://gpu.example:8188"
+
+
+def test_comfy_probe_keeps_unreachable_remote_endpoints_location_neutral(tmp_path):
+    client = TestClient(create_app(tmp_path, FakeComfy, allow_test_runtime=True))
+    FakeComfy.online = False
+    try:
+        response = client.post(
+            "/api/v1/comfyui/probe", json={"base_url": "http://gpu.example:8188"}
+        )
+    finally:
+        FakeComfy.online = True
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "unreachable"
+    assert body["candidates"] == [
+        {
+            "base_url": "http://gpu.example:8188",
+            "status": "unreachable",
+            "error": "runtime stopped",
+            "directory_found": False,
+            "directory": None,
+            "managed": False,
+        }
+    ]
+
+
+def test_remote_node_install_does_not_claim_to_write_remote_files(tmp_path):
+    client = TestClient(create_app(tmp_path, FakeComfy, allow_test_runtime=True))
+    runtime = client.post(
+        "/api/v1/runtimes",
+        json={"label": "Remote ComfyUI", "base_url": "http://fake", "location": "remote"},
+    ).json()
+
+    response = client.post(f"/api/v1/runtimes/{runtime['id']}/nodes/install")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "manual_required"
+    assert response.json()["restart_required"] is False
+
+
+def test_local_node_install_uses_the_explicitly_discovered_checkout(tmp_path):
+    comfy_root = tmp_path / "ComfyUI"
+    (comfy_root / "comfy").mkdir(parents=True)
+    (comfy_root / "main.py").write_text("", encoding="utf-8")
+    (comfy_root / "nodes.py").write_text("", encoding="utf-8")
+    client = TestClient(create_app(tmp_path / "data", FakeComfy, allow_test_runtime=True))
+    runtime = client.post(
+        "/api/v1/runtimes",
+        json={
+            "label": "Local ComfyUI",
+            "base_url": "http://fake",
+            "location": "local",
+            "directory": str(comfy_root),
+        },
+    ).json()
+
+    response = client.post(f"/api/v1/runtimes/{runtime['id']}/nodes/install")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "installed"
+    assert (comfy_root / "custom_nodes" / "cooksprite" / "__init__.py").is_file()
 
 
 def workflow():

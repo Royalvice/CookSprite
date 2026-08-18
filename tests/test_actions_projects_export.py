@@ -73,8 +73,38 @@ CORE_NODES = {
             "image": "IMAGE",
             "target_width": "INT",
             "target_height": "INT",
+            "profile": "STRING",
+            "palette_budget": "INT",
+            "padding_x": "INT",
+            "padding_y": "INT",
+            "variants": "BOOLEAN",
             "enabled": "BOOLEAN",
         },
+        ["IMAGE", "MASK"],
+    ),
+    "CS_RemoveBackground": node(
+        {
+            "image": "IMAGE",
+            "model": "STRING",
+            "alpha_matting": "BOOLEAN",
+            "alpha_matting_foreground_threshold": "INT",
+            "alpha_matting_background_threshold": "INT",
+            "alpha_matting_erode_size": "INT",
+            "batch_size": "INT",
+        },
+        ["IMAGE", "MASK"],
+    ),
+    "LoadBackgroundRemovalModel": node(
+        {"bg_removal_name": "COMBO"},
+        ["BACKGROUND_REMOVAL"],
+    ),
+    "RemoveBackground": node(
+        {"bg_removal_model": "BACKGROUND_REMOVAL", "image": "IMAGE"},
+        ["MASK"],
+    ),
+    "InvertMask": node({"mask": "MASK"}, ["MASK"]),
+    "JoinImageWithAlpha": node(
+        {"image": "IMAGE", "alpha": "MASK"},
         ["IMAGE"],
     ),
     "CS_CompilePromptPacket": node(
@@ -136,7 +166,10 @@ class ProtocolComfy:
     def doctor(self):
         return {
             "object_info": CORE_NODES,
-            "models": {"checkpoints": ["test-model.safetensors"]},
+            "models": {
+                "checkpoints": ["test-model.safetensors"],
+                "background_removal": ["birefnet.safetensors"],
+            },
             "system_stats": {"system": {"comfyui_version": "test"}},
         }
 
@@ -162,6 +195,7 @@ class ProtocolComfy:
                 return int(inputs.get("max_frames", 1))
             upstream = {
                 "CS_Pixelize": "image",
+                "CS_RemoveBackground": "image",
                 "CS_IsolateOnGreen": "image",
                 "VAEDecode": "samples",
                 "KSampler": "latent_image",
@@ -238,7 +272,7 @@ def test_runtime_doctor_returns_a_compact_summary_not_the_dynamic_node_catalog(t
     assert "tools" not in report
     assert report["tool_count"] == len(CORE_NODES)
     assert report["recipe_count"] == len(report["recipes"])
-    assert report["models"] == {"checkpoints": 1}
+    assert report["models"] == {"checkpoints": 1, "background_removal": 1}
     assert len(response.content) < 10_000
 
 
@@ -316,7 +350,7 @@ def test_sheet_and_video_candidate_counts_are_compiled_inside_comfy(tmp_path):
     assert loader["inputs"]["max_frames"] == 48
 
 
-def test_asset_type_and_style_are_compiled_as_comfy_prompt_packet_and_graph_policy(tmp_path):
+def test_asset_type_and_style_are_compiled_as_comfy_prompt_packet_without_implicit_postprocessing(tmp_path):
     client = ready_client(tmp_path)
     project = client.post("/api/v1/projects", json={"type": "static"}).json()
     action = client.get("/api/v1/actions/image.generate").json()
@@ -352,18 +386,10 @@ def test_asset_type_and_style_are_compiled_as_comfy_prompt_packet_and_graph_poli
     assert pixel_packet["inputs"]["compile_prompt"] is True
     assert smooth_packet["inputs"]["category"] == "terrain"
     assert smooth_packet["inputs"]["style"] == "smooth"
-    assert (
-        next(node for node in pixel_graph.values() if node["class_type"] == "CS_Pixelize")[
-            "inputs"
-        ]["enabled"]
-        is True
-    )
-    assert (
-        next(node for node in smooth_graph.values() if node["class_type"] == "CS_Pixelize")[
-            "inputs"
-        ]["enabled"]
-        is False
-    )
+    assert not any(node["class_type"] == "CS_Pixelize" for node in pixel_graph.values())
+    assert not any(node["class_type"] == "CS_IsolateOnGreen" for node in pixel_graph.values())
+    assert not any(node["class_type"] == "CS_Pixelize" for node in smooth_graph.values())
+    assert not any(node["class_type"] == "CS_IsolateOnGreen" for node in smooth_graph.values())
 
 
 def test_action_project_semantics_are_shared_by_every_api_client(tmp_path):
@@ -469,12 +495,67 @@ def test_imported_image_recipe_requires_bridge_pixel_policy_and_receives_it(tmp_
     assert wait(client, run.json()["id"])["status"] == "succeeded"
     graph = ProtocolComfy.submitted[-1]
     assert any(node["class_type"] == "ImportedSampler" for node in graph.values())
-    assert any(node["class_type"] == "CS_Pixelize" for node in graph.values())
-    packet = next(
-        node for node in graph.values() if node["class_type"] == "CS_CompilePromptPacket"
-    )
+    assert not any(node["class_type"] == "CS_Pixelize" for node in graph.values())
+    packet = next(node for node in graph.values() if node["class_type"] == "CS_CompilePromptPacket")
     assert packet["inputs"]["prompt"] == "raw imported prompt"
     assert packet["inputs"]["compile_prompt"] is False
+
+
+def test_imported_recipe_params_flow_through_generic_assembler(tmp_path):
+    recipe = Recipe(
+        id="imported-parametric-image",
+        label="Parametric imported image",
+        family="custom.image",
+        actions=["image.generate"],
+        modes=["t2i"],
+        workflow={
+            "10": {
+                "class_type": "ImportedSampler",
+                "inputs": {"prompt": "", "style_hint": ""},
+            }
+        },
+        slots={"text": "10.prompt", "style_hint": "10.style_hint"},
+        slot_types={"style_hint": "Text"},
+        output=["10", 0],
+        source="imported",
+    )
+    report = {
+        "object_info": {
+            "ImportedSampler": {},
+            "CS_StoreArtifact": {},
+            "CS_Pixelize": {},
+        }
+    }
+    assert imported_recipe_is_compatible(recipe, report)
+    client = ready_client(tmp_path)
+    imported = client.post(
+        "/api/v1/runtimes/rt_test/recipes",
+        json={
+            key: value
+            for key, value in recipe.dump().items()
+            if key not in {"source", "runtime_snapshot", "workflows"}
+        },
+    )
+    assert imported.status_code == 201
+    project = client.post("/api/v1/projects", json={"type": "static"}).json()
+    run = client.post(
+        "/api/v1/actions/image.generate/runs",
+        json={
+            "project": project["id"],
+            "inputs": {},
+            "values": {
+                "model": "rt_test:imported-parametric-image",
+                "prompt": "a mercenary",
+                "style": "smooth",
+            },
+            "params": {"style_hint": "high contrast rim light"},
+        },
+    )
+    assert run.status_code == 202
+    assert wait(client, run.json()["id"])["status"] == "succeeded"
+    graph = ProtocolComfy.submitted[-1]
+    sampler = next(node for node in graph.values() if node["class_type"] == "ImportedSampler")
+    assert sampler["inputs"]["style_hint"] == "high contrast rim light"
 
 
 def test_action_request_compiles_to_real_comfy_graph_and_artifact_store(tmp_path):
@@ -521,6 +602,62 @@ def test_action_request_compiles_to_real_comfy_graph_and_artifact_store(tmp_path
     assert queue["runtime"] == {"queue_running": [], "queue_pending": []}
 
 
+def test_pixelize_and_cutout_actions_compile_to_their_nodes(tmp_path):
+    client = ready_client(tmp_path)
+    project = client.post("/api/v1/projects", json={"type": "static"}).json()
+    artifact = client.post(
+        "/api/v1/artifacts",
+        params={"project_id": project["id"], "kind": "Image", "title": "source.png"},
+        content=PNG,
+    ).json()
+
+    for action_id, node_class, values in (
+        ("image.pixelize", "CS_Pixelize", {"target_width": 32, "target_height": 32}),
+    ):
+        action = client.get(f"/api/v1/actions/{action_id}").json()
+        assert action["available"] is True
+        response = client.post(
+            f"/api/v1/actions/{action_id}/runs",
+            json={
+                "project": project["id"],
+                "inputs": {"source": artifact["id"]},
+                "values": {"model": action["models"][0]["id"], **values},
+            },
+        )
+        assert response.status_code == 202
+        state = wait(client, response.json()["id"])
+        assert state["status"] == "succeeded"
+        graph = ProtocolComfy.submitted[-1]
+        assert any(node["class_type"] == node_class for node in graph.values())
+        assert any(node["class_type"] == "CS_StoreArtifact" for node in graph.values())
+
+    action = client.get("/api/v1/actions/image.cutout").json()
+    assert action["available"] is True
+    response = client.post(
+        "/api/v1/actions/image.cutout/runs",
+        json={
+            "project": project["id"],
+            "inputs": {"source": artifact["id"]},
+            "values": {"model": action["models"][0]["id"]},
+        },
+    )
+    assert response.status_code == 202
+    state = wait(client, response.json()["id"])
+    assert state["status"] == "succeeded"
+    graph = ProtocolComfy.submitted[-1]
+    assert {
+        "LoadBackgroundRemovalModel",
+        "RemoveBackground",
+        "InvertMask",
+        "JoinImageWithAlpha",
+    }.issubset({node["class_type"] for node in graph.values()})
+    model_node = next(
+        node for node in graph.values() if node["class_type"] == "LoadBackgroundRemovalModel"
+    )
+    assert model_node["inputs"]["bg_removal_name"] == "birefnet.safetensors"
+    assert any(node["class_type"] == "CS_StoreArtifact" for node in graph.values())
+
+
 def test_action_examples_are_typed_artifacts_not_media_urls(tmp_path):
     client = ready_client(tmp_path)
     image_action = client.get("/api/v1/actions/image.generate").json()
@@ -550,21 +687,38 @@ def test_prompt_tool_is_model_neutral_and_deterministic():
         mode="t2i",
         camera_preset="top45",
         orientation="right",
+        camera_option="rear_top_down_45",
     )
     first = compiler.compile_image(request)
     second = compiler.compile_image(request)
     assert first.to_dict() == second.to_dict()
     assert first.task == "image"
     assert first.mode == "t2i"
-    assert first.metadata["compiler_version"] == "sprite_prompt_package_v1"
-    assert first.camera_contract.pitch_deg == 25
+    assert first.metadata["compiler_version"] == "sprite_prompt_package_v1.3"
+    assert first.metadata["packet_type"] == "character_prompt_packet"
+    assert first.metadata["combination"]["total_variants"] == 5
+    assert first.camera_contract.pitch_deg == 0
+    assert first.camera_contract.yaw_deg == 0
+    assert first.metadata["camera"] == "front_eye_level"
+    assert first.metadata["orientation"] == "front"
+    assert first.prompt == (
+        "a soup knight. Single full-body character, centered with generous margin, neutral standing pose. "
+        "Straight-on front view at eye level, the character faces directly toward the viewer, flat orthographic "
+        "character presentation, full figure clearly visible, clean framing, no perspective distortion. "
+        "Crisp pixel-art character sprite with deliberate pixel clusters and a limited color palette, clean contours, "
+        "clear component boundaries, readable face, and restrained highlights. Pure solid green background, uniform "
+        "color, flat color field, seamless backdrop, featureless background, clean subject separation, no floor, "
+        "no cast shadow, no reflection, no gradient, no texture, no pattern, no scenery, no horizon, no background "
+        "objects, no environmental details, no text, no logo, no watermark."
+    )
     assert "clip" not in first.prompt.lower()
     assert "2D game illustration" not in first.prompt
-    assert "pure green-screen background (#00FF00)" in first.prompt
+    assert "Pure solid green background" in first.prompt
     video = compiler.compile_video(VideoPromptRequest(caption="soup knight", action="walk"))
     assert video.task == "video"
     assert video.metadata["action"] == "walk"
-    assert len(compiler.image_matrix("soup knight")) == 24
+    assert len(compiler.image_matrix("soup knight")) == 4
+    assert len(compiler.character_matrix("soup knight")) == 5
     assert len(compiler.video_actions("soup knight")) == 9
 
 
@@ -573,11 +727,11 @@ def test_prompt_node_preserves_old_inputs_and_returns_three_generic_text_ports()
     prompt, negative, metadata = node.compile(
         "image.generate", "a soup knight", "character", "pixel", "idle", "level", "s"
     )
-    assert prompt.startswith("Create one complete asset")
+    assert prompt.startswith("a soup knight. Single full-body character")
     assert "extra characters" in negative
-    assert "pure green-screen background (#00FF00)" in prompt
+    assert "Pure solid green background" in prompt
     assert "2D game illustration" not in prompt
-    assert '"compiler_version": "sprite_prompt_package_v1"' in metadata
+    assert '"compiler_version": "sprite_prompt_package_v1.3"' in metadata
     assert CS_CompilePromptPacket.RETURN_TYPES == ("STRING", "STRING", "STRING")
     assert CS_CompilePromptPacket.RETURN_NAMES == ("prompt", "negative_prompt", "metadata")
 

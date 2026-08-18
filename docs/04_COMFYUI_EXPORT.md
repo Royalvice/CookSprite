@@ -30,8 +30,11 @@ real model execution.
 and this versioned node pack into an isolated environment. It never downloads a
 default model. Model files and model paths are selected in the connected
 ComfyUI; attaching to an existing ComfyUI never copies or mutates its models.
-Install the node pack with `cspr comfy install-nodes <comfy-directory>` and
-restart ComfyUI.
+Install or update the locked node pack with
+`cspr comfy sync <managed-runtime>` and restart ComfyUI. Use
+`cspr comfy install-nodes <comfy-directory> --no-deps` only when attaching to a
+user-owned external ComfyUI whose Python environment CookSprite must not
+modify.
 
 Core checkpoints are discovered directly and become `t2i`, `i2i`, and
 image-sequence choices without copying model files. Model families whose graph

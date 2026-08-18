@@ -1,26 +1,25 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { PhCheck as Check, PhCloudSlash as CloudSlash, PhDatabase as Database, PhDownloadSimple as DownloadSimple, PhFolderOpen as FolderOpen, PhGauge as Gauge, PhPlus as Plus, PhScan as Radar, PhSpinner as Spinner, PhSpeakerHigh as SpeakerHigh, PhSpeakerSlash as SpeakerSlash, PhWrench as Wrench } from "@phosphor-icons/vue";
-import { api, type LocalProbeView, type LocalSetupView, type RuntimeCapabilities, type RuntimeDefaultsView, type RuntimeView } from "../api/generated";
+import { PhArrowClockwise as Restart, PhCheck as Check, PhCloudSlash as CloudSlash, PhDatabase as Database, PhDownloadSimple as DownloadSimple, PhFolderOpen as FolderOpen, PhGauge as Gauge, PhPlay as Play, PhPlus as Plus, PhScan as Radar, PhSpinner as Spinner, PhSpeakerHigh as SpeakerHigh, PhSpeakerSlash as SpeakerSlash, PhTrash as Trash, PhWrench as Wrench } from "@phosphor-icons/vue";
+import { api, type ComfyProbeView, type LocalSetupView, type RuntimeCapabilities, type RuntimeDefaultsView, type RuntimeView } from "../api/generated";
 import { useStudioStore } from "../stores/studio";
 
 const store = useStudioStore();
 const { locale, t } = useI18n();
 const runtimes = ref<RuntimeView[]>([]);
-const localProbe = ref<LocalProbeView | null>(null);
-const probingLocal = ref(false);
+const comfyProbe = ref<ComfyProbeView | null>(null);
+const probingComfy = ref(false);
 const runtimeBusy = ref("");
 const runtimeMessage = ref("");
+const nodeInstallCommand = ref("");
 const capabilities = ref<RuntimeCapabilities | null>(null);
 const defaults = ref<RuntimeDefaultsView | null>(null);
 const defaultAction = ref("image.generate");
 const defaultWorkflow = ref("");
 const defaultModel = ref("");
 const defaultBusy = ref(false);
-const remoteUrl = ref("http://127.0.0.1:18188");
-const remoteId = ref("h20-gpu0");
-const remoteName = ref("H20-baidu · GPU0");
+const endpointUrl = ref("http://127.0.0.1:8188");
 const projectName = ref("");
 const selectedProjectId = ref("");
 const projectMessage = ref("");
@@ -30,8 +29,9 @@ const theme = ref(localStorage.getItem("cooksprite.theme") || "neon");
 const sound = ref(localStorage.getItem("cooksprite.sound") === "on");
 const usage = computed(() => store.allArtifacts.reduce((sum, item) => sum + item.size, 0));
 const currentProject = computed(() => store.currentProject);
-const localRuntime = computed(() => runtimes.value.find((item) => item.location === "local"));
 const activeRuntime = computed(() => runtimes.value.find((item) => item.id === store.activeRuntimeId));
+function normalizeEndpoint(value: string) { return value.trim().replace(/\/+$/, ""); }
+const comfyCandidate = computed(() => comfyProbe.value?.candidates.find((item) => normalizeEndpoint(item.base_url) === normalizeEndpoint(endpointUrl.value)) || comfyProbe.value?.candidates[0]);
 const categoryLabels: Record<string, string> = { image: "settings.categoryImage", text: "settings.categoryText", video: "settings.categoryVideo", tools: "settings.categoryTools" };
 type CapabilityItem = Record<string, unknown>;
 function capabilityLabel(item: CapabilityItem) { return String(item.label || item.id || ""); }
@@ -65,7 +65,7 @@ async function refreshSetup() {
   if (setup.value && ["installing", "starting", "validating"].includes(setup.value.status)) {
     setupTimer = window.setTimeout(refreshSetup, 1000);
   } else if (setup.value?.status === "ready") {
-    await refreshRuntimes();
+    await Promise.all([refreshRuntimes(), probeComfy()]);
   }
 }
 onMounted(async () => {
@@ -113,31 +113,82 @@ async function openProjectDirectory() {
   const result = await api.openProjectDirectory(currentProject.value.id);
   projectMessage.value = result.error || (result.opened ? t("settings.directoryOpened") : result.path);
 }
-async function probeLocal() {
-  probingLocal.value = true;
-  try { localProbe.value = await api.probeLocal(); }
+async function probeComfy() {
+  probingComfy.value = true;
+  try { comfyProbe.value = await api.probeComfy(endpointUrl.value.trim()); }
   catch (error) { runtimeMessage.value = error instanceof Error ? error.message : String(error); }
-  finally { probingLocal.value = false; }
+  finally { probingComfy.value = false; }
 }
-async function connectRuntime(options: { id: string; label: string; base_url: string; location: "local" | "remote" }) {
-  runtimeBusy.value = options.id;
+async function connectRuntime(options: { label: string; base_url: string; location: "local" | "remote" }) {
+  runtimeBusy.value = options.base_url;
   runtimeMessage.value = "";
   try {
-    await api.createRuntime(options);
-    await api.doctorRuntime(options.id);
-    await api.selectRuntime(options.id);
+    const runtime = await api.createRuntime(options);
+    await api.doctorRuntime(runtime.id);
+    await api.selectRuntime(runtime.id);
     await refreshRuntimes();
     runtimeMessage.value = t("settings.runtimeConnected");
   } catch (error) { runtimeMessage.value = error instanceof Error ? error.message : String(error); }
   finally { runtimeBusy.value = ""; }
 }
 async function connectLocal() {
-  const candidate = localProbe.value?.candidates.find((item) => item.status === "found");
-  if (!candidate) return;
-  await connectRuntime({ id: localRuntime.value?.id || "local", label: "Local ComfyUI", base_url: candidate.base_url, location: "local" });
+  await connectRuntime({ label: "Local ComfyUI", base_url: comfyCandidate.value?.base_url || endpointUrl.value.trim(), location: "local" });
 }
 async function connectRemote() {
-  await connectRuntime({ id: remoteId.value.trim(), label: remoteName.value.trim() || remoteId.value, base_url: remoteUrl.value.trim(), location: "remote" });
+  await connectRuntime({ label: "Remote ComfyUI", base_url: endpointUrl.value.trim(), location: "remote" });
+}
+async function startLocal() {
+  runtimeBusy.value = "local-start";
+  runtimeMessage.value = "";
+  try {
+    setup.value = await api.startLocal({ base_url: endpointUrl.value.trim(), directory: comfyCandidate.value?.directory });
+    await refreshSetup();
+  } catch (error) { runtimeMessage.value = error instanceof Error ? error.message : String(error); }
+  finally { runtimeBusy.value = ""; }
+}
+async function deleteRuntime(runtime: RuntimeView) {
+  if (!window.confirm(t("settings.deleteRuntimeConfirm", { label: runtime.label }))) return;
+  runtimeBusy.value = runtime.id;
+  runtimeMessage.value = "";
+  try {
+    const result = await api.deleteRuntime(runtime.id);
+    await refreshRuntimes();
+    await store.refreshRuntime();
+    capabilities.value = store.activeRuntimeId ? await api.runtimeCapabilities(store.activeRuntimeId).catch(() => null) : null;
+    defaults.value = store.activeRuntimeId ? await api.runtimeDefaults(store.activeRuntimeId).catch(() => null) : null;
+    runtimeMessage.value = result.message;
+  } catch (error) { runtimeMessage.value = error instanceof Error ? error.message : String(error); }
+  finally { runtimeBusy.value = ""; }
+}
+async function restartRuntime(runtime: RuntimeView) {
+  if (!window.confirm(t("settings.restartRuntimeConfirm", { label: runtime.label }))) return;
+  runtimeBusy.value = runtime.id;
+  runtimeMessage.value = "";
+  try {
+    const result = await api.restartRuntime(runtime.id);
+    if (result.status === "manual_required") {
+      runtimeMessage.value = result.message;
+      return;
+    }
+    setup.value = result;
+    runtimeMessage.value = setup.value.message;
+    await refreshSetup();
+  } catch (error) { runtimeMessage.value = error instanceof Error ? error.message : String(error); }
+  finally { runtimeBusy.value = ""; }
+}
+async function installNodes(runtime: RuntimeView) {
+  runtimeBusy.value = runtime.id;
+  runtimeMessage.value = "";
+  nodeInstallCommand.value = "";
+  try {
+    const result = await api.installRuntimeNodes(runtime.id);
+    runtimeMessage.value = result.message;
+    nodeInstallCommand.value = result.command || "";
+  } catch (error) { runtimeMessage.value = error instanceof Error ? error.message : String(error); }
+  finally { runtimeBusy.value = ""; }
+}
+async function copyNodeInstallCommand() {
+  if (nodeInstallCommand.value && navigator.clipboard) await navigator.clipboard.writeText(nodeInstallCommand.value);
 }
 async function installLocal() {
   runtimeMessage.value = "";
@@ -168,20 +219,24 @@ async function installLocal() {
     <section class="settings-section panel">
       <header><div><span class="section-index">02</span><h2>{{ $t("settings.runtime") }}</h2></div></header>
       <p>{{ $t("settings.runtimeHelp") }}</p>
-      <div class="local-probe-card">
-        <div><strong>{{ $t("settings.localRuntime") }}</strong><span>{{ $t("settings.localRuntimeHelp") }}</span></div>
-        <button class="arcade-button" :disabled="probingLocal" @click="probeLocal"><Spinner v-if="probingLocal" class="spin" :size="18" /><Radar v-else :size="18" />{{ $t("settings.probeLocal") }}</button>
-        <div v-if="localProbe" class="probe-result" :class="localProbe.status">
-          <template v-if="localProbe.candidates.some((item) => item.status === 'found')">
-            <strong>{{ $t("settings.localFound") }}</strong>
-            <span>{{ localProbe.candidates.find((item) => item.status === 'found')?.base_url }} · {{ $t("settings.modelsCount", { count: localProbe.candidates.find((item) => item.status === 'found')?.models || 0 }) }} · {{ $t("settings.nodesCount", { count: localProbe.candidates.find((item) => item.status === 'found')?.nodes || 0 }) }}</span>
-            <button class="arcade-button primary" :disabled="!!runtimeBusy" @click="connectLocal">{{ $t("settings.connectLocal") }}</button>
+      <div class="runtime-endpoint-card">
+        <label><span>{{ $t("settings.endpoint") }}</span><input v-model="endpointUrl" type="url" autocomplete="url" spellcheck="false" @keyup.enter="probeComfy" /></label>
+        <div class="runtime-endpoint-actions">
+          <button class="arcade-button" :disabled="probingComfy || !!runtimeBusy" @click="probeComfy"><Spinner v-if="probingComfy" class="spin" :size="18" /><Radar v-else :size="18" />{{ $t("runtimeProbe.probe") }}</button>
+          <button class="arcade-button" :disabled="!!runtimeBusy || !endpointUrl.trim()" @click="connectLocal">{{ $t("settings.connectLocal") }}</button>
+          <button class="arcade-button primary" :disabled="!!runtimeBusy || !endpointUrl.trim()" @click="connectRemote"><Wrench :size="18" />{{ $t("settings.connectRemote") }}</button>
+        </div>
+        <small>{{ $t("settings.endpointHelp") }}</small>
+        <div v-if="comfyProbe" class="probe-result" :class="comfyProbe.status">
+          <template v-if="comfyCandidate?.status === 'found'">
+            <strong>{{ $t("runtimeProbe.found") }}</strong>
+            <span>{{ comfyCandidate.base_url }} · {{ $t("settings.modelsCount", { count: comfyCandidate.models || 0 }) }} · {{ $t("settings.nodesCount", { count: comfyCandidate.nodes || 0 }) }}</span>
           </template>
-          <template v-else-if="localProbe.status === 'missing'"><strong>{{ $t("settings.localMissing") }}</strong><span>{{ $t("settings.localMissingHelp") }}</span></template>
-          <template v-else><strong>{{ $t("settings.localUnavailable") }}</strong><span>{{ $t("settings.localUnavailableHelp") }}</span></template>
+          <template v-else-if="comfyProbe.status === 'missing'"><strong>{{ $t("runtimeProbe.missing") }}</strong><span>{{ $t("runtimeProbe.missingHelp") }}</span></template>
+          <template v-else><strong>{{ $t("runtimeProbe.unavailable") }}</strong><span>{{ $t("runtimeProbe.unavailableHelp") }}</span></template>
         </div>
       </div>
-      <div v-if="localProbe?.status === 'missing'" class="managed-setup-card">
+      <div v-if="comfyProbe?.status === 'missing' && comfyCandidate?.managed" class="managed-setup-card">
         <div>
           <strong>{{ $t("settings.installTitle") }}</strong>
           <span>{{ $t("settings.installBody") }}</span>
@@ -195,19 +250,31 @@ async function installLocal() {
           <span>{{ setup.error || setup.message }}</span>
         </div>
       </div>
+      <div v-if="comfyProbe && ['installed','unreachable'].includes(comfyProbe.status) && comfyCandidate?.managed" class="managed-setup-card">
+        <div>
+          <strong>{{ $t("settings.startTitle") }}</strong>
+          <span>{{ $t("settings.startBody") }}</span>
+          <small v-if="setup?.method">{{ setup.method }} · {{ setup.message }}</small>
+          <small v-if="setup?.directory">{{ setup.directory }}</small>
+        </div>
+        <button class="arcade-button primary" :disabled="!!runtimeBusy || (!!setup && ['installing','starting','validating'].includes(setup.status))" @click="startLocal"><Play :size="18" />{{ $t("settings.startLocal") }}</button>
+        <div v-if="setup && ['starting','validating','ready','failed'].includes(setup.status)" class="setup-progress" :class="setup.status">
+          <i :style="{ width: `${Math.max(2, setup.progress * 100)}%` }"></i>
+          <span>{{ setup.error || setup.message }}</span>
+        </div>
+      </div>
       <h3>{{ $t("settings.connectedRuntimes") }}</h3>
       <div v-if="runtimes.length" class="runtime-list">
-          <article v-for="runtime in runtimes" :key="runtime.id" :class="[runtime.status, { active: runtime.id === store.activeRuntimeId }]">
+        <article v-for="runtime in runtimes" :key="runtime.id" :class="[runtime.status, { active: runtime.id === store.activeRuntimeId }]">
           <Gauge :size="22" />
-          <div><strong>{{ runtime.label }}</strong><span>{{ runtime.location === "local" ? $t("settings.local") : $t("settings.remote") }} · {{ runtime.base_url }}</span><small v-if="runtime.error" class="runtime-error">{{ runtime.error }}</small><small v-else>{{ runtime.recipes?.length || 0 }} {{ $t("settings.workflows") }}</small></div>
+          <div><strong>{{ runtime.label }}</strong><span>{{ runtime.location === "local" ? $t("settings.local") : $t("settings.remote") }} · {{ runtime.base_url }}</span><small v-if="runtime.error" class="runtime-error">{{ runtime.error }}</small><small v-else>{{ runtime.recipes?.length || 0 }} {{ $t("settings.workflows") }} · {{ runtime.nodes_installed ? $t("settings.nodesReady") : $t("settings.nodesMissing") }}</small></div>
           <span class="runtime-status">{{ runtime.status === "ready" ? $t("settings.connected") : $t(`common.${runtime.status || 'offline'}`) }}</span>
-          <button v-if="runtime.id !== store.activeRuntimeId" class="text-button" :disabled="!!runtimeBusy" @click="selectRuntime(runtime.id)">{{ $t("settings.useRuntime") }}</button><Check v-else-if="runtime.status === 'ready'" :size="18" weight="bold" />
+          <div class="runtime-actions"><button v-if="runtime.location === 'local'" class="text-button" :disabled="!!runtimeBusy || (!!setup && ['installing','starting','validating'].includes(setup.status))" @click="restartRuntime(runtime)"><Restart :size="16" />{{ $t("settings.restartRuntime") }}</button><button v-if="!runtime.nodes_installed" class="text-button" :disabled="!!runtimeBusy" @click="installNodes(runtime)">{{ $t("settings.installNodes") }}</button><button v-if="runtime.id !== store.activeRuntimeId" class="text-button" :disabled="!!runtimeBusy" @click="selectRuntime(runtime.id)">{{ $t("settings.useRuntime") }}</button><Check v-else-if="runtime.status === 'ready'" :size="18" weight="bold" /><button class="text-button danger" :disabled="!!runtimeBusy" @click="deleteRuntime(runtime)"><Trash :size="16" />{{ $t("settings.deleteRuntime") }}</button></div>
         </article>
       </div>
       <div v-else class="runtime-empty">{{ $t("settings.noRuntimes") }}</div>
-      <h3>{{ $t("settings.remoteRuntime") }}</h3>
-      <div class="runtime-form"><label><span>ID</span><input v-model="remoteId" /></label><label><span>{{ $t("settings.endpoint") }}</span><input v-model="remoteUrl" /></label><label><span>{{ $t("settings.name") }}</span><input v-model="remoteName" /></label><button class="arcade-button primary" :disabled="!!runtimeBusy || !remoteId || !remoteUrl" @click="connectRemote"><Wrench :size="18" />{{ $t("settings.connectRemote") }}</button></div>
       <p v-if="runtimeMessage" class="inline-status" role="status">{{ runtimeMessage }}</p>
+      <div v-if="nodeInstallCommand" class="copy-command"><code>{{ nodeInstallCommand }}</code><button class="text-button" @click="copyNodeInstallCommand">{{ $t("settings.copyCommand") }}</button></div>
       <div v-if="activeRuntime && capabilities" class="capability-summary"><header><strong>{{ $t("settings.capabilities") }} · {{ activeRuntime.label }}</strong><span>{{ capabilities.system.comfyui_version || "ComfyUI" }}</span></header><div class="capability-grid"><article v-for="(category, key) in capabilities.categories" :key="key"><strong>{{ $t(categoryLabels[key] || key) }}</strong><span>{{ category.models.length }} {{ $t("settings.models") }} · {{ category.workflows.length }} {{ $t("settings.workflows") }} · {{ category.tools.length }} {{ $t("settings.tools") }}</span><details v-if="category.models.length || category.workflows.length || category.tools.length"><summary>{{ $t("settings.viewDetails") }}</summary><div class="capability-items"><div v-for="item in category.models.slice(0, 20)" :key="`model-${String(item.id)}`"><b>{{ capabilityLabel(item) }}</b><small>{{ capabilitySource(item) }}</small></div><div v-for="item in category.workflows.slice(0, 20)" :key="`workflow-${String(item.id)}`"><b>{{ capabilityLabel(item) }}</b><small>{{ capabilitySource(item) }}</small></div><div v-for="item in category.tools.slice(0, 20)" :key="`tool-${String(item.id)}`"><b>{{ capabilityLabel(item) }}</b><small>{{ capabilitySource(item) }}</small></div></div></details></article></div></div>
       <div v-if="activeRuntime && defaults" class="runtime-defaults">
         <h3>{{ $t("settings.defaults") }}</h3>

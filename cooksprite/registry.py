@@ -121,16 +121,28 @@ class CookSpriteRegistry:
             reason = None
         models = []
         if available and runtime:
-            models = [
-                ModelOption(
-                    id=f"{runtime['id']}:{recipe.id}",
-                    label=f"{runtime['label']} · {recipe.label}",
-                    runtime_id=runtime["id"],
-                    family=recipe.family,
-                    modes=recipe.modes,
-                ).model_dump(mode="json")
-                for recipe in compatible
-            ]
+            groups: dict[tuple[str, str, str], list[Recipe]] = {}
+            for recipe in compatible:
+                identity = (
+                    str(recipe.checkpoint or recipe.id),
+                    str(recipe.family),
+                    _model_identity_label(recipe.label),
+                )
+                groups.setdefault(identity, []).append(recipe)
+            for group in groups.values():
+                representative = group[0]
+                models.append(
+                    ModelOption(
+                        # Keep a recipe-backed id for compatibility.  The API
+                        # resolves another recipe in this identity group when
+                        # the input mode requires it.
+                        id=f"{runtime['id']}:{representative.id}",
+                        label=f"{runtime['label']} · {_model_identity_label(representative.label)}",
+                        runtime_id=runtime["id"],
+                        family=representative.family,
+                        modes=list(dict.fromkeys(mode for item in group for mode in item.modes)),
+                    ).model_dump(mode="json")
+                )
         data.update(available=available, unavailable_reason=reason, models=models)
         return ActionDescriptor.model_validate(data)
 
@@ -170,6 +182,16 @@ class CookSpriteRegistry:
     @staticmethod
     def defaults(action: ActionDescriptor) -> dict[str, Any]:
         return {control.id: control.default for control in action.controls}
+
+
+def _model_identity_label(label: str) -> str:
+    """Remove workflow-mode suffixes from the user-facing model identity."""
+
+    value = str(label or "").strip()
+    for suffix in (" · T2I", " · I2I", " · T2V", " · I2V"):
+        if value.endswith(suffix):
+            return value[: -len(suffix)].rstrip()
+    return value
 
 
 # Backwards-compatible import name for contributors using the v0.1 API.

@@ -3,7 +3,6 @@ from __future__ import annotations
 from ..domain import ToolPackageManifest
 from .contracts import tool
 
-
 _PARAMS = {
     "action_id": {"type": "string"},
     "prompt": {"type": "string"},
@@ -30,7 +29,7 @@ _PARAMS = {
 
 MANIFEST = ToolPackageManifest(
     id="prompt",
-    version="1.2.0",
+    version="1.3.0",
     license="Apache-2.0",
     tools=[
         tool(

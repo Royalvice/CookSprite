@@ -23,13 +23,18 @@ actions:
           - {id: vfx, example_key: still.effect, i18n: {zh-CN: {name: 特效, description: 居中的独立视觉特效}, en: {name: VFX, description: One centered, isolated visual effect}}}
       - id: style
         type: select
-        default: pixel
+        default: 2d_action_game
         i18n:
-          zh-CN: {name: 风格, description: 像素会同时编译提示词和像素化后处理}
-          en: {name: Style, description: Pixel compiles both prompt intent and pixel post-processing}
+          zh-CN: {name: 风格, description: 角色使用风格模板；其他素材保留原有风格选项}
+          en: {name: Style, description: Choose a character style template; other assets keep their existing styles}
         options:
-          - {id: pixel, example_key: still.actor, i18n: {zh-CN: {name: 像素, description: 像素提示词加最近邻像素化后处理}, en: {name: Pixel, description: Pixel-art prompt intent plus nearest-neighbor pixel post-processing}}}
-          - {id: smooth, example_key: still.smooth, i18n: {zh-CN: {name: 非像素, description: 保留模型原始的平滑绘制结果}, en: {name: Non-pixel, description: Keep the model's original smooth rendered output}}}
+          - {id: ultra_realistic, example_key: still.smooth, i18n: {zh-CN: {name: 超写实, description: 高分辨率超写实角色渲染}, en: {name: Ultra-realistic, description: Ultra-realistic high-resolution character render}}}
+          - {id: 2d_action_game, example_key: still.actor, i18n: {zh-CN: {name: 2D 动作游戏, description: 高分辨率 2D 动作游戏角色插画}, en: {name: 2D action game, description: Polished high-resolution 2D action-game character illustration}}}
+          - {id: stylized_3d, example_key: still.smooth, i18n: {zh-CN: {name: 风格化 3D, description: 高分辨率风格化 3D 角色渲染}, en: {name: Stylized 3D, description: Polished high-resolution stylized 3D character render}}}
+          - {id: anime, example_key: still.actor, i18n: {zh-CN: {name: 动漫, description: 带赛璐璐着色的高分辨率动漫角色插画}, en: {name: Anime, description: Polished high-resolution anime character illustration with cel shading}}}
+          - {id: pixel_art, example_key: still.actor, i18n: {zh-CN: {name: 像素艺术, description: 有意组织像素簇和有限配色的清晰像素角色}, en: {name: Pixel art, description: Crisp pixel-art character sprite with deliberate pixel clusters and a limited color palette}}}
+          - {id: pixel, example_key: still.actor, i18n: {zh-CN: {name: 像素, description: 其他素材的原有像素风格选项}, en: {name: Pixel, description: Existing pixel style for non-character assets}}}
+          - {id: smooth, example_key: still.smooth, i18n: {zh-CN: {name: 非像素, description: 其他素材保留模型原始的平滑绘制结果}, en: {name: Non-pixel, description: Existing smooth style for non-character assets}}}
       - id: prompt
         type: text
         default: ""
@@ -40,8 +45,8 @@ actions:
         type: toggle
         default: true
         i18n:
-          zh-CN: {name: 提示词强化, description: 开启后使用 CookSprite Prompt Compiler；关闭后原文直传}
-          en: {name: Prompt Compiler, description: Use the CookSprite compiler; off sends your exact text unchanged}
+          zh-CN: {name: 提示词模板, description: 开启后使用 CookSprite 提示词模板；关闭后原文直传}
+          en: {name: Prompt Template, description: Use the CookSprite prompt template; off sends your exact text unchanged}
       - id: strength
         type: range
         default: 0.65
@@ -86,8 +91,8 @@ actions:
         type: toggle
         default: true
         i18n:
-          zh-CN: {name: 提示词强化, description: 开启后使用 CookSprite Prompt Compiler；关闭后原文直传}
-          en: {name: Prompt Compiler, description: Use the CookSprite compiler; off sends your exact text unchanged}
+          zh-CN: {name: 提示词模板, description: 开启后使用 CookSprite 提示词模板；关闭后原文直传}
+          en: {name: Prompt Template, description: Use the CookSprite prompt template; off sends your exact text unchanged}
       - id: action
         type: select
         default: walk
@@ -231,8 +236,8 @@ actions:
       source: {type: Image, required: true, max: 1}
     produces: [Image]
     controls:
-      - {id: target_width, type: number, default: 128, min: 8, max: 4096, step: 1, i18n: {zh-CN: {name: 目标宽度}, en: {name: Target width}}}
-      - {id: target_height, type: number, default: 128, min: 8, max: 4096, step: 1, i18n: {zh-CN: {name: 目标高度}, en: {name: Target height}}}
+      - {id: target_width, type: number, default: 128, min: 16, max: 512, step: 1, i18n: {zh-CN: {name: 目标宽度}, en: {name: Target width}}}
+      - {id: target_height, type: number, default: 128, min: 16, max: 512, step: 1, i18n: {zh-CN: {name: 目标高度}, en: {name: Target height}}}
 
   - id: image.cutout
     i18n:

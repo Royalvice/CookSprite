@@ -28,13 +28,36 @@ dev = ["build>=1.2", "pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.3", "Pillow
 cspr = "cli.__main__:main"
 
 [tool.setuptools]
-packages = ["cooksprite", "cooksprite.api", "cooksprite.comfy", "cooksprite.example_assets", "cooksprite.generated", "cooksprite.nodes", "cooksprite.tool_packages", "cli"]
+packages = [
+    "cooksprite",
+    "cooksprite.api",
+    "cooksprite.comfy",
+    "cooksprite.example_assets",
+    "cooksprite.generated",
+    "cooksprite.nodes",
+    "cooksprite.nodes.pixel",
+    "cooksprite.nodes.pixel.grid",
+    "cooksprite.nodes.pixel.pipelines",
+    "cooksprite.nodes.pixel.stages",
+    "cooksprite.tool_packages",
+    "cli",
+]
 
 [tool.setuptools.dynamic]
 version = { attr = "cooksprite.version.__version__" }
 
 [tool.setuptools.package-data]
-cooksprite = ["actions.yaml", "example_assets/*.svg", "generated/*.json", "nodes/*.txt", "static/**/*", "skill/*.md"]
+cooksprite = [
+    "actions.yaml",
+    "example_assets/*.svg",
+    "generated/*.json",
+    "nodes/*.txt",
+    "comfy/*.in",
+    "comfy/*.lock",
+    "static/**/*",
+    "skill/*.md",
+]
+"cooksprite.nodes.pixel" = ["LICENSE", "PROVENANCE.md", "presets/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

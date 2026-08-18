@@ -6,10 +6,12 @@ from collections import Counter
 from typing import Any
 
 from ..domain import ToolDescriptor, ToolPackageManifest
+from .alpha import MANIFEST as ALPHA
 from .bridge import MANIFEST as BRIDGE
 from .frames import MANIFEST as FRAMES
 from .image import MANIFEST as IMAGE
 from .normal import MANIFEST as NORMAL
+from .pixel import MANIFEST as PIXEL
 from .prompt import MANIFEST as PROMPT
 
 
@@ -53,4 +55,4 @@ class ToolPackageRegistry:
         return [package.model_dump(mode="json") for package in self.manifests]
 
 
-tool_packages = ToolPackageRegistry([BRIDGE, PROMPT, IMAGE, FRAMES, NORMAL])
+tool_packages = ToolPackageRegistry([BRIDGE, PROMPT, IMAGE, PIXEL, ALPHA, FRAMES, NORMAL])

@@ -5,5 +5,7 @@ CLI-side contract tests, and compute-plane node cannot drift.  The node pack
 copies its sibling implementation into ComfyUI during explicit installation.
 """
 
-from .nodes.prompting import *  # noqa: F401,F403 - this module is the public facade.
-from .nodes.prompting import __all__
+from .nodes import prompting as _prompting
+from .nodes.prompting import *
+
+__all__ = _prompting.__all__
