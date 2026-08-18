@@ -149,7 +149,9 @@ def _run_cli(
         raise ModelDownloadError(f"unable to start Comfy CLI: {exc}", code="comfy_cli_failed") from exc
 
     assert process.stdout is not None
+    output: list[str] = []
     for line in process.stdout:
+        output.append(line)
         value = _percent(line)
         if value is not None:
             _emit(
@@ -161,6 +163,17 @@ def _run_cli(
     return_code = process.wait()
     if return_code:
         staging.unlink(missing_ok=True)
+        combined_output = "".join(output)
+        if re.search(
+            r"(?:hf_unauthorized|unauthorized|access denied|\b(?:401|403)\b|gated)",
+            combined_output,
+            re.IGNORECASE,
+        ):
+            raise ModelDownloadError(
+                "Comfy CLI model download was rejected by the source; authenticate "
+                "with Hugging Face and accept the model license before retrying",
+                code="download_forbidden",
+            )
         raise ModelDownloadError(
             f"Comfy CLI model download failed with exit code {return_code}",
             code="comfy_cli_failed",
@@ -239,6 +252,8 @@ def download_bundle_file(
         try:
             _run_cli(root, file, progress)
         except ModelDownloadError as cli_error:
+            if cli_error.code == "download_forbidden":
+                raise
             # A local runtime can expose the same operation over HTTP.  Keep
             # the CLI as the first choice, but let the runtime endpoint be a
             # useful fallback before returning the copyable command.
