@@ -17,16 +17,16 @@ def test_model_download_uses_cli_staging_and_atomic_move(tmp_path, monkeypatch):
     command_seen: list[str] = []
 
     class FakeProcess:
-        stdout = iter(("download 25%\n", "download 100%\n"))
-
         def __init__(self, command, **_kwargs):
             command_seen.extend(command)
             staging = root / "models" / ".cooksprite-downloads" / "diffusion_models"
             staging.mkdir(parents=True, exist_ok=True)
             (staging / file["name"]).write_bytes(b"model")
 
-        def wait(self):
-            return 0
+        def communicate(self):
+            return "download 25%\\ndownload 100%\\n", ""
+
+        returncode = 0
 
     monkeypatch.setattr(models, "_comfy_cli", lambda _root: "fake-comfy")
     monkeypatch.setattr(models.subprocess, "Popen", FakeProcess)
@@ -75,13 +75,13 @@ def test_cli_auth_failure_is_not_hidden_by_http_fallback(tmp_path, monkeypatch):
     (root / "comfy").mkdir()
 
     class UnauthorizedProcess:
-        stdout = iter(("hf_unauthorized: gated model\n",))
-
         def __init__(self, *_args, **_kwargs):
             pass
 
-        def wait(self):
-            return 1
+        def communicate(self):
+            return "hf_unauthorized: gated model\\n", ""
+
+        returncode = 1
 
     monkeypatch.setattr(models, "_comfy_cli", lambda _root: "fake-comfy")
     monkeypatch.setattr(models.subprocess, "Popen", UnauthorizedProcess)

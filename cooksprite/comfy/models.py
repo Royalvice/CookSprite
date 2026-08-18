@@ -10,9 +10,11 @@ of being mistaken for a successful install.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -129,6 +131,7 @@ def _run_cli(
         f"--workspace={workspace}",
         "model",
         "download",
+        "--background",
         "--url",
         url,
         "--relative-path",
@@ -148,22 +151,11 @@ def _run_cli(
     except OSError as exc:
         raise ModelDownloadError(f"unable to start Comfy CLI: {exc}", code="comfy_cli_failed") from exc
 
-    assert process.stdout is not None
-    output: list[str] = []
-    for line in process.stdout:
-        output.append(line)
-        value = _percent(line)
-        if value is not None:
-            _emit(
-                progress,
-                current_file=name,
-                progress_value=value,
-                message="downloading with Comfy CLI",
-            )
-    return_code = process.wait()
+    stdout, _ = process.communicate()
+    combined_output = stdout or ""
+    return_code = process.returncode
     if return_code:
         staging.unlink(missing_ok=True)
-        combined_output = "".join(output)
         if re.search(
             r"(?:hf_unauthorized|unauthorized|access denied|\b(?:401|403)\b|gated)",
             combined_output,
@@ -178,6 +170,63 @@ def _run_cli(
             f"Comfy CLI model download failed with exit code {return_code}",
             code="comfy_cli_failed",
         )
+    download_match = re.search(
+        r"(?:download_id[\"']?\s*[:=]\s*[\"']|background:\s*)([A-Za-z0-9_-]+)",
+        combined_output,
+        re.IGNORECASE,
+    )
+    if download_match:
+        download_id = download_match.group(1)
+        state_path = root / ".comfy-downloads" / f"{download_id}.json"
+        while True:
+            state: dict[str, Any] = {}
+            try:
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+            except (FileNotFoundError, OSError, json.JSONDecodeError):
+                pass
+            completed = int(state.get("completed_bytes") or 0)
+            total = int(state.get("total_bytes") or 0)
+            fraction = completed / total if total else 0.0
+            status = str(state.get("status") or "starting")
+            _emit(
+                progress,
+                current_file=name,
+                progress_value=fraction,
+                message="downloading with Comfy CLI",
+                bytes_done=completed,
+                bytes_total=total,
+            )
+            if status in {"completed", "succeeded"}:
+                break
+            if status in {"failed", "cancelled", "canceled"}:
+                error = str(state.get("error") or "unknown downloader error")
+                if re.search(
+                    r"(?:unauthorized|access denied|\b(?:401|403)\b|gated)",
+                    error,
+                    re.IGNORECASE,
+                ):
+                    raise ModelDownloadError(
+                        "Comfy CLI model download was rejected by the source; authenticate "
+                        "with Hugging Face and accept the model license before retrying",
+                        code="download_forbidden",
+                    )
+                raise ModelDownloadError(
+                    f"Comfy CLI model download failed: {error}", code="comfy_cli_failed"
+                )
+            time.sleep(0.5)
+    else:
+        # Keep simple subprocess fakes and older Comfy CLI builds useful. A
+        # background-capable official CLI always returns a download id; a
+        # successful legacy response is accepted only when the staged file is
+        # already present.
+        value = _percent(combined_output)
+        if value is not None:
+            _emit(
+                progress,
+                current_file=name,
+                progress_value=value,
+                message="downloading with Comfy CLI",
+            )
     if not staging.is_file() or staging.stat().st_size <= 0:
         raise ModelDownloadError(
             f"Comfy CLI finished but did not produce {name}", code="model_file_missing"
