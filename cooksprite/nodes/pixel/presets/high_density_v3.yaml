@@ -1,0 +1,49 @@
+schema_version: 1
+preset: high_density_v3
+input:
+  format: rgba_image_batch
+  require_transparent_background: false
+  same_canvas_required: true
+geometry:
+  center_mode: sequence_union_bbox
+  padding_fraction_by_axis: 0.0625
+  per_frame_recentering: false
+analysis:
+  max_side: 768
+  single_frame_supersample_max: 8
+  sequence_supersample_max: 7
+  color_space: oklab
+contour:
+  method: global_integer_min_cut_then_source_supported_thin_paths_then_digital_straight_dp
+  connectivity: 8
+  maximum_unprotected_stair_run: 3
+  remove_one_cell_spikes: true
+  fill_one_cell_notches: true
+outline:
+  mode: selective_source_ink_and_major_material_boundary
+tones:
+  roles:
+    - outline
+    - deep_shadow
+    - shadow
+    - midtone
+    - light
+    - specular
+    - rim_highlight
+    - emission
+  coherent_highlight_min_cells: 2
+palette:
+  default_budget_by_shortest_side:
+    64: 32
+    128: 48
+    256: 96
+    512: 128
+  sequence_shared: true
+  dither: none
+alpha:
+  subject_levels: [0, 255]
+profiles:
+  production: {palette_factor: 1.0}
+  fidelity: {palette_factor: 1.2}
+  balanced: {palette_factor: 1.0}
+  graphic: {palette_factor: 0.72}

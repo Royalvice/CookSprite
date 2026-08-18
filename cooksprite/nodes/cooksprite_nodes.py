@@ -22,12 +22,9 @@ except ImportError:  # pragma: no cover - ComfyUI always supplies torch at node 
     torch = None
 
 from .prompting import (
-    Action,
     DEFAULT_GREEN_SCREEN_BACKGROUND,
     ImagePromptRequest,
     ModelFamily,
-    MotionDirection,
-    PromptMode,
     SpritePromptCompiler,
     VideoPromptRequest,
 )
@@ -262,27 +259,142 @@ class CS_Pixelize:
         return {
             "required": {
                 "image": ("IMAGE",),
-                "target_width": ("INT", {"default": 128, "min": 8, "max": 4096}),
-                "target_height": ("INT", {"default": 128, "min": 8, "max": 4096}),
+                "target_width": ("INT", {"default": 128, "min": 16, "max": 512}),
+                "target_height": ("INT", {"default": 128, "min": 16, "max": 512}),
+                "profile": ("STRING", {"default": "production", "enum": ["production", "fidelity", "balanced", "graphic"]}),
+                "palette_budget": ("INT", {"default": 0, "min": 0, "max": 256}),
+                "padding_x": ("INT", {"default": -1, "min": -1, "max": 256}),
+                "padding_y": ("INT", {"default": -1, "min": -1, "max": 256}),
+                "variants": ("BOOLEAN", {"default": False}),
                 "enabled": ("BOOLEAN", {"default": True}),
+            },
+            "optional": {"mask": ("MASK",)},
+        }
+
+    RETURN_TYPES = ("IMAGE", "MASK")
+    RETURN_NAMES = ("image", "mask")
+    FUNCTION = "run"
+    CATEGORY = "CookSprite/Pixel"
+
+    def run(
+        self,
+        image,
+        target_width,
+        target_height,
+        profile="production",
+        palette_budget=0,
+        padding_x=-1,
+        padding_y=-1,
+        variants=False,
+        enabled=True,
+        mask=None,
+    ):
+        if not enabled:
+            passthrough_mask = mask
+            if passthrough_mask is None:
+                passthrough_mask = torch.ones(image.shape[0], image.shape[1], image.shape[2], device=image.device, dtype=image.dtype)
+            return (image, passthrough_mask)
+        from .pixel.adapter import pixelize_batch
+
+        output, output_mask = pixelize_batch(
+            image.detach().cpu().numpy(),
+            mask.detach().cpu().numpy() if mask is not None else None,
+            int(target_width),
+            int(target_height),
+            str(profile),
+            int(palette_budget),
+            int(padding_x),
+            int(padding_y),
+            bool(variants),
+        )
+        return (
+            torch.from_numpy(output).to(device=image.device, dtype=image.dtype),
+            torch.from_numpy(output_mask).to(device=image.device, dtype=image.dtype),
+        )
+
+
+class CS_PixelSnap:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "grid_mode": ("STRING", {"default": "auto", "enum": ["auto", "manual"]}),
+                "pixel_size_x": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 64.0}),
+                "pixel_size_y": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 64.0}),
+                "phase_x": ("FLOAT", {"default": 0.0, "min": -64.0, "max": 64.0}),
+                "phase_y": ("FLOAT", {"default": 0.0, "min": -64.0, "max": 64.0}),
+                "constrained_warp": ("BOOLEAN", {"default": False}),
+                "palette_budget": ("INT", {"default": 32, "min": 2, "max": 256}),
+                "target_width": ("INT", {"default": 0, "min": 0, "max": 512}),
+                "target_height": ("INT", {"default": 0, "min": 0, "max": 512}),
+            },
+            "optional": {"mask": ("MASK",)},
+        }
+
+    RETURN_TYPES = ("IMAGE", "MASK")
+    RETURN_NAMES = ("image", "mask")
+    FUNCTION = "run"
+    CATEGORY = "CookSprite/Pixel"
+
+    def run(self, image, grid_mode, pixel_size_x, pixel_size_y, phase_x, phase_y, constrained_warp, palette_budget, target_width, target_height, mask=None):
+        from .pixel.adapter import snap_batch
+
+        output, output_mask = snap_batch(
+            image.detach().cpu().numpy(),
+            mask.detach().cpu().numpy() if mask is not None else None,
+            str(grid_mode),
+            float(pixel_size_x),
+            float(pixel_size_y),
+            float(phase_x),
+            float(phase_y),
+            bool(constrained_warp),
+            int(palette_budget),
+            int(target_width),
+            int(target_height),
+        )
+        return (
+            torch.from_numpy(output).to(device=image.device, dtype=image.dtype),
+            torch.from_numpy(output_mask).to(device=image.device, dtype=image.dtype),
+        )
+
+
+class CS_RemoveBackground:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "model": ("STRING", {"default": "u2net", "enum": ["u2net", "u2netp", "isnet-anime", "birefnet-general"]}),
+                "alpha_matting": ("BOOLEAN", {"default": False}),
+                "alpha_matting_foreground_threshold": ("INT", {"default": 240, "min": 0, "max": 255}),
+                "alpha_matting_background_threshold": ("INT", {"default": 10, "min": 0, "max": 255}),
+                "alpha_matting_erode_size": ("INT", {"default": 10, "min": 0, "max": 64}),
+                "batch_size": ("INT", {"default": 1, "min": 1, "max": 64}),
             }
         }
 
-    RETURN_TYPES = ("IMAGE",)
+    RETURN_TYPES = ("IMAGE", "MASK")
+    RETURN_NAMES = ("image", "mask")
     FUNCTION = "run"
-    CATEGORY = "CookSprite/Media"
+    CATEGORY = "CookSprite/Alpha"
 
-    def run(self, image, target_width, target_height, enabled=True):
-        if not enabled:
-            return (image,)
-        frames = []
-        for frame in image:
-            source = Image.open(io.BytesIO(_png(frame, "NormalMap"))).convert("RGB")
-            result = source.resize(
-                (int(target_width), int(target_height)), Image.Resampling.NEAREST
-            )
-            frames.append(_tensor(result)[0])
-        return (torch.stack(frames),)
+    def run(self, image, model, alpha_matting, alpha_matting_foreground_threshold, alpha_matting_background_threshold, alpha_matting_erode_size, batch_size):
+        from .alpha import remove_background_batch
+
+        output, output_mask = remove_background_batch(
+            image.detach().cpu().numpy(),
+            str(model),
+            bool(alpha_matting),
+            int(alpha_matting_foreground_threshold),
+            int(alpha_matting_background_threshold),
+            int(alpha_matting_erode_size),
+            int(batch_size),
+        )
+        return (
+            torch.from_numpy(output).to(device=image.device, dtype=image.dtype),
+            torch.from_numpy(output_mask).to(device=image.device, dtype=image.dtype),
+        )
 
 
 class CS_IsolateOnGreen:
@@ -471,6 +583,8 @@ NODE_CLASSES = [
     CS_CompilePromptPacket,
     CS_IsolateOnGreen,
     CS_Pixelize,
+    CS_PixelSnap,
+    CS_RemoveBackground,
     CS_NormalEstimate,
     CS_SliceSpriteSheet,
     CS_LoadVideoArtifact,

@@ -1,0 +1,156 @@
+"""Deterministic role-aware OKLab palette construction and mapping."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import cv2
+import numpy as np
+
+from ..color import oklab_to_srgb, srgb_to_oklab
+from .evidence import CellEvidence
+from .tones import ToneRole, ToneRoleMap
+
+
+@dataclass(frozen=True)
+class PaletteBuildResult:
+    srgb: np.ndarray
+    lab: np.ndarray
+    outline_index: int
+    fixed_count: int
+    inertia: float
+    receipt: dict[str, object]
+
+
+def _medoid(values: np.ndarray, weights: np.ndarray | None = None) -> np.ndarray:
+    if len(values) == 1:
+        return values[0]
+    if weights is None:
+        weights = np.ones(len(values), dtype=np.float64)
+    center = np.average(values, axis=0, weights=np.maximum(weights, 1e-9))
+    return values[int(np.argmin(np.sum((values - center) ** 2, axis=1)))]
+
+
+def _initial_centers(values: np.ndarray, weights: np.ndarray, count: int, fixed: np.ndarray) -> np.ndarray:
+    centers = [item.copy() for item in fixed]
+    if not centers:
+        centers.append(values[int(np.argmax(weights))].copy())
+    while len(centers) < count:
+        existing = np.stack(centers)
+        distance = np.min(np.sum((values[:, None, :] - existing[None, :, :]) ** 2, axis=2), axis=1)
+        score = distance * weights
+        centers.append(values[int(np.argmax(score))].copy())
+    return np.stack(centers[:count]).astype(np.float32)
+
+
+def _weighted_kmeans(values: np.ndarray, weights: np.ndarray, count: int, fixed: np.ndarray) -> tuple[np.ndarray, float]:
+    centers = _initial_centers(values, weights, count, fixed)
+    fixed_count = len(fixed)
+    for _ in range(32):
+        distance = np.sum((values[:, None, :] - centers[None, :, :]) ** 2, axis=2)
+        labels = np.argmin(distance, axis=1)
+        updated = centers.copy()
+        for index in range(fixed_count, count):
+            selected = labels == index
+            if np.any(selected):
+                updated[index] = np.average(values[selected], axis=0, weights=np.maximum(weights[selected], 1e-9))
+        if float(np.max(np.abs(updated - centers))) < 1e-6:
+            centers = updated
+            break
+        centers = updated
+    distance = np.sum((values - centers[labels]) ** 2, axis=1)
+    inertia = float(np.average(distance, weights=np.maximum(weights, 1e-9)))
+    return centers, inertia
+
+
+def build_palette(evidences: list[CellEvidence], tone_maps: list[ToneRoleMap], silhouettes: list[np.ndarray], budget: int) -> PaletteBuildResult:
+    values: list[np.ndarray] = []
+    weights: list[np.ndarray] = []
+    roles: list[np.ndarray] = []
+    for evidence, tones, silhouette in zip(evidences, tone_maps, silhouettes, strict=True):
+        values.append(evidence.lab[silhouette])
+        role_values = tones.roles[silhouette]
+        role_weight = np.ones(len(role_values), dtype=np.float64)
+        role_weight[np.isin(role_values, (int(ToneRole.OUTLINE), int(ToneRole.DEEP_SHADOW)))] *= 2.4
+        role_weight[np.isin(role_values, (int(ToneRole.SPECULAR), int(ToneRole.RIM_HIGHLIGHT), int(ToneRole.EMISSION)))] *= 3.2
+        role_weight *= 1.0 + evidence.feature[silhouette] * 1.25
+        weights.append(role_weight)
+        roles.append(role_values)
+    all_values = np.concatenate(values).astype(np.float32)
+    all_weights = np.concatenate(weights).astype(np.float64)
+    all_roles = np.concatenate(roles)
+    fixed_values: list[np.ndarray] = []
+    outline_values = all_values[np.isin(all_roles, (int(ToneRole.OUTLINE), int(ToneRole.DEEP_SHADOW)))]
+    if outline_values.size:
+        outline = outline_values[int(np.argmin(outline_values[:, 0]))]
+    else:
+        outline = all_values[int(np.argmin(all_values[:, 0]))]
+    fixed_values.append(outline)
+    for role in (ToneRole.EMISSION, ToneRole.SPECULAR, ToneRole.RIM_HIGHLIGHT):
+        selected = all_roles == int(role)
+        if np.count_nonzero(selected) >= 1 and len(fixed_values) < min(5, budget):
+            fixed_values.append(_medoid(all_values[selected], all_weights[selected]))
+    fixed = np.stack(fixed_values).astype(np.float32)
+    centers, inertia = _weighted_kmeans(all_values, all_weights, budget, fixed)
+    srgb = oklab_to_srgb(centers)
+    srgb_u8 = np.rint(np.clip(srgb, 0.0, 1.0) * 255.0).astype(np.uint8)
+    # Quantized duplicates are removed deterministically. The hard contract is
+    # a maximum budget, not a requirement to invent exactly N colours.
+    unique: list[np.ndarray] = []
+    for item in srgb_u8:
+        if not any(np.array_equal(item, existing) for existing in unique):
+            unique.append(item)
+    srgb_final = np.stack(unique).astype(np.float32) / 255.0
+    lab_final = srgb_to_oklab(srgb_final)
+    return PaletteBuildResult(
+        srgb_final,
+        lab_final,
+        0,
+        len(fixed_values),
+        inertia,
+        {
+            "method": "deterministic_role_weighted_oklab_kmeans",
+            "requested_budget": budget,
+            "actual_colors": len(srgb_final),
+            "fixed_role_colors": len(fixed_values),
+            "inertia": inertia,
+        },
+    )
+
+
+def map_palette(cell_lab: np.ndarray, alpha: np.ndarray, palette: PaletteBuildResult, strokes: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    distance = np.sum((cell_lab[..., None, :] - palette.lab[None, None, :, :]) ** 2, axis=3)
+    labels = np.argmin(distance, axis=2).astype(np.int16)
+    labels[alpha <= 0.0] = -1
+    labels[strokes & (alpha > 0.0)] = palette.outline_index
+    return labels, distance
+
+
+def clean_label_clusters(labels: np.ndarray, palette_lab: np.ndarray, foreground: np.ndarray, protect: np.ndarray) -> np.ndarray:
+    output = labels.copy()
+    for label in range(len(palette_lab)):
+        count, components, stats, _ = cv2.connectedComponentsWithStats((foreground & (output == label)).astype(np.uint8), connectivity=8)
+        for component_index in range(1, count):
+            component = components == component_index
+            area = int(stats[component_index, cv2.CC_STAT_AREA])
+            if area >= 2 or np.any(component & protect):
+                continue
+            ring = cv2.dilate(component.astype(np.uint8), np.ones((3, 3), np.uint8), iterations=1).astype(bool) & foreground & ~component
+            candidates = output[ring]
+            candidates = candidates[candidates >= 0]
+            if not candidates.size:
+                continue
+            unique, counts = np.unique(candidates, return_counts=True)
+            color_distance = np.linalg.norm(palette_lab[unique] - palette_lab[label], axis=1)
+            replacement = int(unique[np.argmin(color_distance - counts / counts.max() * 0.018)])
+            output[component] = replacement
+    return output
+
+
+def labels_to_rgba(labels: np.ndarray, palette: PaletteBuildResult, alpha: np.ndarray) -> np.ndarray:
+    output = np.zeros((*labels.shape, 4), dtype=np.uint8)
+    foreground = labels >= 0
+    output[foreground, :3] = np.rint(palette.srgb[labels[foreground]] * 255.0).astype(np.uint8)
+    output[..., 3] = np.rint(np.clip(alpha, 0.0, 1.0) * 255.0).astype(np.uint8)
+    output[output[..., 3] == 0, :3] = 0
+    return output

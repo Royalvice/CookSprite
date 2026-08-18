@@ -12,9 +12,10 @@ from __future__ import annotations
 import itertools
 import math
 import re
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 
 class _ValueEnum(str, Enum):
@@ -123,7 +124,7 @@ class CameraContract:
         cls,
         orientation: Orientation | str = Orientation.FRONT,
         preset: CameraPreset | str = CameraPreset.EYE_LEVEL,
-    ) -> "CameraContract":
+    ) -> CameraContract:
         view = coerce_enum(orientation, Orientation, "orientation")
         camera_preset = coerce_enum(preset, CameraPreset, "camera_preset")
         yaw = {Orientation.FRONT: 0.0, Orientation.RIGHT: 90.0, Orientation.BACK: 180.0}[view]
@@ -284,7 +285,23 @@ class PromptSpec:
         return f"{self.style}-{self.camera_preset}-{self.orientation}-{self.mode}"
 
 
-COMPILER_VERSION = "sprite_prompt_package_v1"
+COMPILER_VERSION = "sprite_prompt_package_v1.1"
+
+HUMANOID_FIXED_COMPOSITION = (
+    "Single full-body character, centered with generous margin, neutral standing pose"
+)
+HUMANOID_FIXED_CAMERA = (
+    "Straight-on front-facing eye-level view, the character faces directly toward the viewer, "
+    "camera centered and perfectly level, flat orthographic character presentation, "
+    "symmetrical frontal composition"
+)
+HUMANOID_FIXED_STYLE = (
+    "Polished high-resolution 2D action-game character illustration with clean contours, "
+    "clear component boundaries, readable face, and restrained highlights"
+)
+HUMANOID_FIXED_BACKGROUND = (
+    "Pure solid green background, no floor, no cast shadow, no reflection, no text, no watermark"
+)
 
 IMAGE_STYLE_TEXT = {
     RenderStyle.PIXEL: (
@@ -325,11 +342,51 @@ class SpritePromptCompiler:
         request.validate()
         mode = coerce_enum(request.mode, PromptMode, "mode")
         style = coerce_enum(request.style, RenderStyle, "style")
-        orientation = coerce_enum(request.orientation, Orientation, "orientation")
-        camera = request.resolved_camera()
+        category_id = str(request.category).strip().lower()
+        humanoid = category_id == "character"
+        orientation = (
+            Orientation.FRONT
+            if humanoid
+            else coerce_enum(request.orientation, Orientation, "orientation")
+        )
+        camera = (
+            CameraContract.from_view(Orientation.FRONT, CameraPreset.EYE_LEVEL)
+            if humanoid
+            else request.resolved_camera()
+        )
         width, height = request.resolution
         caption = _clean_caption(request.caption)
         category = CATEGORY_TEXT.get(str(request.category), f"one complete {request.category} game asset")
+        if humanoid:
+            prompt = (
+                f"{caption}. {HUMANOID_FIXED_COMPOSITION}. {HUMANOID_FIXED_CAMERA}. "
+                f"{HUMANOID_FIXED_STYLE}. {HUMANOID_FIXED_BACKGROUND}."
+            )
+            negative = _negative_prompt(request.negative_terms, DEFAULT_IMAGE_NEGATIVE)
+            request_id = f"image-humanoid-front-eye_level-{mode.value}-{width}x{height}"
+            return CompiledPrompt(
+                request_id=request_id,
+                task="image",
+                mode=mode.value,
+                prompt=prompt,
+                negative_prompt=negative,
+                reference_required=mode == PromptMode.I2I,
+                camera_contract=camera,
+                metadata={
+                    "compiler_version": self.version,
+                    "prompt_template": "humanoid_v1",
+                    "task": "image",
+                    "mode": mode.value,
+                    "category": category_id,
+                    "style": style.value,
+                    "camera_preset": CameraPreset.EYE_LEVEL.value,
+                    "orientation": Orientation.FRONT.value,
+                    "screen_facing": None,
+                    "background": "pure_solid_green",
+                    "resolution": [int(width), int(height)],
+                    "edit_instruction": request.edit_instruction,
+                },
+            )
         mode_line = (
             "Create one complete asset from the identity description."
             if mode == PromptMode.T2I
