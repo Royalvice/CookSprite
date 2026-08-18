@@ -102,6 +102,11 @@ extension. Content under `.local/` is untracked reference material only: never
 import it at runtime, package it, or copy it without an explicit license and
 clean-room provenance review.
 
+Prefer official Comfy-Org packaged models, built-in nodes, and official
+workflow/blueprint templates whenever they satisfy the typed Action contract.
+Use a CookSprite-specific implementation only when official support is absent
+or insufficient, and record the selected source and version in provenance.
+
 ## One registry, all clients
 
 One structured Action/Tool registry is the source of truth. Its projections
