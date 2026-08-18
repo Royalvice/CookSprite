@@ -34,6 +34,8 @@ comfy-aimdo==0.4.13
 requests
 simpleeval>=1.0.0
 blake3
+pydantic~=2.0
+pydantic-settings~=2.0
 
 # Tool package requirements are the only additional dependencies allowed in
 # the managed ComfyUI environment. Keep this include after `cspr dev sync`.
