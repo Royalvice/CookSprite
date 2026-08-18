@@ -11,7 +11,7 @@ import ImageStyleCameraControls from "../components/ImageStyleCameraControls.vue
 import ImageToolsBench from "../components/ImageToolsBench.vue";
 import RunStatusPanel from "../components/RunStatusPanel.vue";
 import StageRail from "../components/StageRail.vue";
-import { inferArtifactKind, type ActionControl, type ActionDescriptor, type ArtifactKind, type ArtifactRef, type FrameSequenceView, type Locale } from "../api/generated";
+import { api, inferArtifactKind, type ActionControl, type ActionDescriptor, type ArtifactKind, type ArtifactRef, type FrameSequenceView, type Locale } from "../api/generated";
 import { useStudioStore } from "../stores/studio";
 
 const store = useStudioStore();
@@ -93,8 +93,13 @@ const exportIssues = computed(() => store.activeRun?.action_id === "project.expo
   ? store.activeRun.error?.issues || [store.activeRun.error?.message || store.activeRun.message] : []);
 const running = computed(() => Boolean(store.activeRun && ["queued", "running"].includes(store.activeRun.status)));
 const imageModel = computed(() => imageAction.value?.models.find((item) => item.id === imageValues.value.model));
+const referenceIds = computed(() => {
+  const raw = inputs.value.reference;
+  return (Array.isArray(raw) ? raw : raw ? [raw] : []).map(String).filter(Boolean);
+});
+const referenceArtifacts = computed(() => referenceIds.value.map((id) => store.artifactById.get(id)).filter((item): item is ArtifactRef => Boolean(item)));
 const imageCanRun = computed(() => {
-  const mode = inputs.value.reference ? "i2i" : "t2i";
+  const mode = referenceIds.value.length ? "i2i" : "t2i";
   return Boolean(imageAction.value?.available && imageModel.value && imageModel.value.modes.includes(mode) && !running.value);
 });
 const animationModel = computed(() => animationAction.value?.models.find((item) => item.id === animationValues.value.model));
@@ -109,7 +114,22 @@ const animationCanRun = computed(() => {
 function fillDefaults(target: Record<string, unknown>, action = activeAction.value) {
   if (!action) return;
   for (const control of action.controls) if (target[control.id] === undefined) target[control.id] = JSON.parse(JSON.stringify(control.default));
-  if (!target.model && action.models[0]) target.model = action.models[0].id;
+  if (!target.model && action.models[0] && action.id !== "image.generate") target.model = action.models[0].id;
+}
+async function applyImageRuntimeDefault() {
+  const action = imageAction.value;
+  const runtimeId = store.activeRuntimeId;
+  if (!action || !runtimeId) return;
+  const valid = action.models.some((item) => item.id === imageValues.value.model);
+  if (imageValues.value.model && valid) return;
+  const defaults = await api.runtimeDefaults(runtimeId).catch(() => null);
+  const binding = defaults?.defaults["image.generate"];
+  const preferred = binding ? `${runtimeId}:${binding.workflow_id}` : "";
+  imageValues.value.model = action.models.some((item) => item.id === preferred)
+    ? preferred
+    : action.models.length && !action.models.some((item) => item.family === "comfy.flux2-klein")
+      ? action.models[0].id
+      : "";
 }
 const characterStyleIds = new Set(["ultra_realistic", "2d_action_game", "stylized_3d", "anime", "pixel_art"]);
 const legacyStyleIds = new Set(["pixel", "smooth"]);
@@ -121,6 +141,7 @@ function normalizeImageStyleForCategory() {
   if (category !== "character" && !legacyStyleIds.has(style)) imageValues.value.style = "smooth";
 }
 watch(imageAction, (action) => { if (action) fillDefaults(imageValues.value, action); }, { immediate: true });
+watch([imageAction, () => store.activeRuntimeId], () => { void applyImageRuntimeDefault(); }, { immediate: true });
 watch(() => [imageValues.value.category, imageValues.value.style], normalizeImageStyleForCategory, { immediate: true });
 watch(animationAction, (action) => { if (action) fillDefaults(animationValues.value, action); }, { immediate: true });
 watch(stage, (next) => {
@@ -158,6 +179,23 @@ function acceptedKinds(action: ActionDescriptor | undefined, slot: string): Arti
   const declared = action?.accepts[slot]?.type;
   return declared ? (Array.isArray(declared) ? declared : [declared]) : [];
 }
+function actionForInput(slot: string): ActionDescriptor | undefined {
+  if (slot === "source") return normalAction.value;
+  if (slot === "character") return animationAction.value;
+  return imageAction.value;
+}
+function inputMax(slot: string): number {
+  const max = actionForInput(slot)?.accepts[slot]?.max;
+  return Number.isFinite(max) && Number(max) > 0 ? Number(max) : 1;
+}
+function appendInputArtifact(slot: string, artifactId: string) {
+  const max = inputMax(slot);
+  const current = inputs.value[slot];
+  const ids = [...(Array.isArray(current) ? current : current ? [current] : []), artifactId]
+    .filter((id, index, all) => Boolean(id) && all.indexOf(id) === index)
+    .slice(-max);
+  inputs.value[slot] = max > 1 ? ids : ids[0] || "";
+}
 function showHoverPreview(event: MouseEvent | FocusEvent, artifact: ArtifactRef | undefined, label: string, description = "", motion = "idle") {
   if (!artifact) return;
   window.clearTimeout(hoverHideTimer);
@@ -180,12 +218,12 @@ function keepHoverPreview() { window.clearTimeout(hoverHideTimer); }
 async function importFiles(files: File[], slot?: string) {
   for (const file of files) {
     const artifact = await store.upload(file, inferArtifactKind(file) || "Image");
-    if (slot) inputs.value[slot] = artifact.id;
+    if (slot) appendInputArtifact(slot, artifact.id);
     selectedArtifact.value = artifact;
   }
 }
 async function acceptArtifact(slot: string, payload: { artifact_id: string }) {
-  inputs.value[slot] = payload.artifact_id;
+  appendInputArtifact(slot, payload.artifact_id);
   const artifact = store.artifactById.get(payload.artifact_id) || null;
   if (artifact) selectedArtifact.value = artifact;
   if (artifact?.kind === "FrameSeq") {
@@ -196,7 +234,7 @@ async function acceptArtifact(slot: string, payload: { artifact_id: string }) {
 async function runCreate() {
   if (!imageAction.value) return;
   reveal.value = true;
-  try { await store.runAction("image.generate", inputs.value.reference ? { reference: inputs.value.reference } : {}, imageValues.value); }
+  try { await store.runAction("image.generate", referenceIds.value.length ? { reference: referenceIds.value } : {}, imageValues.value); }
   finally { window.setTimeout(() => { reveal.value = false; }, 500); }
 }
 async function runAnimation() {
@@ -206,8 +244,9 @@ async function runAnimation() {
   finally { window.setTimeout(() => { reveal.value = false; }, 500); }
 }
 async function normalRun() {
-  const source = Array.isArray(inputs.value.source) ? inputs.value.source[0] : inputs.value.source || diffuse.value?.id;
-  if (source) await store.runAction("normal.generate", { source }, { strength: 1, flip_y: false });
+  const raw = inputs.value.source;
+  const sources = (Array.isArray(raw) ? raw : raw ? [raw] : diffuse.value?.id ? [diffuse.value.id] : []).filter(Boolean);
+  if (sources.length) await store.runAction("normal.generate", { source: sources }, { strength: 1, flip_y: false });
 }
 async function redrawCurrent() { if (diffuse.value?.kind === "Image") await store.runAction("frame.redraw", { frame: diffuse.value.id }, { prompt: "", strength: 0.35, count: 4 }); }
 function selectArtifact(artifact: ArtifactRef) {
@@ -239,9 +278,10 @@ async function restoreWorkspace() {
   if (state.imageValues && typeof state.imageValues === "object") Object.assign(imageValues.value, state.imageValues);
   if (state.animationValues && typeof state.animationValues === "object") Object.assign(animationValues.value, state.animationValues);
   const storedInputs = state.inputs && typeof state.inputs === "object" ? state.inputs as Record<string, string | string[]> : {};
-  inputs.value = Object.fromEntries(Object.entries(storedInputs).filter(([, value]) => {
-    const id = Array.isArray(value) ? value[0] : value;
-    return Boolean(store.artifactById.get(String(id || "")));
+  inputs.value = Object.fromEntries(Object.entries(storedInputs).flatMap(([slot, value]) => {
+    const ids = (Array.isArray(value) ? value : [value]).map(String).filter((id) => Boolean(store.artifactById.get(id)));
+    if (!ids.length) return [];
+    return [[slot, ids.length > 1 || Array.isArray(value) ? ids : ids[0]]];
   }));
   selectedArtifact.value = store.artifactById.get(String(state.selectedArtifactId || ""))
     || store.artifacts.find((item) => item.kind === "Image" && item.meta.action_id === "image.generate")
@@ -273,8 +313,13 @@ async function applyRouteIntent() {
 function useAsReference(artifact: ArtifactRef) {
   if (artifact.kind !== "Image") return;
   selectedArtifact.value = artifact;
-  inputs.value.reference = artifact.id;
+  inputs.value.reference = [artifact.id];
   stage.value = "create";
+}
+function removeReference(id: string) {
+  const remaining = referenceIds.value.filter((item) => item !== id);
+  if (remaining.length) inputs.value.reference = remaining;
+  else delete inputs.value.reference;
 }
 function clearReference() { delete inputs.value.reference; }
 function useForAnimation(artifact: ArtifactRef) {
@@ -342,7 +387,7 @@ function downloadPack(artifact: ArtifactRef) { const anchor = document.createEle
       <div class="studio-stage-content">
         <template v-if="stage === 'create'">
           <section v-if="imageAction" class="creation-deck">
-            <div class="creation-layout"><div class="creation-fields"><div class="action-heading"><span class="eyebrow">ACTION · IMAGE.GENERATE</span><h1>{{ imageAction.i18n[locale as Locale].name }}</h1><p>{{ imageAction.i18n[locale as Locale].description }}</p></div><div class="prompt-field"><label for="prompt">{{ $t("studio.promptLabel") }}</label><textarea id="prompt" :value="String(imageValues.prompt || '')" :placeholder="$t('studio.prompt')" rows="3" @input="imageValues.prompt = ($event.target as HTMLTextAreaElement).value"></textarea><span>{{ String(imageValues.prompt || '').length }}</span></div><aside class="artifact-input-panel image-reference-panel"><DropTarget clearable :accepts="acceptedKinds(imageAction, 'reference')" :artifact="inputs.reference ? store.artifactById.get(String(inputs.reference)) : undefined" :label="inputs.reference ? (store.artifactById.get(String(inputs.reference))?.title || $t('studio.selectedReference')) : $t('studio.drop')" :reason="$t('studio.referenceReason')" @artifact="acceptArtifact('reference', $event)" @clear="clearReference" @files="importFiles($event, 'reference')" /></aside><button v-if="imageAction.controls.find(item => item.id === 'prompt_compile')" type="button" class="prompt-compiler-toggle" :class="{ active: imageValues.prompt_compile === true }" :aria-pressed="imageValues.prompt_compile === true" @click="toggleImageControl('prompt_compile')"><span class="toggle-track" aria-hidden="true"><i></i></span><span class="control-copy"><b>{{ controlCopy(imageAction.controls.find(item => item.id === 'prompt_compile')!).name }}</b><small>{{ controlCopy(imageAction.controls.find(item => item.id === 'prompt_compile')!).description }}</small></span></button><div class="control-stack"><template v-for="control in imageAction.controls.filter(item => !item.advanced && item.id === 'category')" :key="control.id"><div v-if="control.type === 'select'" class="segmented-control" :class="{ 'is-disabled': imageValues.prompt_compile !== true }"><span class="control-copy"><b>{{ controlCopy(control).name }}</b><small>{{ controlCopy(control).description }}</small></span><div><button v-for="option in control.options" :key="option.id" :disabled="imageValues.prompt_compile !== true" :class="{ active: imageValues[control.id] === option.id }" @mouseenter="imageValues.prompt_compile === true && showHoverPreview($event, option.example, optionCopy(option).name, optionCopy(option).description, option.id)" @focus="imageValues.prompt_compile === true && showHoverPreview($event, option.example, optionCopy(option).name, optionCopy(option).description, option.id)" @mouseleave="hideHoverPreview()" @blur="hideHoverPreview()" @click="imageValues[control.id] = option.id">{{ optionCopy(option).name }}</button></div></div><button v-else-if="control.type === 'toggle'" type="button" class="prompt-compiler-toggle" :class="{ active: imageValues[control.id] === true }" :aria-pressed="imageValues[control.id] === true" @click="toggleImageControl(control.id)"><span class="toggle-track" aria-hidden="true"><i></i></span><span class="control-copy"><b>{{ controlCopy(control).name }}</b><small>{{ controlCopy(control).description }}</small></span></button><label v-else-if="control.type === 'number'" class="inline-control"><span>{{ controlCopy(control).name }}</span><input v-model.number="imageValues[control.id]" type="number" :min="control.min" :max="control.max" :step="control.step" /></label></template><ImageStyleCameraControls :style-control="imageAction.controls.find(item => item.id === 'style')" :camera-control="imageAction.controls.find(item => item.id === 'camera')" :values="imageValues" /><template v-for="control in imageAction.controls.filter(item => !item.advanced && item.id !== 'prompt' && item.id !== 'prompt_compile' && item.id !== 'category' && (item.id !== 'style' || imageValues.category !== 'character') && item.id !== 'camera')" :key="control.id"><div v-if="control.type === 'select'" class="segmented-control" :class="{ 'is-disabled': imageValues.prompt_compile !== true && control.id !== 'resolution' }"><span class="control-copy"><b>{{ controlCopy(control).name }}</b><small>{{ controlCopy(control).description }}</small></span><div><button v-for="option in control.options" :key="option.id" :disabled="imageValues.prompt_compile !== true && control.id !== 'resolution'" :class="{ active: imageValues[control.id] === option.id }" @mouseenter="imageValues.prompt_compile === true && showHoverPreview($event, option.example, optionCopy(option).name, optionCopy(option).description, option.id)" @focus="imageValues.prompt_compile === true && showHoverPreview($event, option.example, optionCopy(option).name, optionCopy(option).description, option.id)" @mouseleave="hideHoverPreview()" @blur="hideHoverPreview()" @click="imageValues[control.id] = option.id">{{ optionCopy(option).name }}</button></div></div><button v-else-if="control.type === 'toggle'" type="button" class="prompt-compiler-toggle" :class="{ active: imageValues[control.id] === true }" :aria-pressed="imageValues[control.id] === true" @click="toggleImageControl(control.id)"><span class="toggle-track" aria-hidden="true"><i></i></span><span class="control-copy"><b>{{ controlCopy(control).name }}</b><small>{{ controlCopy(control).description }}</small></span></button><label v-else-if="control.type === 'number'" class="inline-control"><span>{{ controlCopy(control).name }}</span><input v-model.number="imageValues[control.id]" type="number" :min="control.min" :max="control.max" :step="control.step" /></label></template></div><div class="model-row"><label>{{ $t("studio.model") }}<select v-model="imageValues.model" :disabled="!imageAction.models.length"><option v-if="!imageAction.models.length" value="">{{ $t("studio.noModel") }}</option><option v-for="model in imageAction.models" :key="model.id" :value="model.id">{{ model.label }}</option></select></label><button class="text-button" :aria-expanded="showAdvanced" @click="showAdvanced = !showAdvanced"><SlidersHorizontal :size="17" />{{ $t("common.advanced") }}<CaretDown :size="14" /></button></div><div v-if="showAdvanced" class="advanced-grid"><template v-for="control in imageAction.controls.filter(item => item.advanced)" :key="control.id"><label v-if="control.type === 'range'"><span>{{ controlCopy(control).name }} <b>{{ imageValues[control.id] }}</b></span><input v-model.number="imageValues[control.id]" type="range" :min="control.min" :max="control.max" :step="control.step" /></label><label v-else-if="control.type === 'seed' || control.type === 'number'"><span>{{ controlCopy(control).name }}</span><input v-model.number="imageValues[control.id]" type="number" :min="control.min" :max="control.max" /></label></template></div></div><ImageToolsBench /></div>
+            <div class="creation-layout"><div class="creation-fields"><div class="action-heading"><span class="eyebrow">ACTION · IMAGE.GENERATE</span><h1>{{ imageAction.i18n[locale as Locale].name }}</h1><p>{{ imageAction.i18n[locale as Locale].description }}</p></div><div class="prompt-field"><label for="prompt">{{ $t("studio.promptLabel") }}</label><textarea id="prompt" :value="String(imageValues.prompt || '')" :placeholder="$t('studio.prompt')" rows="3" @input="imageValues.prompt = ($event.target as HTMLTextAreaElement).value"></textarea><span>{{ String(imageValues.prompt || '').length }}</span></div><aside class="artifact-input-panel image-reference-panel"><DropTarget clearable multiple :max-files="4" :accepts="acceptedKinds(imageAction, 'reference')" :artifact="referenceArtifacts[0]" :label="referenceArtifacts.length ? `${referenceArtifacts.length}/4 ${$t('studio.selectedReference')}` : $t('studio.drop')" :reason="$t('studio.referenceReason')" @artifact="acceptArtifact('reference', $event)" @clear="clearReference" @files="importFiles($event, 'reference')" /><div v-if="referenceArtifacts.length" class="reference-list"><div v-for="(artifact, index) in referenceArtifacts" :key="artifact.id" class="reference-item"><span>{{ index + 1 }}</span><ArtifactVisual :artifact="artifact" :draggable="false" /><strong>{{ artifact.title || artifact.id.slice(0, 10) }}</strong><button class="text-button" type="button" :aria-label="`${$t('common.clear')} ${artifact.title || artifact.id}`" @click="removeReference(artifact.id)">×</button></div></div></aside><button v-if="imageAction.controls.find(item => item.id === 'prompt_compile')" type="button" class="prompt-compiler-toggle" :class="{ active: imageValues.prompt_compile === true }" :aria-pressed="imageValues.prompt_compile === true" @click="toggleImageControl('prompt_compile')"><span class="toggle-track" aria-hidden="true"><i></i></span><span class="control-copy"><b>{{ controlCopy(imageAction.controls.find(item => item.id === 'prompt_compile')!).name }}</b><small>{{ controlCopy(imageAction.controls.find(item => item.id === 'prompt_compile')!).description }}</small></span></button><div class="control-stack"><template v-for="control in imageAction.controls.filter(item => !item.advanced && item.id === 'category')" :key="control.id"><div v-if="control.type === 'select'" class="segmented-control" :class="{ 'is-disabled': imageValues.prompt_compile !== true }"><span class="control-copy"><b>{{ controlCopy(control).name }}</b><small>{{ controlCopy(control).description }}</small></span><div><button v-for="option in control.options" :key="option.id" :disabled="imageValues.prompt_compile !== true" :class="{ active: imageValues[control.id] === option.id }" @mouseenter="imageValues.prompt_compile === true && showHoverPreview($event, option.example, optionCopy(option).name, optionCopy(option).description, option.id)" @focus="imageValues.prompt_compile === true && showHoverPreview($event, option.example, optionCopy(option).name, optionCopy(option).description, option.id)" @mouseleave="hideHoverPreview()" @blur="hideHoverPreview()" @click="imageValues[control.id] = option.id">{{ optionCopy(option).name }}</button></div></div><button v-else-if="control.type === 'toggle'" type="button" class="prompt-compiler-toggle" :class="{ active: imageValues[control.id] === true }" :aria-pressed="imageValues[control.id] === true" @click="toggleImageControl(control.id)"><span class="toggle-track" aria-hidden="true"><i></i></span><span class="control-copy"><b>{{ controlCopy(control).name }}</b><small>{{ controlCopy(control).description }}</small></span></button><label v-else-if="control.type === 'number'" class="inline-control"><span>{{ controlCopy(control).name }}</span><input v-model.number="imageValues[control.id]" type="number" :min="control.min" :max="control.max" :step="control.step" /></label></template><ImageStyleCameraControls :style-control="imageAction.controls.find(item => item.id === 'style')" :camera-control="imageAction.controls.find(item => item.id === 'camera')" :values="imageValues" /><div class="image-size-count-row"><label v-for="control in imageAction.controls.filter(item => item.id === 'resolution' || item.id === 'count')" :key="control.id" class="prompt-select-field"><span>{{ controlCopy(control).name }}</span><small>{{ controlCopy(control).description }}</small><select v-model="imageValues[control.id]" :aria-label="controlCopy(control).name"><option v-for="option in control.options" :key="option.id" :value="option.id">{{ optionCopy(option).name }}</option></select></label></div><template v-for="control in imageAction.controls.filter(item => !item.advanced && item.id !== 'prompt' && item.id !== 'prompt_compile' && item.id !== 'category' && item.id !== 'resolution' && item.id !== 'count' && (item.id !== 'style' || imageValues.category !== 'character') && item.id !== 'camera')" :key="control.id"><div v-if="control.type === 'select'" class="segmented-control" :class="{ 'is-disabled': imageValues.prompt_compile !== true }"><span class="control-copy"><b>{{ controlCopy(control).name }}</b><small>{{ controlCopy(control).description }}</small></span><div><button v-for="option in control.options" :key="option.id" :disabled="imageValues.prompt_compile !== true" :class="{ active: imageValues[control.id] === option.id }" @mouseenter="imageValues.prompt_compile === true && showHoverPreview($event, option.example, optionCopy(option).name, optionCopy(option).description, option.id)" @focus="imageValues.prompt_compile === true && showHoverPreview($event, option.example, optionCopy(option).name, optionCopy(option).description, option.id)" @mouseleave="hideHoverPreview()" @blur="hideHoverPreview()" @click="imageValues[control.id] = option.id">{{ optionCopy(option).name }}</button></div></div><button v-else-if="control.type === 'toggle'" type="button" class="prompt-compiler-toggle" :class="{ active: imageValues[control.id] === true }" :aria-pressed="imageValues[control.id] === true" @click="toggleImageControl(control.id)"><span class="toggle-track" aria-hidden="true"><i></i></span><span class="control-copy"><b>{{ controlCopy(control).name }}</b><small>{{ controlCopy(control).description }}</small></span></button><label v-else-if="control.type === 'number'" class="inline-control"><span>{{ controlCopy(control).name }}</span><input v-model.number="imageValues[control.id]" type="number" :min="control.min" :max="control.max" :step="control.step" /></label></template></div><div class="model-row"><label>{{ $t("studio.model") }}<select v-model="imageValues.model" :disabled="!imageAction.models.length"><option v-if="!imageAction.models.length" value="">{{ $t("studio.noModel") }}</option><option v-for="model in imageAction.models" :key="model.id" :value="model.id">{{ model.label }}</option></select></label><button class="text-button" :aria-expanded="showAdvanced" @click="showAdvanced = !showAdvanced"><SlidersHorizontal :size="17" />{{ $t("common.advanced") }}<CaretDown :size="14" /></button></div><div v-if="showAdvanced" class="advanced-grid"><template v-for="control in imageAction.controls.filter(item => item.advanced)" :key="control.id"><label v-if="control.type === 'range'"><span>{{ controlCopy(control).name }} <b>{{ imageValues[control.id] }}</b></span><input v-model.number="imageValues[control.id]" type="range" :min="control.min" :max="control.max" :step="control.step" /></label><label v-else-if="control.type === 'seed' || control.type === 'number'"><span>{{ controlCopy(control).name }}</span><input v-model.number="imageValues[control.id]" type="number" :min="control.min" :max="control.max" /></label></template></div></div><ImageToolsBench /></div>
             <footer class="draw-bar"><div><MagicWand :size="20" /><span><strong>{{ $t("studio.drawImage") }}</strong><small>{{ $t("studio.actionFlow") }}</small></span></div><button class="draw-button" :disabled="!imageCanRun" @click="runCreate"><CircleNotch v-if="running" class="spin" :size="20" /><Sparkle v-else :size="20" weight="fill" />{{ $t("common.run") }} · {{ imageValues.count || 1 }}<ArrowRight :size="18" /></button></footer><div v-if="reveal" class="card-reveal" aria-hidden="true"><i></i><span>{{ $t("studio.cooking") }}</span><i></i></div>
           </section>
           <section v-if="recentCreateOutputs.length" class="run-results panel"><header><div><span class="eyebrow">{{ $t('studio.currentRun') }}</span><strong>{{ $t('studio.chooseResult') }}</strong></div><small>{{ recentCreateOutputs.length }} {{ $t('studio.results') }}</small></header><div class="artifact-strip"><ArtifactCard v-for="artifact in recentCreateOutputs" :key="artifact.id" :artifact="artifact" :selected="selectedArtifact?.id === artifact.id" compact @select="selectArtifact" @preview="previewArtifact" /></div></section>
@@ -359,7 +404,7 @@ function downloadPack(artifact: ArtifactRef) { const anchor = document.createEle
           <FrameStudio :sequence="store.activeSequence" @preview="previewArtifact" @use-normal="useForNormal" />
         </template>
 
-        <section v-else-if="stage === 'normal'" class="normal-workspace"><div class="normal-input panel"><span class="eyebrow">{{ $t("studio.diffusePair") }}</span><h2>{{ $t("studio.light") }}</h2><DropTarget :accepts="acceptedKinds(normalAction, 'source')" :artifact="sourceArtifact" :label="sourceArtifact ? sourceArtifact.title || sourceArtifact.id : $t('studio.dropDiffuse')" @artifact="acceptArtifact('source', $event)" @files="importFiles($event, 'source')" /><div v-if="normalFrames.length > 1" class="normal-sequence-controls"><button class="arcade-button" type="button" @click="toggleNormalPlayback">{{ normalPlaying ? $t('frames.pause') : $t('frames.play') }}</button><span>{{ normalFrameIndex + 1 }} / {{ normalFrames.length }}</span></div><div v-if="normalFrames.length > 1" class="normal-frame-strip"><button v-for="(frame, index) in normalFrames" :key="frame.id" type="button" :class="{ active: normalFrameIndex === index, complete: Boolean(store.artifacts.find(item => item.kind === 'NormalMap' && Array.isArray(item.meta.source_artifacts) && item.meta.source_artifacts.includes(frame.id))) }" @click="normalFrameIndex = index"><ArtifactVisual :artifact="frame" :draggable="false" /><span>F{{ String(index + 1).padStart(2, '0') }}</span></button></div><div v-if="diffuse" class="normal-source-row"><ArtifactCard :artifact="diffuse" selected compact @select="selectArtifact" @preview="previewArtifact" /><ArtifactCard v-if="normal" :artifact="normal" compact @select="selectArtifact" @preview="previewArtifact" /></div><button class="arcade-button primary" :disabled="!sourceArtifact || !normalAction?.available || running" @click="normalRun"><Sparkle :size="18" />{{ normalFrames.length > 1 ? $t('studio.generateSequenceNormals', { count: normalFrames.length }) : $t("studio.generateNormals") }}</button><button class="text-button" :disabled="diffuse?.kind !== 'Image'" @click="redrawCurrent">{{ $t("studio.redoFrame") }}</button><button v-if="normal" class="arcade-button" type="button" @click="stage = 'export'">{{ $t('studio.continueDelivery') }}<ArrowRight :size="16" /></button></div><LightingPreview :diffuse="diffuse" :normal="normal" /></section>
+        <section v-else-if="stage === 'normal'" class="normal-workspace"><div class="normal-input panel"><span class="eyebrow">{{ $t("studio.diffusePair") }}</span><h2>{{ $t("studio.light") }}</h2><DropTarget :accepts="acceptedKinds(normalAction, 'source')" :multiple="inputMax('source') > 1" :max-files="inputMax('source')" :artifact="sourceArtifact" :label="sourceArtifact ? sourceArtifact.title || sourceArtifact.id : $t('studio.dropDiffuse')" @artifact="acceptArtifact('source', $event)" @files="importFiles($event, 'source')" /><div v-if="normalFrames.length > 1" class="normal-sequence-controls"><button class="arcade-button" type="button" @click="toggleNormalPlayback">{{ normalPlaying ? $t('frames.pause') : $t('frames.play') }}</button><span>{{ normalFrameIndex + 1 }} / {{ normalFrames.length }}</span></div><div v-if="normalFrames.length > 1" class="normal-frame-strip"><button v-for="(frame, index) in normalFrames" :key="frame.id" type="button" :class="{ active: normalFrameIndex === index, complete: Boolean(store.artifacts.find(item => item.kind === 'NormalMap' && Array.isArray(item.meta.source_artifacts) && item.meta.source_artifacts.includes(frame.id))) }" @click="normalFrameIndex = index"><ArtifactVisual :artifact="frame" :draggable="false" /><span>F{{ String(index + 1).padStart(2, '0') }}</span></button></div><div v-if="diffuse" class="normal-source-row"><ArtifactCard :artifact="diffuse" selected compact @select="selectArtifact" @preview="previewArtifact" /><ArtifactCard v-if="normal" :artifact="normal" compact @select="selectArtifact" @preview="previewArtifact" /></div><button class="arcade-button primary" :disabled="!sourceArtifact || !normalAction?.available || running" @click="normalRun"><Sparkle :size="18" />{{ normalFrames.length > 1 ? $t('studio.generateSequenceNormals', { count: normalFrames.length }) : $t("studio.generateNormals") }}</button><button class="text-button" :disabled="diffuse?.kind !== 'Image'" @click="redrawCurrent">{{ $t("studio.redoFrame") }}</button><button v-if="normal" class="arcade-button" type="button" @click="stage = 'export'">{{ $t('studio.continueDelivery') }}<ArrowRight :size="16" /></button></div><LightingPreview :diffuse="diffuse" :normal="normal" /></section>
 
         <section v-else class="export-workspace"><div class="export-card panel"><Package :size="48" /><span class="eyebrow">{{ $t("export.eyebrow") }}</span><h1>.cooksprite</h1><p>manifest.json + frames/*.png + normals/*.png + provenance.json</p><ul><li v-for="index in 4" :key="index"><Check :size="16" />{{ $t(`export.checks.${index - 1}`) }}</li></ul><div v-if="exportIssues.length" class="export-warning" role="alert"><strong>{{ $t("export.incomplete") }}</strong><ul><li v-for="issue in exportIssues" :key="issue"><Warning :size="15" />{{ issue }}</li></ul></div><button class="arcade-button primary large" @click="exportPack(false)"><Package :size="20" />{{ $t("export.validate") }}</button><button class="text-button warning-link" @click="exportPack(true)">{{ $t("export.accept") }}</button></div><div class="package-list panel"><h2>{{ $t("export.packages") }}</h2><article v-for="artifact in store.artifacts.filter(item => item.kind === 'CookSpritePack')" :key="artifact.id"><Package :size="24" /><div><strong>{{ artifact.title }}</strong><span>{{ (artifact.size / 1024).toFixed(1) }} KB</span></div><button class="arcade-button" @click="downloadPack(artifact)"><DownloadSimple :size="17" />{{ $t("common.download") }}</button></article><p v-if="!store.artifacts.some(item => item.kind === 'CookSpritePack')" class="muted">{{ $t("export.empty") }}</p></div></section>
       </div>

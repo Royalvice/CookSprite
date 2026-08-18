@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { PhArrowClockwise as Restart, PhCheck as Check, PhCloudSlash as CloudSlash, PhDatabase as Database, PhDownloadSimple as DownloadSimple, PhFolderOpen as FolderOpen, PhGauge as Gauge, PhPlay as Play, PhPlus as Plus, PhScan as Radar, PhSpinner as Spinner, PhSpeakerHigh as SpeakerHigh, PhSpeakerSlash as SpeakerSlash, PhTrash as Trash, PhWrench as Wrench } from "@phosphor-icons/vue";
-import { api, type ComfyProbeView, type LocalSetupView, type RuntimeCapabilities, type RuntimeDefaultsView, type RuntimeView } from "../api/generated";
+import { api, type ComfyProbeView, type LocalSetupView, type ModelBundleView, type ModelDownloadView, type RuntimeCapabilities, type RuntimeDefaultsView, type RuntimeView } from "../api/generated";
 import { useStudioStore } from "../stores/studio";
 
 const store = useStudioStore();
@@ -19,12 +19,15 @@ const defaultAction = ref("image.generate");
 const defaultWorkflow = ref("");
 const defaultModel = ref("");
 const defaultBusy = ref(false);
+const modelDownload = ref<ModelDownloadView | null>(null);
+const modelDownloadBusy = ref("");
 const endpointUrl = ref("http://127.0.0.1:8188");
 const projectName = ref("");
 const selectedProjectId = ref("");
 const projectMessage = ref("");
 const setup = ref<LocalSetupView | null>(null);
 let setupTimer: number | undefined;
+let modelDownloadTimer: number | undefined;
 const theme = ref(localStorage.getItem("cooksprite.theme") || "neon");
 const sound = ref(localStorage.getItem("cooksprite.sound") === "on");
 const usage = computed(() => store.allArtifacts.reduce((sum, item) => sum + item.size, 0));
@@ -50,6 +53,34 @@ async function refreshDefaults(id: string) {
   defaultWorkflow.value = binding?.workflow_id || "";
   defaultModel.value = binding?.model_id || "";
 }
+const modelBundles = computed<ModelBundleView[]>(() => defaults.value?.model_bundles || []);
+function stopModelDownloadPolling() {
+  if (modelDownloadTimer) window.clearTimeout(modelDownloadTimer);
+  modelDownloadTimer = undefined;
+}
+async function pollModelDownload() {
+  if (!modelDownload.value || !store.activeRuntimeId) return;
+  const current = await api.modelDownloadStatus(store.activeRuntimeId, modelDownload.value.id).catch(() => null);
+  if (current) modelDownload.value = current;
+  if (current && ["queued", "downloading", "verifying"].includes(current.status)) {
+    modelDownloadTimer = window.setTimeout(pollModelDownload, 1000);
+  } else {
+    stopModelDownloadPolling();
+    if (current?.status === "succeeded") await refreshDefaults(store.activeRuntimeId);
+  }
+}
+async function downloadModelBundle(bundle: ModelBundleView) {
+  if (!store.activeRuntimeId || bundle.ready || modelDownloadBusy.value) return;
+  modelDownloadBusy.value = bundle.id;
+  runtimeMessage.value = "";
+  stopModelDownloadPolling();
+  try {
+    modelDownload.value = await api.downloadModelBundle(store.activeRuntimeId, bundle.id);
+    void pollModelDownload();
+  } catch (error) {
+    runtimeMessage.value = error instanceof Error ? error.message : String(error);
+  } finally { modelDownloadBusy.value = ""; }
+}
 async function selectRuntime(id: string) {
   runtimeBusy.value = id;
   try {
@@ -72,7 +103,7 @@ onMounted(async () => {
   selectedProjectId.value = store.currentProject?.id || localStorage.getItem("cooksprite.current-project") || store.projects[0]?.id || "";
   await Promise.all([refreshRuntimes(), refreshSetup()]);
 });
-onBeforeUnmount(() => { if (setupTimer) window.clearTimeout(setupTimer); });
+onBeforeUnmount(() => { if (setupTimer) window.clearTimeout(setupTimer); stopModelDownloadPolling(); });
 watch(() => store.currentProject?.id, (id) => { selectedProjectId.value = id || ""; });
 watch(() => store.activeRuntimeId, (id) => { if (id) { void api.runtimeCapabilities(id).then((value) => { capabilities.value = value; }).catch(() => { capabilities.value = null; }); void refreshDefaults(id); } });
 watch(defaultAction, () => {
@@ -284,6 +315,15 @@ async function installLocal() {
           <label><span>{{ $t("settings.defaultModel") }}</span><select v-model="defaultModel"><option v-if="defaultModel" :value="defaultModel">{{ defaultModel }}</option><option v-for="recipe in defaultRecipes.filter((item) => item.id === defaultWorkflow)" :key="`model-${recipe.id}`" :value="recipe.model_id">{{ recipe.model_id }}</option></select></label>
           <button class="arcade-button primary" :disabled="defaultBusy || !defaultWorkflow || !defaultModel" @click="saveDefault">{{ $t("settings.saveDefault") }}</button>
         </div>
+      </div>
+      <div v-if="activeRuntime && defaults && modelBundles.length" class="runtime-model-bundles">
+        <h3>{{ $t("settings.modelBundles") }}</h3>
+        <article v-for="bundle in modelBundles" :key="bundle.id" class="model-bundle-card" :class="{ ready: bundle.ready }">
+          <div class="model-bundle-heading"><div><strong>{{ bundle.label }}</strong><small>{{ bundle.license }}<span v-if="bundle.recommended"> · {{ $t("settings.recommended") }}</span></small></div><span class="runtime-status">{{ bundle.ready ? $t("settings.modelReady") : $t("settings.modelMissing") }}</span></div>
+          <div class="model-bundle-files"><span v-for="file in bundle.files" :key="file.path" :class="{ present: file.present }">{{ file.present ? "✓" : "·" }} {{ file.path }}</span></div>
+          <div class="model-bundle-actions"><button class="arcade-button" :disabled="bundle.ready || !!modelDownloadBusy || (!!modelDownload && ['queued','downloading','verifying'].includes(modelDownload.status))" @click="downloadModelBundle(bundle)"><DownloadSimple :size="18" />{{ bundle.ready ? $t("settings.modelReady") : $t("settings.downloadModel") }}</button><small v-if="modelDownload?.bundle_id === bundle.id">{{ modelDownload.message }}<template v-if="modelDownload.status !== 'failed'"> · {{ Math.round(modelDownload.progress * 100) }}%</template><template v-if="modelDownload.error"> · {{ modelDownload.error.message }}</template></small></div>
+          <div v-if="modelDownload?.bundle_id === bundle.id && ['queued','downloading','verifying'].includes(modelDownload.status)" class="setup-progress model-download-progress"><i :style="{ width: `${Math.max(2, modelDownload.progress * 100)}%` }"></i></div>
+        </article>
       </div>
       <small>{{ $t("settings.modelNote") }}</small>
     </section>

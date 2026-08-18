@@ -25,7 +25,7 @@ from .recipe_assembler import (
     output_ref,
     prompt_packet,
 )
-from .recipes import OFFICIAL_ALPHA_MODEL, Recipe, recipe_mode
+from .recipes import OFFICIAL_ALPHA_MODEL, Recipe, recipe_mode, recipe_variants
 from .store import Store
 
 IMAGE_RESOLUTIONS = (64, 128, 256, 512, 1024)
@@ -383,6 +383,23 @@ def materialize_recipe_workflows(
         definitions = {"image.pixelize:image-to-image": _pixel_workflow(runtime_id, recipe)}
     elif recipe.family == "cooksprite.alpha":
         definitions = {"image.cutout:image-to-image": _cutout_workflow(runtime_id, recipe)}
+    elif recipe.family == "comfy.flux2-klein":
+        for action_id in recipe.actions:
+            for mode in recipe.modes:
+                if mode != "i2i":
+                    definitions[f"{action_id}:{mode}"] = assemble_recipe_workflow(
+                        runtime_id, recipe, action_id, mode
+                    )
+                    continue
+                for variant in recipe_variants(recipe):
+                    count = (
+                        "1"
+                        if not variant.workflow_variant
+                        else variant.workflow_variant.removeprefix("i2i-")
+                    )
+                    definitions[f"{action_id}:{mode}:{count}"] = assemble_recipe_workflow(
+                        runtime_id, variant, action_id, mode
+                    )
     elif recipe.source in {"imported", "discovered"} and recipe.workflow:
         for action_id in recipe.actions:
             for mode in recipe.modes:
@@ -493,6 +510,11 @@ def bind_action_task(
         source_slots = [
             (f"source_{index}", artifact_id)
             for index, artifact_id in enumerate(artifacts["source"])
+        ]
+    elif action_id == "image.generate" and artifacts.get("reference"):
+        source_slots = [
+            (f"reference_{index}", artifact_id)
+            for index, artifact_id in enumerate(artifacts["reference"], start=1)
         ]
     else:
         for slot, artifact_ids in artifacts.items():

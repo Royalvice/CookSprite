@@ -45,6 +45,11 @@ def _slot_type(recipe: Recipe, slot: str) -> str:
     return str(recipe.slot_types.get(slot) or SEMANTIC_SLOT_TYPES.get(slot) or "Text")
 
 
+def _sealed_tool_id(recipe: Recipe) -> str:
+    suffix = f".{recipe.workflow_variant}" if recipe.workflow_variant else ""
+    return f"comfy.sealed.{recipe.id}{suffix}"
+
+
 def sealed_tool_descriptor(recipe: Recipe) -> ToolDescriptor | None:
     """Expose one raw runtime graph as a typed, sealed Tool."""
 
@@ -55,7 +60,7 @@ def sealed_tool_descriptor(recipe: Recipe) -> ToolDescriptor | None:
         for name in recipe.slots
     ]
     return ToolDescriptor(
-        id=f"comfy.sealed.{recipe.id}",
+        id=_sealed_tool_id(recipe),
         source="comfy",
         title=f"ComfyUI workflow · {recipe.label}",
         inputs=inputs,
@@ -96,7 +101,7 @@ def _task_inputs(recipe: Recipe, action_id: str, mode: str) -> dict[str, str]:
         "detail_level": "Text",
     }
     source_slot = _source_slot(action_id, mode)
-    if source_slot:
+    if source_slot and not any(name.startswith("reference_") for name in recipe.slots):
         inputs[source_slot] = "Image"
 
     # A workflow may expose additional typed controls.  They become Task
@@ -110,7 +115,7 @@ def _task_inputs(recipe: Recipe, action_id: str, mode: str) -> dict[str, str]:
     return inputs
 
 
-def _with_dimension_slots(recipe: Recipe) -> Recipe:
+def with_dimension_slots(recipe: Recipe) -> Recipe:
     """Expose the first graph node with width and height as resolution slots.
 
     Runtime-discovered workflows often hard-code their latent or image scale
@@ -159,6 +164,8 @@ def _bind_recipe_slots(
         elif slot in {"image", "source", "reference"}:
             if source_slot:
                 bindings[slot] = input_ref(source_slot)
+        elif slot.startswith("reference_"):
+            bindings[slot] = input_ref(slot)
         else:
             bindings[slot] = input_ref(slot)
 
@@ -211,7 +218,7 @@ def assemble_recipe_workflow(
     modules instead of being copied into each model workflow.
     """
 
-    recipe = _with_dimension_slots(recipe)
+    recipe = with_dimension_slots(recipe)
     descriptor = sealed_tool_descriptor(recipe)
     if not descriptor:
         raise ValueError("Recipe has no compatible raw workflow contract")
@@ -256,7 +263,15 @@ def assemble_recipe_workflow(
         inputs=inputs,
         nodes=nodes,
         outputs={output_name: final_ref},
-        output_sources={output_name: input_ref(source_slot)} if source_slot else {},
+        output_sources={
+            output_name: input_ref(
+                "reference_1"
+                if source_slot == "reference" and "reference_1" in inputs
+                else source_slot
+            )
+        }
+        if source_slot
+        else {},
     )
 
 
@@ -267,4 +282,5 @@ __all__ = [
     "output_ref",
     "prompt_packet",
     "sealed_tool_descriptor",
+    "with_dimension_slots",
 ]

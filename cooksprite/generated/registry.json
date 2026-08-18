@@ -14,7 +14,7 @@
     {
       "accepts": {
         "reference": {
-          "max": 1,
+          "max": 4,
           "required": false,
           "type": "Image"
         }
@@ -25,11 +25,11 @@
           "default": "character",
           "i18n": {
             "en": {
-              "description": "Compiles into single-subject",
+              "description": "",
               "name": "Asset type"
             },
             "zh-CN": {
-              "description": "编译为单体、完整轮廓或平铺等构图要求",
+              "description": "",
               "name": "素材类型"
             }
           },
@@ -131,11 +131,11 @@
           "default": "2d_action_game",
           "i18n": {
             "en": {
-              "description": "Choose a character style template; other assets keep their existing styles",
+              "description": "",
               "name": "Style"
             },
             "zh-CN": {
-              "description": "角色使用风格模板；其他素材保留原有风格选项",
+              "description": "",
               "name": "风格"
             }
           },
@@ -403,7 +403,7 @@
         },
         {
           "advanced": false,
-          "default": 4,
+          "default": "4",
           "i18n": {
             "en": {
               "description": "Number of candidates per run",
@@ -415,12 +415,69 @@
             }
           },
           "id": "count",
-          "max": 8.0,
-          "min": 1.0,
-          "options": [],
+          "max": null,
+          "min": null,
+          "options": [
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "1"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "1"
+                }
+              },
+              "id": "1"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "2"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "2"
+                }
+              },
+              "id": "2"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "3"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "3"
+                }
+              },
+              "id": "3"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "4"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "4"
+                }
+              },
+              "id": "4"
+            }
+          ],
           "options_range": null,
-          "step": 1.0,
-          "type": "number"
+          "step": null,
+          "type": "select"
         },
         {
           "advanced": true,
@@ -446,11 +503,11 @@
       ],
       "i18n": {
         "en": {
-          "description": "Create a static asset from text or one reference image",
+          "description": "Create a static asset from text or up to four reference images",
           "name": "Create image"
         },
         "zh-CN": {
-          "description": "从文字或一张参考图创作静态素材",
+          "description": "从文字或最多四张参考图创作静态素材",
           "name": "创作图片"
         }
       },
@@ -1973,7 +2030,7 @@
           "options_range": [
             16,
             512,
-            1
+            16
           ],
           "step": null,
           "type": "select"

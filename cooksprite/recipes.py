@@ -12,6 +12,12 @@ import hashlib
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
+from .workflows.flux2_klein import (
+    FLUX2_BUNDLES,
+    FLUX2_TEMPLATE_PROVENANCE,
+    flux2_klein_graph,
+)
+
 RUNTIME_ASSETS_SCHEMA = "cooksprite.runtime-assets/v1"
 RECIPE_SLOT_TYPES = {
     "Image",
@@ -63,7 +69,33 @@ CORE_ALPHA_NODES = {
     "InvertMask",
     "JoinImageWithAlpha",
 }
+FLUX2_T2I_NODES = {
+    "UNETLoader",
+    "CLIPLoader",
+    "VAELoader",
+    "CLIPTextEncode",
+    "ConditioningZeroOut",
+    "PrimitiveInt",
+    "EmptyFlux2LatentImage",
+    "RandomNoise",
+    "KSamplerSelect",
+    "Flux2Scheduler",
+    "CFGGuider",
+    "SamplerCustomAdvanced",
+    "VAEDecode",
+}
+FLUX2_I2I_NODES = FLUX2_T2I_NODES | {
+    "ImageScaleToTotalPixels",
+    "VAEEncode",
+    "ReferenceLatent",
+}
 OFFICIAL_ALPHA_MODEL = "birefnet.safetensors"
+T2I_ONLY_CHECKPOINTS = frozenset(
+    {
+        "z_image_turbo_bf16.safetensors",
+        "krea2_turbo_bf16.safetensors",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -83,6 +115,11 @@ class Recipe:
     source: str = "discovered"
     runtime_snapshot: str | None = None
     workflows: dict[str, dict[str, Any]] = field(default_factory=dict)
+    workflow_variants: dict[str, dict[str, Any]] = field(default_factory=dict)
+    workflow_variant: str | None = None
+    model_bundle: str | None = None
+    model_files: list[dict[str, Any]] = field(default_factory=list)
+    provenance: dict[str, Any] = field(default_factory=dict)
 
     def dump(self) -> dict[str, Any]:
         return asdict(self)
@@ -91,7 +128,13 @@ class Recipe:
         return replace(self, runtime_snapshot=runtime_snapshot, workflows=workflows)
 
     def workflow_for(self, action_id: str, inputs: dict[str, list[str]]) -> dict[str, Any] | None:
-        return self.workflows.get(f"{action_id}:{recipe_mode(action_id, inputs)}")
+        mode = recipe_mode(action_id, inputs)
+        if mode == "i2i":
+            count = len(inputs.get("reference") or [])
+            variant = self.workflows.get(f"{action_id}:{mode}:{count}")
+            if variant:
+                return variant
+        return self.workflows.get(f"{action_id}:{mode}")
 
     @classmethod
     def load(cls, raw: dict[str, Any]) -> Recipe:
@@ -117,6 +160,79 @@ def _choices(report: dict[str, Any], node_id: str, name: str) -> set[str]:
         value[0] if isinstance(value, list) and value and isinstance(value[0], list) else value
     )
     return {str(item) for item in choices} if isinstance(choices, list) else set()
+
+
+def _model_names(report: dict[str, Any], folder: str) -> set[str]:
+    values = _model_map(report).get(folder, [])
+    return {str(item) for item in values}
+
+
+def _bundle_file_available(report: dict[str, Any], file: dict[str, Any]) -> bool:
+    folder = str(file.get("folder") or "")
+    name = str(file.get("name") or "")
+    if not folder or not name:
+        return False
+    if name in _model_names(report, folder):
+        return True
+    loader = {
+        "diffusion_models": ("UNETLoader", "unet_name"),
+        "text_encoders": ("CLIPLoader", "clip_name"),
+        "vae": ("VAELoader", "vae_name"),
+    }.get(folder)
+    return bool(loader and name in _choices(report, *loader))
+
+
+def model_bundle_status(report: dict[str, Any], bundle_id: str) -> dict[str, Any]:
+    """Project runtime model discovery into one stable bundle view."""
+
+    bundle = FLUX2_BUNDLES.get(bundle_id)
+    if not bundle:
+        raise KeyError(f"unknown model bundle: {bundle_id}")
+    files = [
+        {
+            **file,
+            "path": f"models/{file['folder']}/{file['name']}",
+            "present": _bundle_file_available(report, file),
+        }
+        for file in bundle["files"]
+    ]
+    return {
+        "id": bundle_id,
+        "label": bundle["label"],
+        "license": bundle["license"],
+        "recommended": bool(bundle.get("recommended")),
+        "ready": all(file["present"] for file in files),
+        "files": files,
+    }
+
+
+def model_bundles(report: dict[str, Any]) -> list[dict[str, Any]]:
+    return [model_bundle_status(report, bundle_id) for bundle_id in FLUX2_BUNDLES]
+
+
+def recipe_variants(recipe: Recipe) -> list[Recipe]:
+    """Return one sealed-tool view per raw graph variant."""
+
+    variants = [recipe]
+    for key, workflow in sorted(recipe.workflow_variants.items()):
+        slots = dict(recipe.slots)
+        slot_types = dict(recipe.slot_types)
+        for node_id in workflow:
+            if not str(node_id).startswith("scale_ref_"):
+                continue
+            index = str(node_id).removeprefix("scale_ref_")
+            slots[f"reference_{index}"] = f"{node_id}.image"
+            slot_types[f"reference_{index}"] = "Image"
+        variants.append(
+            replace(
+                recipe,
+                workflow=workflow,
+                slots=slots,
+                slot_types=slot_types,
+                workflow_variant=f"i2i-{key}",
+            )
+        )
+    return variants
 
 
 def _unet_recipe(
@@ -253,6 +369,69 @@ def _unet_recipe(
     )
 
 
+def _flux2_recipes(report: dict[str, Any]) -> list[Recipe]:
+    nodes = set((report.get("object_info") or {}).keys())
+    result: list[Recipe] = []
+    for bundle_id, bundle in FLUX2_BUNDLES.items():
+        if not all(_bundle_file_available(report, file) for file in bundle["files"]):
+            continue
+        if not FLUX2_T2I_NODES.issubset(nodes):
+            continue
+        t2i_graph, t2i_slots, t2i_slot_types = flux2_klein_graph(bundle_id, "t2i")
+        result.append(
+            Recipe(
+                id=f"{bundle_id}-t2i",
+                label=f"{bundle['label']} · T2I",
+                family="comfy.flux2-klein",
+                actions=["image.generate"],
+                modes=["t2i"],
+                checkpoint=bundle["files"][0]["name"],
+                workflow=t2i_graph,
+                slots=t2i_slots,
+                slot_types=t2i_slot_types,
+                output=["decode", 0],
+                source="discovered",
+                model_bundle=bundle_id,
+                model_files=list(bundle["files"]),
+                provenance=dict(FLUX2_TEMPLATE_PROVENANCE),
+            )
+        )
+        if not FLUX2_I2I_NODES.issubset(nodes):
+            continue
+        variants: dict[str, dict[str, Any]] = {}
+        first_graph: dict[str, Any] | None = None
+        first_slots: dict[str, str] | None = None
+        first_slot_types: dict[str, str] | None = None
+        for count in range(1, 5):
+            graph, slots, slot_types = flux2_klein_graph(
+                bundle_id, "i2i", reference_count=count
+            )
+            if count == 1:
+                first_graph, first_slots, first_slot_types = graph, slots, slot_types
+            else:
+                variants[str(count)] = graph
+        result.append(
+            Recipe(
+                id=f"{bundle_id}-i2i",
+                label=f"{bundle['label']} · I2I",
+                family="comfy.flux2-klein",
+                actions=["image.generate"],
+                modes=["i2i"],
+                checkpoint=bundle["files"][0]["name"],
+                workflow=first_graph,
+                slots=first_slots or {},
+                slot_types=first_slot_types or {},
+                output=["decode", 0],
+                source="discovered",
+                workflow_variants=variants,
+                model_bundle=bundle_id,
+                model_files=list(bundle["files"]),
+                provenance=dict(FLUX2_TEMPLATE_PROVENANCE),
+            )
+        )
+    return result
+
+
 def discover_recipes(report: dict[str, Any]) -> list[Recipe]:
     """Build only recipes whose complete structural requirements are present."""
 
@@ -308,22 +487,23 @@ def discover_recipes(report: dict[str, Any]) -> list[Recipe]:
         for model, label, clip, clip_type, vae, shift, stem in profiles:
             if model not in diffusion_models:
                 continue
-            for i2i in (False, True):
-                recipe = _unet_recipe(
-                    report,
-                    model,
-                    recipe_id=f"{stem}-{'i2i' if i2i else 't2i'}",
-                    # The UI selects the model identity only.  T2I/I2I is an
-                    # API-side mode decision based on the supplied reference.
-                    label=label,
-                    clip=clip,
-                    clip_type=clip_type,
-                    vae=vae,
-                    shift=shift,
-                    i2i=i2i,
-                )
-                if recipe:
-                    recipes.append(recipe)
+            # These official model adapters are text-to-image only.  Do not
+            # synthesize an image-to-image graph from their T2I components.
+            recipe = _unet_recipe(
+                report,
+                model,
+                recipe_id=f"{stem}-t2i",
+                label=label,
+                clip=clip,
+                clip_type=clip_type,
+                vae=vae,
+                shift=shift,
+                i2i=False,
+            )
+            if recipe:
+                recipes.append(recipe)
+
+    recipes.extend(_flux2_recipes(report))
 
     if {"CS_LoadArtifact", "CS_StoreArtifact", "CS_NormalEstimate"}.issubset(nodes):
         recipes.append(
@@ -424,6 +604,10 @@ def imported_recipe_is_compatible(recipe: Recipe, report: dict[str, Any]) -> boo
 def recipe_contract_is_valid(recipe: Recipe) -> bool:
     """Validate the small semantic contract used by the generic assembler."""
 
+    if recipe.checkpoint in T2I_ONLY_CHECKPOINTS and any(
+        mode != "t2i" for mode in recipe.modes
+    ):
+        return False
     if not recipe.workflow:
         return True
     if not recipe.output_name or recipe.output_type not in RECIPE_OUTPUT_TYPES:
@@ -432,6 +616,9 @@ def recipe_contract_is_valid(recipe: Recipe) -> bool:
         return False
     if any(value not in RECIPE_SLOT_TYPES for value in recipe.slot_types.values()):
         return False
+    graphs = [recipe.workflow, *recipe.workflow_variants.values()]
+    if any(graph is not None and not isinstance(graph, dict) for graph in graphs):
+        return False
     if "image.generate" in recipe.actions:
         if recipe.output_type != "Image":
             return False
@@ -439,7 +626,10 @@ def recipe_contract_is_valid(recipe: Recipe) -> bool:
             return False
         if any(
             mode in {"i2i", "i2v", "i2i-sequence"}
-            and not set(recipe.slots).intersection({"image", "source", "reference"})
+            and not (
+                set(recipe.slots).intersection({"image", "source", "reference"})
+                or any(name.startswith("reference_") for name in recipe.slots)
+            )
             for mode in recipe.modes
         ):
             return False
@@ -452,6 +642,7 @@ def runtime_manifest(
     return {
         "schema": RUNTIME_ASSETS_SCHEMA,
         "models": _model_map(report),
+        "model_bundles": model_bundles(report),
         "model_sources": {},
         "workflow_templates": report.get("workflow_templates") or {},
         "features": report.get("features") or {},
@@ -475,6 +666,15 @@ def manifest_from_assets(assets: Any) -> dict[str, Any]:
     )
 
 
+def _runtime_recipe_allowed(recipe: Recipe) -> bool:
+    """Prevent stale manifests from reviving unsupported model modes."""
+
+    return not (
+        recipe.checkpoint in T2I_ONLY_CHECKPOINTS
+        and any(mode != "t2i" for mode in recipe.modes)
+    )
+
+
 def recipes_from_runtime(runtime: dict[str, Any] | None) -> list[Recipe]:
     if not runtime:
         return []
@@ -485,7 +685,13 @@ def recipes_from_runtime(runtime: dict[str, Any] | None) -> list[Recipe]:
     except (TypeError, json.JSONDecodeError):
         return []
     manifest = manifest_from_assets(assets)
-    return [Recipe.load(item) for item in manifest.get("recipes", []) if isinstance(item, dict)]
+    return [
+        recipe
+        for item in manifest.get("recipes", [])
+        if isinstance(item, dict)
+        for recipe in [Recipe.load(item)]
+        if _runtime_recipe_allowed(recipe)
+    ]
 
 
 def recipe_for(runtime: dict[str, Any], recipe_id: str) -> Recipe | None:
@@ -525,8 +731,11 @@ def supports(recipe: Recipe, action_id: str, inputs: dict[str, list[str]] | None
     if recipe.workflow and action_id == "image.generate":
         if mode in {"i2i", "i2v", "i2i-sequence"} and not inputs.get("reference"):
             return False
-        if mode in {"i2i", "i2v", "i2i-sequence"} and not set(recipe.slots).intersection(
-            {"image", "source", "reference"}
+        if mode in {"i2i", "i2v", "i2i-sequence"} and not (
+            set(recipe.slots).intersection({"image", "source", "reference"})
+            or any(name.startswith("reference_") for name in recipe.slots)
         ):
+            return False
+        if mode == "i2i" and len(inputs.get("reference") or []) > 4:
             return False
     return True

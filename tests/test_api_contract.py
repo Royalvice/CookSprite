@@ -276,15 +276,15 @@ def test_runtime_identity_capabilities_and_project_workspace(tmp_path, monkeypat
     response = c.post(
         "/api/v1/runtimes",
         json={
-            "id": "h20-gpu0",
-            "label": "H20-baidu · GPU0",
-            "base_url": "http://127.0.0.1:18188",
+            "id": "remote-gpu0",
+            "label": "Remote GPU · GPU0",
+            "base_url": "http://127.0.0.1:8188",
             "location": "remote",
             "transport": "ssh-tunnel",
         },
     )
     assert response.status_code == 200
-    assert c.post("/api/v1/runtimes/h20-gpu0/doctor").status_code == 200
+    assert c.post("/api/v1/runtimes/remote-gpu0/doctor").status_code == 200
     listed = c.get("/api/v1/runtimes").json()
     assert len(listed) == 1
     assert listed[0]["location"] == "remote"
@@ -295,15 +295,15 @@ def test_runtime_identity_capabilities_and_project_workspace(tmp_path, monkeypat
     assert c.post(
         "/api/v1/runtimes",
         json={
-            "id": "h20-gpu0",
-            "label": "H20-baidu · GPU0 (updated)",
-            "base_url": "http://127.0.0.1:18188",
+            "id": "remote-gpu0",
+            "label": "Remote GPU · GPU0 (updated)",
+            "base_url": "http://127.0.0.1:8188",
             "location": "remote",
             "transport": "ssh-tunnel",
         },
     ).status_code == 200
     assert len(c.get("/api/v1/runtimes").json()) == 1
-    capabilities = c.get("/api/v1/runtimes/h20-gpu0/capabilities").json()
+    capabilities = c.get("/api/v1/runtimes/remote-gpu0/capabilities").json()
     assert set(capabilities["categories"]) == {"image", "text", "video", "tools"}
     assert capabilities["categories"]["image"]["models"][0]["source"] == "User existing"
 

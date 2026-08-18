@@ -17,7 +17,14 @@ from cooksprite.prompting import (
     SpritePromptCompiler,
     VideoPromptRequest,
 )
-from cooksprite.recipes import Recipe, imported_recipe_is_compatible, supports
+from cooksprite.recipes import (
+    Recipe,
+    discover_recipes,
+    imported_recipe_is_compatible,
+    recipe_contract_is_valid,
+    recipes_from_runtime,
+    supports,
+)
 from cooksprite.registry import ACTION_IDS, ActionRegistry
 from cooksprite.store import Store
 
@@ -65,12 +72,14 @@ CORE_NODES = {
         },
         ["IMAGE"],
     ),
-    "CS_LoadArtifact": node({"artifact_url": "STRING"}, ["IMAGE"]),
-    "CS_StoreArtifact": node({"value": "IMAGE", "upload_url": "STRING"}, ["STRING"]),
+    "CS_LoadArtifact": node({"artifact_url": "STRING"}, ["IMAGE", "MASK"]),
+    "CS_StoreArtifact": node({"value": "IMAGE", "upload_url": "STRING", "mask": "MASK"}, ["STRING"]),
     "CS_IsolateOnGreen": node({"image": "IMAGE", "tolerance": "FLOAT"}, ["IMAGE"]),
     "CS_Pixelize": node(
         {
             "image": "IMAGE",
+            "mask": "MASK",
+            "target_size": "INT",
             "target_width": "INT",
             "target_height": "INT",
             "profile": "STRING",
@@ -309,6 +318,110 @@ def test_animation_recipes_advertise_their_actual_text_and_image_modes():
     assert not supports(i2v, "animation.generate", {})
     assert supports(t2v, "animation.generate", {})
     assert not supports(t2v, "animation.generate", {"character": ["art_character"]})
+
+
+def test_official_z_image_and_krea_adapters_are_text_to_image_only():
+    report = {
+        "object_info": {
+            "UNETLoader": {
+                "input": {
+                    "required": {
+                        "unet_name": [[
+                            "z_image_turbo_bf16.safetensors",
+                            "krea2_turbo_bf16.safetensors",
+                        ]]
+                    }
+                }
+            },
+            "CLIPLoader": {
+                "input": {
+                    "required": {
+                        "clip_name": [[
+                            "qwen_3_4b.safetensors",
+                            "qwen3vl_4b_bf16.safetensors",
+                        ]],
+                        "type": [["lumina2", "krea2"]],
+                    }
+                }
+            },
+            "VAELoader": {
+                "input": {
+                    "required": {
+                        "vae_name": [["ae.safetensors", "qwen_image_vae.safetensors"]]
+                    }
+                }
+            },
+            **{
+                node_id: {"input": {"required": {}}}
+                for node_id in (
+                    "CLIPTextEncode",
+                    "ConditioningZeroOut",
+                    "KSampler",
+                    "VAEDecode",
+                    "EmptySD3LatentImage",
+                    "ModelSamplingAuraFlow",
+                )
+            },
+        },
+        "models": {
+            "diffusion_models": [
+                "z_image_turbo_bf16.safetensors",
+                "krea2_turbo_bf16.safetensors",
+            ]
+        },
+    }
+
+    recipes = discover_recipes(report)
+
+    assert {recipe.id for recipe in recipes} == {
+        "z-image-turbo-bf16-t2i",
+        "krea2-turbo-bf16-t2i",
+    }
+    assert all(recipe.modes == ["t2i"] for recipe in recipes)
+
+
+def test_stale_i2i_recipes_for_t2i_only_models_are_not_loaded():
+    stale_z_image = Recipe(
+        id="z-image-turbo-bf16-i2i",
+        label="Z-Image-Turbo",
+        family="comfy.image.unet",
+        actions=["image.generate"],
+        modes=["i2i"],
+        checkpoint="z_image_turbo_bf16.safetensors",
+    )
+    stale_krea = Recipe(
+        id="krea2-turbo-bf16-i2i",
+        label="Krea-2 Turbo",
+        family="comfy.image.unet",
+        actions=["image.generate"],
+        modes=["i2i"],
+        checkpoint="krea2_turbo_bf16.safetensors",
+    )
+    valid_core = Recipe(
+        id="core-image-i2i",
+        label="Generic checkpoint",
+        family="comfy.core-checkpoint",
+        actions=["image.generate"],
+        modes=["i2i"],
+        checkpoint="generic.safetensors",
+    )
+    assert not recipe_contract_is_valid(stale_z_image)
+    runtime = {
+        "assets": json.dumps(
+            [
+                {
+                    "schema": "cooksprite.runtime-assets/v1",
+                    "recipes": [
+                        stale_z_image.dump(),
+                        stale_krea.dump(),
+                        valid_core.dump(),
+                    ],
+                }
+            ]
+        )
+    }
+
+    assert [recipe.id for recipe in recipes_from_runtime(runtime)] == ["core-image-i2i"]
 
 
 def test_sheet_and_video_candidate_counts_are_compiled_inside_comfy(tmp_path):
@@ -581,6 +694,7 @@ def test_action_request_compiles_to_real_comfy_graph_and_artifact_store(tmp_path
             "prompt": "a soup knight",
             "model": action["models"][0]["id"],
             "count": 4,
+            "resolution": "256",
         },
     }
     response = client.post("/api/v1/actions/image.generate/runs", json=request)
@@ -595,6 +709,11 @@ def test_action_request_compiles_to_real_comfy_graph_and_artifact_store(tmp_path
     assert packet["inputs"]["prompt"] == "a soup knight"
     assert packet["inputs"]["category"] == "character"
     assert packet["inputs"]["style"] == "pixel"
+    assert packet["inputs"]["width"] == 256
+    assert packet["inputs"]["height"] == 256
+    latent = next(node for node in graph.values() if node["class_type"] == "EmptyLatentImage")
+    assert latent["inputs"]["width"] == 256
+    assert latent["inputs"]["height"] == 256
     assert state["provenance"]["task"]["id"].startswith("image.generate.")
     assert state["provenance"]["workflows"]
     assert "private-prompt" not in json.dumps(state)
@@ -612,10 +731,19 @@ def test_pixelize_and_cutout_actions_compile_to_their_nodes(tmp_path):
     ).json()
 
     for action_id, node_class, values in (
-        ("image.pixelize", "CS_Pixelize", {"target_width": 32, "target_height": 32}),
+        (
+            "image.pixelize",
+            "CS_Pixelize",
+            {"target_size": 32, "palette_budget": "32", "detail_level": "production"},
+        ),
     ):
         action = client.get(f"/api/v1/actions/{action_id}").json()
         assert action["available"] is True
+        control_ids = {control["id"] for control in action["controls"]}
+        assert {"target_size", "palette_budget", "detail_level"}.issubset(control_ids)
+        assert not {"target_width", "target_height"}.intersection(control_ids)
+        target_size = next(control for control in action["controls"] if control["id"] == "target_size")
+        assert target_size["options_range"] == [16, 512, 16]
         response = client.post(
             f"/api/v1/actions/{action_id}/runs",
             json={
@@ -630,6 +758,20 @@ def test_pixelize_and_cutout_actions_compile_to_their_nodes(tmp_path):
         graph = ProtocolComfy.submitted[-1]
         assert any(node["class_type"] == node_class for node in graph.values())
         assert any(node["class_type"] == "CS_StoreArtifact" for node in graph.values())
+        loader_id, loader = next(
+            (node_id, node)
+            for node_id, node in graph.items()
+            if node["class_type"] == "CS_LoadArtifact"
+        )
+        pixel_id, pixel = next(
+            (node_id, node)
+            for node_id, node in graph.items()
+            if node["class_type"] == "CS_Pixelize"
+        )
+        store = next(node for node in graph.values() if node["class_type"] == "CS_StoreArtifact")
+        assert loader["inputs"]["artifact_url"]
+        assert pixel["inputs"]["mask"] == [loader_id, 1]
+        assert store["inputs"]["mask"] == [pixel_id, 1]
 
     action = client.get("/api/v1/actions/image.cutout").json()
     assert action["available"] is True

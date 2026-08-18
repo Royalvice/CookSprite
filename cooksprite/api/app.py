@@ -34,6 +34,7 @@ from ..comfy.managed import (
     wait_until_ready,
 )
 from ..comfy.managed import launch as launch_managed_comfy
+from ..comfy.models import ModelDownloadError, download_bundle_file
 from ..compiler import CompileError, Compiler
 from ..domain import (
     ActionDescriptor,
@@ -63,14 +64,17 @@ from ..example_catalog import register_action_examples
 from ..execution import ExecutionPlan
 from ..package import PackageError, build_package
 from ..prompting import COMPILER_VERSION
-from ..recipe_assembler import sealed_tool_descriptor
+from ..recipe_assembler import sealed_tool_descriptor, with_dimension_slots
 from ..recipes import (
+    FLUX2_BUNDLES,
     Recipe,
     discover_recipes,
     imported_recipe_is_compatible,
     manifest_from_assets,
+    model_bundles,
     recipe_contract_is_valid,
     recipe_for,
+    recipe_variants,
     recipes_from_runtime,
     runtime_manifest,
     supports,
@@ -269,6 +273,8 @@ def create_app(
     }
     runtime_cache: dict[str, dict[str, Any]] = {}
     runtime_cache_lock = threading.RLock()
+    model_downloads: dict[str, dict[str, Any]] = {}
+    model_download_lock = threading.RLock()
 
     def runtime_assets(runtime: dict[str, Any] | None) -> list[dict[str, Any]]:
         if not runtime:
@@ -307,11 +313,28 @@ def create_app(
         action_id: str,
         recipes: list[Recipe],
         current: dict[str, Any] | None = None,
+        *,
+        prefer_flux9b: bool = False,
     ) -> dict[str, str] | None:
         """Keep one compact, per-runtime default without guessing model ability."""
 
         compatible = [recipe for recipe in recipes if supports(recipe, action_id)]
         if not compatible:
+            return None
+        if prefer_flux9b:
+            selected = next(
+                (
+                    recipe
+                    for recipe in compatible
+                    if recipe.id == "flux2-klein-9b-turbo-t2i"
+                ),
+                None,
+            )
+            if selected:
+                return {
+                    "workflow_id": selected.id,
+                    "model_id": selected.checkpoint or selected.id,
+                }
             return None
         if isinstance(current, dict):
             workflow_id = str(current.get("workflow_id") or "")
@@ -332,22 +355,50 @@ def create_app(
             return {}
         manifest = manifest_from_assets(runtime_assets(runtime))
         stored = manifest.get("defaults") if isinstance(manifest.get("defaults"), dict) else {}
+        sources = (
+            manifest.get("default_sources")
+            if isinstance(manifest.get("default_sources"), dict)
+            else {}
+        )
         available = recipes if recipes is not None else recipes_from_runtime(runtime)
         result: dict[str, dict[str, str]] = {}
         for action_id in ACTION_IDS:
-            binding = _default_binding(action_id, available, stored.get(action_id))
+            has_flux = any(
+                recipe.family == "comfy.flux2-klein"
+                and action_id in recipe.actions
+                for recipe in available
+            )
+            binding = _default_binding(
+                action_id,
+                available,
+                stored.get(action_id)
+                if not (action_id == "image.generate" and has_flux and sources.get(action_id) != "user")
+                else None,
+                prefer_flux9b=action_id == "image.generate" and has_flux and sources.get(action_id) != "user",
+            )
             if binding:
                 result[action_id] = binding
         return result
 
     def save_runtime_defaults(
-        runtime: dict[str, Any], defaults: dict[str, dict[str, str]]
+        runtime: dict[str, Any],
+        defaults: dict[str, dict[str, str]],
+        *,
+        explicit_action: str | None = None,
     ) -> None:
         manifest = manifest_from_assets(runtime_assets(runtime))
+        default_sources = (
+            dict(manifest.get("default_sources"))
+            if isinstance(manifest.get("default_sources"), dict)
+            else {}
+        )
+        if explicit_action:
+            default_sources[explicit_action] = "user"
         manifest = {
             **manifest,
             "schema": manifest.get("schema", "cooksprite.runtime-assets/v1"),
             "defaults": defaults,
+            "default_sources": default_sources,
             "callback_url": callback_for(runtime),
         }
         assets = [
@@ -398,13 +449,40 @@ def create_app(
             if isinstance(existing_manifest.get("defaults"), dict)
             else {}
         )
+        stored_sources = (
+            dict(existing_manifest.get("default_sources"))
+            if isinstance(existing_manifest.get("default_sources"), dict)
+            else {}
+        )
         manifest["defaults"] = {
             action_id: binding
             for action_id in ACTION_IDS
             if (
-                binding := _default_binding(action_id, recipes, stored_defaults.get(action_id))
+                binding := _default_binding(
+                    action_id,
+                    recipes,
+                    stored_defaults.get(action_id)
+                    if not (
+                        action_id == "image.generate"
+                        and any(
+                            recipe.family == "comfy.flux2-klein"
+                            and action_id in recipe.actions
+                            for recipe in recipes
+                        )
+                        and stored_sources.get(action_id) != "user"
+                    )
+                    else None,
+                    prefer_flux9b=action_id == "image.generate"
+                    and any(
+                        recipe.family == "comfy.flux2-klein"
+                        and action_id in recipe.actions
+                        for recipe in recipes
+                    )
+                    and stored_sources.get(action_id) != "user",
+                )
             )
         }
+        manifest["default_sources"] = stored_sources
         model_sources: dict[str, str] = {}
         for folder, names in (manifest.get("models") or {}).items():
             if not isinstance(names, list):
@@ -550,7 +628,11 @@ def create_app(
         sealed = [
             descriptor
             for recipe in recipes_from_runtime(runtime)
-            if (descriptor := sealed_tool_descriptor(recipe)) is not None
+            for variant in recipe_variants(recipe)
+            if (
+                descriptor := sealed_tool_descriptor(with_dimension_slots(variant))
+            )
+            is not None
         ]
         return registry.tools() + dynamic + sealed
 
@@ -665,9 +747,13 @@ def create_app(
 
     def sealed_graphs(runtime: dict[str, Any]) -> dict[str, dict[str, Any]]:
         return {
-            f"comfy.sealed.{recipe.id}": recipe.dump()
+            descriptor.id: normalized.dump()
             for recipe in recipes_from_runtime(runtime)
-            if recipe.source in {"imported", "discovered"} and recipe.workflow
+            for variant in recipe_variants(recipe)
+            if variant.source in {"imported", "discovered"}
+            and variant.workflow
+            if (normalized := with_dimension_slots(variant))
+            if (descriptor := sealed_tool_descriptor(normalized)) is not None
         }
 
     def runtime_tool_ids(runtime: dict[str, Any] | None) -> set[str]:
@@ -1049,6 +1135,18 @@ def create_app(
             )
         if not values.get("model") and descriptor.models:
             binding = runtime_defaults(runtime).get(action_id)
+            has_flux_recipe = any(
+                recipe.family == "comfy.flux2-klein" and action_id in recipe.actions
+                for recipe in runtime_recipes
+            )
+            if action_id == "image.generate" and has_flux_recipe and not binding:
+                raise HTTPException(
+                    409,
+                    _detail(
+                        "default_model_unconfigured",
+                        "FLUX.2 Klein is installed but no default model is configured; select a model explicitly",
+                    ),
+                )
             preferred = (
                 f"{runtime['id']}:{binding['workflow_id']}"
                 if binding and binding.get("workflow_id")
@@ -2161,9 +2259,15 @@ def create_app(
     def runtime_defaults_view(runtime_id: str) -> dict[str, Any]:
         runtime = runtime_or_404(runtime_id)
         recipes = recipes_from_runtime(runtime)
+        manifest = manifest_from_assets(runtime_assets(runtime))
+        # Recompute from the persisted model inventory as well as the stored
+        # projection so older runtimes show bundle readiness before their next
+        # doctor refresh.
+        bundles = model_bundles(manifest)
         return {
             "runtime_id": runtime_id,
             "defaults": runtime_defaults(runtime, recipes),
+            "model_bundles": bundles,
             "recipes": [
                 {
                     "id": recipe.id,
@@ -2203,9 +2307,143 @@ def create_app(
             "workflow_id": body.workflow_id,
             "model_id": body.model_id or recipe.checkpoint or recipe.id,
         }
-        save_runtime_defaults(runtime, defaults)
+        save_runtime_defaults(runtime, defaults, explicit_action=action_id)
         invalidate_runtime(runtime_id)
         return {"runtime_id": runtime_id, "action_id": action_id, "default": defaults[action_id]}
+
+    def _model_download_view(job: dict[str, Any]) -> dict[str, Any]:
+        with model_download_lock:
+            return dict(job)
+
+    def _update_model_download(download_id: str, **changes: Any) -> None:
+        with model_download_lock:
+            job = model_downloads.get(download_id)
+            if job:
+                job.update(changes)
+
+    def _run_model_download(
+        download_id: str,
+        runtime: dict[str, Any],
+        bundle_id: str,
+    ) -> None:
+        bundle = FLUX2_BUNDLES[bundle_id]
+        files = list(bundle["files"])
+        total_files = max(1, len(files))
+        _update_model_download(
+            download_id,
+            status="downloading",
+            message="downloading model bundle",
+            progress=0.0,
+        )
+
+        def report_file(index: int, event: dict[str, Any]) -> None:
+            local = float(event.get("progress") or 0.0)
+            _update_model_download(
+                download_id,
+                current_file=event.get("current_file"),
+                bytes_done=int(event.get("bytes_done") or 0),
+                bytes_total=int(event.get("bytes_total") or 0),
+                progress=min(0.99, (index + local) / total_files),
+                message=str(event.get("message") or "downloading model"),
+            )
+
+        try:
+            for index, file in enumerate(files):
+                download_bundle_file(
+                    runtime,
+                    file,
+                    progress=lambda event, index=index: report_file(index, event),
+                )
+            _update_model_download(
+                download_id,
+                status="verifying",
+                progress=0.99,
+                current_file=None,
+                message="verifying model bundle with ComfyUI",
+            )
+            report = app.state.comfy_factory(runtime["base_url"]).doctor()
+            persist_runtime_report(runtime, report)
+            available = next(
+                (
+                    item
+                    for item in model_bundles(report)
+                    if item["id"] == bundle_id
+                ),
+                None,
+            )
+            if not available or not available["ready"]:
+                missing = [file["name"] for file in (available or {}).get("files", []) if not file.get("present")]
+                raise ModelDownloadError(
+                    "model bundle verification failed"
+                    + (f": missing {', '.join(missing)}" if missing else ""),
+                    code="model_bundle_incomplete",
+                )
+            _update_model_download(
+                download_id,
+                status="succeeded",
+                progress=1.0,
+                current_file=None,
+                bytes_done=0,
+                bytes_total=0,
+                message="model bundle is ready",
+                error=None,
+            )
+        except Exception as exc:  # noqa: BLE001 - report every downloader failure to Web.
+            code = getattr(exc, "code", "model_download_failed")
+            _update_model_download(
+                download_id,
+                status="failed",
+                message="model bundle download failed",
+                error={"code": str(code), "message": str(exc)},
+            )
+
+    @app.post("/api/v1/runtimes/{runtime_id}/model-bundles/{bundle_id}/download", status_code=202)
+    def download_model_bundle(runtime_id: str, bundle_id: str) -> dict[str, Any]:
+        runtime = runtime_or_404(runtime_id)
+        if bundle_id not in FLUX2_BUNDLES:
+            raise HTTPException(404, _detail("model_bundle_not_found", "unknown model bundle"))
+        with model_download_lock:
+            existing = next(
+                (
+                    item
+                    for item in model_downloads.values()
+                    if item["runtime_id"] == runtime_id
+                    and item["bundle_id"] == bundle_id
+                    and item["status"] in {"queued", "downloading", "verifying"}
+                ),
+                None,
+            )
+            if existing:
+                return _model_download_view(existing)
+            download_id = f"model_download_{uuid.uuid4().hex}"
+            job = {
+                "id": download_id,
+                "runtime_id": runtime_id,
+                "bundle_id": bundle_id,
+                "status": "queued",
+                "current_file": None,
+                "bytes_done": 0,
+                "bytes_total": 0,
+                "progress": 0.0,
+                "message": "queued",
+                "error": None,
+            }
+            model_downloads[download_id] = job
+        threading.Thread(
+            target=_run_model_download,
+            args=(download_id, runtime, bundle_id),
+            name=f"cooksprite-model-{bundle_id}",
+            daemon=True,
+        ).start()
+        return _model_download_view(job)
+
+    @app.get("/api/v1/runtimes/{runtime_id}/model-downloads/{download_id}")
+    def model_download_status(runtime_id: str, download_id: str) -> dict[str, Any]:
+        with model_download_lock:
+            job = model_downloads.get(download_id)
+        if not job or job["runtime_id"] != runtime_id:
+            raise HTTPException(404, _detail("model_download_not_found", "unknown model download"))
+        return _model_download_view(job)
 
     @app.post("/api/v1/runtimes/{runtime_id}/doctor")
     def doctor(runtime_id: str) -> dict[str, Any]:

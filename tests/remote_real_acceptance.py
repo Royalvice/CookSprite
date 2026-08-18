@@ -36,7 +36,7 @@ def run(base_url: str, output: Path) -> None:
         assert health["runtime"] == "ready", health
         project = (
             client.post(
-                "/api/v1/projects", json={"name": "H20 GPU0 real acceptance", "type": "character"}
+                "/api/v1/projects", json={"name": "Remote runtime acceptance", "type": "character"}
             )
             .raise_for_status()
             .json()

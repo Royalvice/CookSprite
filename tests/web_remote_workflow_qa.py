@@ -1,7 +1,7 @@
-"""Real browser workflow acceptance against CookSprite API + ComfyUI on H20.
+"""Real browser workflow acceptance against a remote CookSprite API + ComfyUI.
 
 This suite never starts or accepts the fake runtime.  Start a Vite frontend with
-``COOKSPRITE_API_PROXY_TARGET`` pointing at the tunneled H20 CookSprite API,
+``COOKSPRITE_API_PROXY_TARGET`` pointing at the remote CookSprite API,
 then provide the JSON produced by ``remote_real_acceptance.py``.
 """
 
@@ -14,19 +14,20 @@ from pathlib import Path
 
 from playwright.sync_api import Locator, Page, expect, sync_playwright
 
-BASE = os.environ.get("COOKSPRITE_WEB_URL", "http://127.0.0.1:15173").rstrip("/")
+BASE = os.environ.get("COOKSPRITE_WEB_URL", "http://127.0.0.1:5173").rstrip("/")
 RESULT = Path(
     os.environ.get(
         "COOKSPRITE_REAL_RESULT",
-        "web/test-results/h20-workflow-20260814/api-real-acceptance.json",
+        "web/test-results/remote-workflow/api-real-acceptance.json",
     )
 )
 SHOTS = Path(
     os.environ.get(
         "COOKSPRITE_QA_SHOTS",
-        "web/test-results/h20-workflow-20260814/browser",
+        "web/test-results/remote-workflow/browser",
     )
 )
+EXPECTED_RUNTIME = os.environ.get("COOKSPRITE_EXPECTED_RUNTIME", "remote-gpu-workflow")
 EDGE = "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
 ARTIFACT_MIME = "application/x-cooksprite-artifact"
 
@@ -132,7 +133,7 @@ def run() -> None:
 
         health = page.request.get(f"{BASE}/api/v1/health").json()
         assert health["runtime"] == "ready", health
-        assert health["runtime_id"] == "h20-gpu0-workflow", health
+        assert health["runtime_id"] == EXPECTED_RUNTIME, health
         assert all(item["available"] for item in health["actions"].values()), health
 
         image_action = page.request.get(f"{BASE}/api/v1/actions/image.generate").json()
@@ -292,7 +293,7 @@ def run() -> None:
         json.dumps(
             {
                 "status": "passed",
-                "runtime": "h20-gpu0-workflow",
+                "runtime": EXPECTED_RUNTIME,
                 "project": project_id,
                 "image": image_id,
                 "sequence": sequence_id,

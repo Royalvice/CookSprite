@@ -2,18 +2,18 @@ schema: cooksprite.actions/v1
 actions:
   - id: image.generate
     i18n:
-      zh-CN: {name: 创作图片, description: 从文字或一张参考图创作静态素材}
-      en: {name: Create image, description: Create a static asset from text or one reference image}
+      zh-CN: {name: 创作图片, description: 从文字或最多四张参考图创作静态素材}
+      en: {name: Create image, description: Create a static asset from text or up to four reference images}
     accepts:
-      reference: {type: Image, required: false, max: 1}
+      reference: {type: Image, required: false, max: 4}
     produces: [Image]
     controls:
       - id: category
         type: select
         default: character
         i18n:
-          zh-CN: {name: 素材类型, description: 编译为单体、完整轮廓或平铺等构图要求}
-          en: {name: Asset type, description: Compiles into single-subject, silhouette, or tiling composition intent}
+          zh-CN: {name: 素材类型, description: ""}
+          en: {name: Asset type, description: ""}
         options:
           - {id: character, example_key: still.actor, i18n: {zh-CN: {name: 角色, description: 单个完整角色，全身和轮廓清楚}, en: {name: Character, description: One complete character with a clear full-body silhouette}}}
           - {id: weapon, example_key: still.object, i18n: {zh-CN: {name: 武器, description: 单件完整武器，主体不被裁切}, en: {name: Weapon, description: One complete weapon, fully visible and uncropped}}}
@@ -25,8 +25,8 @@ actions:
         type: select
         default: 2d_action_game
         i18n:
-          zh-CN: {name: 风格, description: 角色使用风格模板；其他素材保留原有风格选项}
-          en: {name: Style, description: Choose a character style template; other assets keep their existing styles}
+          zh-CN: {name: 风格, description: ""}
+          en: {name: Style, description: ""}
         options:
           - {id: ultra_realistic, example_key: still.smooth, i18n: {zh-CN: {name: 超写实, description: 高分辨率超写实角色渲染}, en: {name: Ultra-realistic, description: Ultra-realistic high-resolution character render}}}
           - {id: 2d_action_game, example_key: still.actor, i18n: {zh-CN: {name: 2D 动作游戏, description: 高分辨率 2D 动作游戏角色插画}, en: {name: 2D action game, description: Polished high-resolution 2D action-game character illustration}}}
@@ -70,14 +70,16 @@ actions:
           zh-CN: {name: 重绘强度, description: 仅在有参考图时使用}
           en: {name: Redraw strength, description: Used only with a reference image}
       - id: count
-        type: number
-        default: 4
-        min: 1
-        max: 8
-        step: 1
+        type: select
+        default: "4"
         i18n:
           zh-CN: {name: 候选数, description: 一次生成的候选数量}
           en: {name: Candidates, description: Number of candidates per run}
+        options:
+          - {id: "1", i18n: {zh-CN: {name: "1"}, en: {name: "1"}}}
+          - {id: "2", i18n: {zh-CN: {name: "2"}, en: {name: "2"}}}
+          - {id: "3", i18n: {zh-CN: {name: "3"}, en: {name: "3"}}}
+          - {id: "4", i18n: {zh-CN: {name: "4"}, en: {name: "4"}}}
       - id: seed
         type: seed
         default: -1
@@ -251,7 +253,7 @@ actions:
       - id: target_size
         type: select
         default: "128"
-        options_range: [16, 512, 1]
+        options_range: [16, 512, 16]
         i18n:
           zh-CN: {name: 像素尺寸, description: 输出最长边，自动保持原图长宽比}
           en: {name: Pixel size, description: Output longest edge while preserving aspect ratio}

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from cooksprite.recipe_assembler import assemble_recipe_workflow
+from cooksprite.recipe_assembler import (
+    assemble_recipe_workflow,
+    sealed_tool_descriptor,
+    with_dimension_slots,
+)
 from cooksprite.recipes import Recipe
 
 
@@ -31,3 +35,8 @@ def test_discovered_dimensions_bind_to_one_resolution_control():
     assert sealed.inputs["height"].input == "resolution"
     assert "width" not in workflow.inputs
     assert "height" not in workflow.inputs
+
+    adapted = with_dimension_slots(recipe)
+    descriptor = sealed_tool_descriptor(adapted)
+    assert descriptor is not None
+    assert {item.name for item in descriptor.inputs} >= {"width", "height"}

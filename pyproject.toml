@@ -39,6 +39,7 @@ packages = [
     "cooksprite.nodes.pixel.grid",
     "cooksprite.nodes.pixel.pipelines",
     "cooksprite.nodes.pixel.stages",
+    "cooksprite.workflows",
     "cooksprite.tool_packages",
     "cli",
 ]
@@ -58,6 +59,7 @@ cooksprite = [
     "skill/*.md",
 ]
 "cooksprite.nodes.pixel" = ["LICENSE", "PROVENANCE.md", "presets/*.yaml"]
+"cooksprite.workflows" = ["*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

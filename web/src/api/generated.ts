@@ -217,9 +217,38 @@ export interface RuntimeCapabilities {
   categories: Record<string, { models: Record<string, unknown>[]; workflows: Record<string, unknown>[]; tools: Record<string, unknown>[] }>;
 }
 export interface RuntimeDefaultBinding { workflow_id: string; model_id: string }
+export interface ModelBundleFile {
+  folder: string;
+  name: string;
+  url: string;
+  path: string;
+  present: boolean;
+}
+export interface ModelBundleView {
+  id: string;
+  label: string;
+  license: string;
+  recommended: boolean;
+  ready: boolean;
+  files: ModelBundleFile[];
+}
+export type ModelDownloadStatus = "queued" | "downloading" | "verifying" | "succeeded" | "failed";
+export interface ModelDownloadView {
+  id: string;
+  runtime_id: string;
+  bundle_id: string;
+  status: ModelDownloadStatus;
+  current_file?: string | null;
+  bytes_done: number;
+  bytes_total: number;
+  progress: number;
+  message: string;
+  error?: { code?: string; message?: string } | null;
+}
 export interface RuntimeDefaultsView {
   runtime_id: string;
   defaults: Record<string, RuntimeDefaultBinding>;
+  model_bundles: ModelBundleView[];
   recipes: Array<{ id: string; label: string; actions: string[]; modes: string[]; model_id: string }>;
 }
 export interface LocalSetupView {
@@ -312,6 +341,10 @@ export const api = {
   selectRuntime: (id: string) => json<{ runtime_id: string; status: RuntimeStatus; error?: string; active: boolean }>(`/runtimes/${encodeURIComponent(id)}/select`, { method: "POST" }),
   runtimeCapabilities: (id: string) => json<RuntimeCapabilities>(`/runtimes/${encodeURIComponent(id)}/capabilities`),
   runtimeDefaults: (id: string) => json<RuntimeDefaultsView>(`/runtimes/${encodeURIComponent(id)}/defaults`),
+  downloadModelBundle: (id: string, bundleId: string) =>
+    json<ModelDownloadView>(`/runtimes/${encodeURIComponent(id)}/model-bundles/${encodeURIComponent(bundleId)}/download`, { method: "POST" }),
+  modelDownloadStatus: (id: string, downloadId: string) =>
+    json<ModelDownloadView>(`/runtimes/${encodeURIComponent(id)}/model-downloads/${encodeURIComponent(downloadId)}`),
   setRuntimeDefault: (id: string, actionId: string, body: RuntimeDefaultBinding) =>
     json<{ runtime_id: string; action_id: string; default: RuntimeDefaultBinding }>(`/runtimes/${encodeURIComponent(id)}/defaults/${encodeURIComponent(actionId)}`, { method: "PUT", ...jsonBody(body) }),
   doctorRuntime: (id: string) => json<{ runtime_id: string; snapshot: string; tool_count: number; recipe_count: number; system: Record<string, unknown>; device?: Record<string, unknown>; models: Record<string, number>; recipes: RuntimeRecipe[] }>(`/runtimes/${encodeURIComponent(id)}/doctor`, { method: "POST" }),

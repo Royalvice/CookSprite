@@ -8,18 +8,18 @@ from pathlib import Path
 
 from playwright.sync_api import BrowserType, expect, sync_playwright
 
-BASE = os.environ.get("COOKSPRITE_WEB_URL", "http://127.0.0.1:15173").rstrip("/")
+BASE = os.environ.get("COOKSPRITE_WEB_URL", "http://127.0.0.1:5173").rstrip("/")
 RESULT = Path(
     os.environ.get(
         "COOKSPRITE_REAL_RESULT",
-        "web/test-results/h20-workflow-20260814/api-real-acceptance.json",
+        "web/test-results/remote-workflow/api-real-acceptance.json",
     )
 )
-EXPECTED_RUNTIME = os.environ.get("COOKSPRITE_EXPECTED_RUNTIME", "h20-gpu0-workflow")
+EXPECTED_RUNTIME = os.environ.get("COOKSPRITE_EXPECTED_RUNTIME", "remote-gpu-workflow")
 SHOTS = Path(
     os.environ.get(
         "COOKSPRITE_CROSS_BROWSER_SHOTS",
-        "web/test-results/h20-workflow-20260814/cross-browser",
+        "web/test-results/remote-workflow/cross-browser",
     )
 )
 

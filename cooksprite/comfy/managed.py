@@ -17,7 +17,7 @@ from pathlib import Path
 from ..version import NODE_PACK_VERSION
 from .client import ComfyClient
 
-PINNED_COMFY_REF = "v0.32.0"
+PINNED_COMFY_REF = "v0.33.2"
 COMFY_PYTHON_VERSION = "3.11"
 COMFY_REQUIREMENTS_INPUT = Path(__file__).with_name("requirements.in")
 COMFY_NODE_REQUIREMENTS = Path(__file__).parents[1] / "nodes" / "requirements.txt"

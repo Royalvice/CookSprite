@@ -6,7 +6,7 @@ import { ARTIFACT_MIME, activeArtifactDrag, decodeArtifact } from "../drag";
 import { useStudioStore } from "../stores/studio";
 import ArtifactVisual from "./ArtifactVisual.vue";
 
-const props = defineProps<{ accepts: ArtifactKind[]; label: string; artifact?: ArtifactRef | null; reason?: string; multiple?: boolean; clearable?: boolean }>();
+const props = defineProps<{ accepts: ArtifactKind[]; label: string; artifact?: ArtifactRef | null; reason?: string; multiple?: boolean; maxFiles?: number; clearable?: boolean }>();
 const emit = defineEmits<{ artifact: [payload: { artifact_id: string; kind: ArtifactKind }]; files: [files: File[]]; clear: [] }>();
 const store = useStudioStore();
 const state = ref<"idle" | "compatible" | "incompatible" | "success" | "error">("idle");
@@ -18,7 +18,11 @@ const localPreview = ref("");
 let dragDepth = 0;
 let resetTimer = 0;
 const displayArtifact = computed(() => store.artifactById.get(acceptedId.value) || props.artifact || null);
-const displayTitle = computed(() => displayArtifact.value?.title || displayArtifact.value?.id || props.label);
+const displayTitle = computed(() => {
+  const artifact = displayArtifact.value;
+  if (!artifact) return props.label;
+  return artifact.title && artifact.title !== artifact.id ? artifact.title : artifact.kind;
+});
 const choices = computed(() => [...store.artifactById.values()].filter((item, index, items) => (
   props.accepts.includes(item.kind)
   && !item.trashed
@@ -48,6 +52,10 @@ function clearLocalPreview() {
 function previewFile(file: File | undefined) {
   clearLocalPreview();
   if (file?.type.startsWith("image/")) localPreview.value = URL.createObjectURL(file);
+}
+function limitFiles(files: File[]): File[] {
+  const max = Number(props.maxFiles);
+  return files.slice(0, Number.isFinite(max) && max > 0 ? max : props.multiple ? undefined : 1);
 }
 function inspect(event: DragEvent) {
   const artifact = artifactFromTransfer(event.dataTransfer);
@@ -105,8 +113,8 @@ function drop(event: DragEvent) {
     accept({ artifact_id: artifact.id, kind: artifact.kind });
     return;
   }
-  const incoming = [...(event.dataTransfer?.files || [])];
-  const files = (props.multiple ? incoming : incoming.slice(0, 1)).filter((file) => {
+  const incoming = limitFiles([...(event.dataTransfer?.files || [])]);
+  const files = incoming.filter((file) => {
     const kind = inferArtifactKind(file);
     return Boolean(kind && props.accepts.includes(kind));
   });
@@ -119,10 +127,13 @@ function drop(event: DragEvent) {
   setTemporary("success", `已接收 ${files.length} 个文件 / Added`);
 }
 function fileChange(event: Event) {
-  const incoming = [...((event.target as HTMLInputElement).files || [])];
+  const incoming = limitFiles([...((event.target as HTMLInputElement).files || [])]);
   previewFile(incoming[0]);
-  if (incoming.length) emit("files", props.multiple ? incoming : incoming.slice(0, 1));
-  if (incoming.length) setTemporary("success", `已接收 ${incoming.length} 个文件 / Added`);
+  if (incoming.length) {
+    emit("files", incoming);
+    picker.value = false;
+    setTemporary("success", `已接收 ${incoming.length} 个文件 / Added`);
+  }
   (event.target as HTMLInputElement).value = "";
 }
 
@@ -159,15 +170,19 @@ onBeforeUnmount(() => {
     <ArrowSquareIn v-else-if="state === 'compatible'" :size="24" />
     <UploadSimple v-else :size="24" />
     <strong>{{ state === "compatible" ? "松开以使用 / Drop to use" : displayArtifact || localPreview ? displayTitle : message || label }}</strong>
-    <span class="drop-meta">{{ displayArtifact ? `${displayArtifact.kind} · 已选择` : localPreview ? "正在导入图片…" : "CookSprite Artifact · 可用素材" }}</span>
-    <button v-if="clearable && displayArtifact" class="text-button" type="button" @click="clearArtifact">{{ $t("common.clear") }}</button>
-    <button v-else class="text-button" type="button" @click="picker = !picker">{{ $t("common.select") }}</button>
+    <div class="drop-actions">
+      <button v-if="clearable && displayArtifact" class="text-button" type="button" @click="clearArtifact">{{ $t("common.clear") }}</button>
+      <button v-else class="text-button" type="button" @click="picker = !picker">{{ $t("common.select") }}</button>
+    </div>
     <input ref="input" class="visually-hidden" type="file" :multiple="multiple" :aria-label="`${label} / Import file`" accept="image/png,image/jpeg,image/webp,image/svg+xml,image/gif,video/mp4,video/webm,.hdr,.exr" @change="fileChange" />
     <div v-if="picker" class="drop-picker" role="dialog" :aria-label="$t('common.select')">
-      <header><strong>{{ $t("common.select") }}</strong><button class="icon-button compact" type="button" :aria-label="$t('common.close')" @click="picker = false"><X :size="14" /></button></header>
-      <button v-for="artifact in choices" :key="artifact.id" type="button" @click="accept({ artifact_id: artifact.id, kind: artifact.kind })"><span>{{ artifact.title || artifact.id.slice(0, 14) }}</span><small>{{ artifact.kind }}</small></button>
-      <p v-if="!choices.length">{{ $t("common.empty") }}</p>
-      <button class="arcade-button" type="button" @click="input?.click()"><UploadSimple :size="15" />{{ $t("common.import") }}</button>
+      <header><strong>{{ $t("common.select") }}</strong><div class="drop-picker-header-actions"><button class="arcade-button picker-upload" type="button" @click="input?.click()"><UploadSimple :size="15" />{{ $t("common.import") }}</button><button class="icon-button compact" type="button" :aria-label="$t('common.close')" @click="picker = false"><X :size="14" /></button></div></header>
+      <div v-if="choices.length" class="drop-picker-grid">
+        <button v-for="artifact in choices" :key="artifact.id" class="drop-picker-item" type="button" :title="artifact.title || artifact.id" :aria-label="artifact.title || artifact.kind" @click="accept({ artifact_id: artifact.id, kind: artifact.kind })">
+          <span class="drop-picker-thumb checker"><ArtifactVisual :artifact="artifact" :animated="true" :draggable="false" :alt="artifact.title || artifact.kind" /></span>
+        </button>
+      </div>
+      <p v-else class="drop-picker-empty">{{ $t("common.empty") }}</p>
     </div>
     <span class="visually-hidden" aria-live="polite">{{ message }}</span>
   </div>
