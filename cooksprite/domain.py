@@ -247,6 +247,9 @@ class ActionControl(BaseModel):
     type: Literal["select", "multi-select", "toggle", "range", "number", "text", "seed"]
     default: Any = None
     options: list[ActionOption] = Field(default_factory=list)
+    # Compact numeric select support.  The API and Web projections can expand
+    # this range without storing hundreds of repeated option objects.
+    options_range: list[int] | None = Field(default=None, min_length=3, max_length=3)
     advanced: bool = False
     min: float | None = None
     max: float | None = None

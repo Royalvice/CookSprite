@@ -15,7 +15,7 @@ def _rgba_frames(image: np.ndarray, mask: np.ndarray | None) -> list[np.ndarray]
     value = np.asarray(image, dtype=np.float32)
     if value.ndim != 4 or value.shape[-1] < 3:
         raise ValueError("IMAGE must have shape [batch,height,width,channels]")
-    rgb = np.clip(value[..., :3], 0.0, 1.0)
+    rgb = np.clip(value[..., :3], 0.0, 1.0).copy()
     if mask is None:
         alpha = np.ones(value.shape[:3], dtype=np.float32)
     else:
@@ -28,10 +28,34 @@ def _rgba_frames(image: np.ndarray, mask: np.ndarray | None) -> list[np.ndarray]
             raise ValueError("MASK must have shape [batch,height,width]")
         if alpha.shape[0] == 1 and value.shape[0] > 1:
             alpha = np.repeat(alpha, value.shape[0], axis=0)
-        if alpha.shape != value.shape[:3]:
-            raise ValueError("MASK batch and canvas must match IMAGE")
-    rgba = np.concatenate((rgb, np.clip(alpha, 0.0, 1.0)[..., None]), axis=-1)
-    return [np.rint(frame * 255.0).astype(np.uint8) for frame in rgba]
+    if alpha.shape != value.shape[:3]:
+        raise ValueError("MASK batch and canvas must match IMAGE")
+    alpha = np.clip(alpha, 0.0, 1.0)
+    # Chroma-key removal often leaves green in semi-transparent edge pixels.
+    # Correct only that narrow case; fully opaque source colors are untouched.
+    edge = (alpha > 0.0) & (alpha < 0.999)
+    green_spill = (
+        edge
+        & (rgb[..., 1] > 0.55)
+        & (rgb[..., 1] - np.maximum(rgb[..., 0], rgb[..., 2]) > 0.12)
+    )
+    rgb[..., 1] = np.where(green_spill, np.maximum(rgb[..., 0], rgb[..., 2]), rgb[..., 1])
+    rgb[alpha <= 0.0] = 0.0
+    rgba = np.concatenate((rgb, alpha[..., None]), axis=-1)
+    quantized = np.rint(rgba * 255.0).astype(np.uint8)
+    return [frame for frame in quantized]
+
+
+def _target_dimensions(image: np.ndarray, target_size: int) -> tuple[int, int]:
+    height, width = image.shape[1:3]
+    longest = max(int(width), int(height))
+    if longest <= 0:
+        raise ValueError("IMAGE canvas must be non-empty")
+    size = int(target_size)
+    if not 16 <= size <= 512:
+        raise ValueError("target_size must be between 16 and 512")
+    scale = size / longest
+    return max(16, round(width * scale)), max(16, round(height * scale))
 
 
 def _outputs(rgba_frames: Iterable[np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
@@ -52,10 +76,13 @@ def pixelize_batch(
     padding_x: int = -1,
     padding_y: int = -1,
     variants: bool = False,
+    target_size: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compile one shared deterministic pixelization for a ComfyUI batch."""
 
     frames = _rgba_frames(image, mask)
+    if target_size is not None:
+        target_width, target_height = _target_dimensions(image, int(target_size))
     target = TargetGrid(
         int(target_width),
         int(target_height),

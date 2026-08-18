@@ -37,14 +37,32 @@ def _tensor(image: Image.Image):
     return torch.from_numpy(pixels).unsqueeze(0)
 
 
-def _png(value, kind):
-    array = (value.detach().cpu().numpy().clip(0, 1) * 255).astype("uint8")
+def _array(value) -> np.ndarray:
+    if hasattr(value, "detach"):
+        value = value.detach().cpu().numpy()
+    return np.asarray(value)
+
+
+def _png(value, kind, mask=None):
+    array = np.clip(_array(value), 0.0, 1.0)
     has_alpha = array.shape[-1] >= 4
-    if has_alpha:
-        image = Image.fromarray(array[..., :4], "RGBA")
+    rgb = (array[..., :3] * 255.0).astype("uint8")
+    if mask is not None:
+        alpha = np.clip(_array(mask), 0.0, 1.0)
+        if alpha.ndim == 3 and alpha.shape[-1] == 1:
+            alpha = alpha[..., 0]
+        if alpha.ndim != 2:
+            raise ValueError("MASK frame must have shape [height,width]")
+        rgba = np.concatenate((rgb, np.rint(alpha * 255.0).astype("uint8")[..., None]), axis=-1)
+        rgba[rgba[..., 3] == 0, :3] = 0
+        image = Image.fromarray(rgba, "RGBA")
+    elif has_alpha:
+        rgba = (array[..., :4] * 255.0).astype("uint8")
+        rgba[rgba[..., 3] == 0, :3] = 0
+        image = Image.fromarray(rgba, "RGBA")
     else:
-        image = Image.fromarray(array[..., :3], "RGB")
-    if kind != "NormalMap":
+        image = Image.fromarray(rgb, "RGB")
+    if kind != "NormalMap" and mask is None and not has_alpha:
         rgba = image.convert("RGBA")
         pixels = np.array(rgba)
         green = (pixels[:, :, 1] > 245) & (pixels[:, :, 0] < 16) & (pixels[:, :, 2] < 16)
@@ -82,7 +100,8 @@ class CS_LoadArtifact:
     def INPUT_TYPES(cls):
         return {"required": {"artifact_url": ("STRING", {"multiline": False})}}
 
-    RETURN_TYPES = ("IMAGE",)
+    RETURN_TYPES = ("IMAGE", "MASK")
+    RETURN_NAMES = ("image", "mask")
     FUNCTION = "load"
     CATEGORY = "CookSprite/Bridge"
 
@@ -91,12 +110,12 @@ class CS_LoadArtifact:
         image = Image.open(io.BytesIO(data))
         if image.mode in {"RGBA", "LA"} or "transparency" in image.info:
             rgba = image.convert("RGBA")
-            background = Image.new("RGBA", rgba.size, (0, 255, 0, 255))
-            background.alpha_composite(rgba)
-            image = background.convert("RGB")
+            alpha = np.asarray(rgba, dtype=np.uint8)[..., 3].astype(np.float32) / 255.0
+            image = rgba.convert("RGB")
         else:
             image = image.convert("RGB")
-        return (_tensor(image),)
+            alpha = np.ones((image.height, image.width), dtype=np.float32)
+        return (_tensor(image), torch.from_numpy(alpha).unsqueeze(0))
 
 
 class CS_StoreArtifact:
@@ -106,7 +125,8 @@ class CS_StoreArtifact:
             "required": {
                 "value": ("IMAGE",),
                 "upload_url": ("STRING", {"multiline": False}),
-            }
+            },
+            "optional": {"mask": ("MASK",)},
         }
 
     RETURN_TYPES = ("STRING",)
@@ -114,13 +134,20 @@ class CS_StoreArtifact:
     CATEGORY = "CookSprite/Bridge"
     OUTPUT_NODE = True
 
-    def store(self, value, upload_url):
+    def store(self, value, upload_url, mask=None):
         refs = []
         kind = urllib.parse.parse_qs(urllib.parse.urlparse(upload_url).query).get(
             "kind", ["Image"]
         )[0]
+        mask_array = _array(mask) if mask is not None else None
         for index, frame in enumerate(value):
-            body = _post(_append_query(upload_url, output_index=index), _png(frame, kind))
+            frame_mask = None
+            if mask_array is not None:
+                frame_mask = mask_array[index if mask_array.ndim == 3 else 0]
+            body = _post(
+                _append_query(upload_url, output_index=index),
+                _png(frame, kind, frame_mask),
+            )
             refs.append(json.loads(body.decode())["id"])
         return (json.dumps(refs),)
 
@@ -278,7 +305,12 @@ class CS_Pixelize:
                 "variants": ("BOOLEAN", {"default": False}),
                 "enabled": ("BOOLEAN", {"default": True}),
             },
-            "optional": {"mask": ("MASK",)},
+            "optional": {
+                "mask": ("MASK",),
+                # New Action graphs use one longest-edge size.  The legacy
+                # width/height ports remain for saved ComfyUI workflows.
+                "target_size": ("INT", {"default": 0, "min": 0, "max": 512}),
+            },
         }
 
     RETURN_TYPES = ("IMAGE", "MASK")
@@ -298,6 +330,7 @@ class CS_Pixelize:
         variants=False,
         enabled=True,
         mask=None,
+        target_size=0,
     ):
         if not enabled:
             passthrough_mask = mask
@@ -316,6 +349,7 @@ class CS_Pixelize:
             int(padding_x),
             int(padding_y),
             bool(variants),
+            int(target_size) if int(target_size) > 0 else None,
         )
         return (
             torch.from_numpy(output).to(device=image.device, dtype=image.dtype),

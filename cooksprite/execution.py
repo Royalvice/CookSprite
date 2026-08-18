@@ -34,6 +34,10 @@ class PlanBuilder:
         self.sequence = 0
         self.graph: dict[str, dict[str, Any]] = {}
         self.sinks: list[str] = []
+        # Alpha is an internal Image binding detail.  It follows an IMAGE
+        # reference through the graph without becoming a public Action input.
+        self._image_masks: dict[tuple[str, int], list[Any]] = {}
+        self._loaded_artifacts: dict[tuple[str, bool], list[Any]] = {}
 
     def add(self, class_type: str, inputs: dict[str, Any]) -> str:
         self.sequence += 1
@@ -44,13 +48,38 @@ class PlanBuilder:
     def load_artifact(self, artifact_id: str, *, video: bool = False) -> list[Any]:
         if not self.bridge or not self.run_id:
             raise ValueError("artifact references require a signed runtime bridge")
+        cache_key = (str(artifact_id), bool(video))
+        if cache_key in self._loaded_artifacts:
+            return list(self._loaded_artifacts[cache_key])
         class_type = "CS_LoadVideoArtifact" if video else "CS_LoadArtifact"
         input_name = "video" if video else "artifact_url"
         node_id = self.add(
             class_type,
             {input_name: self.bridge.download_url(artifact_id, self.run_id)},
         )
-        return [node_id, 0]
+        image_ref = [node_id, 0]
+        if not video:
+            self._image_masks[(node_id, 0)] = [node_id, 1]
+        self._loaded_artifacts[cache_key] = image_ref
+        return image_ref
+
+    @staticmethod
+    def _ref_key(value: Any) -> tuple[str, int] | None:
+        if isinstance(value, list) and len(value) == 2:
+            try:
+                return str(value[0]), int(value[1])
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def register_image_mask(self, image_ref: Any, mask_ref: Any) -> None:
+        key = self._ref_key(image_ref)
+        if key is not None:
+            self._image_masks[key] = mask_ref
+
+    def mask_for_image(self, image_ref: Any) -> list[Any] | None:
+        key = self._ref_key(image_ref)
+        return self._image_masks.get(key) if key is not None else None
 
     def store_artifact(
         self,
@@ -73,6 +102,9 @@ class PlanBuilder:
                 ),
             },
         )
+        mask = self.mask_for_image(value)
+        if mask is not None:
+            self.graph[node_id]["inputs"]["mask"] = mask
         self.sinks.append(node_id)
         return node_id
 

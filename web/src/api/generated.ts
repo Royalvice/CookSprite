@@ -16,6 +16,7 @@ export interface ActionControl {
   type: "select" | "multi-select" | "toggle" | "range" | "number" | "text" | "seed";
   default: unknown;
   options: ActionOption[];
+  options_range?: [number, number, number];
   advanced: boolean;
   min?: number;
   max?: number;

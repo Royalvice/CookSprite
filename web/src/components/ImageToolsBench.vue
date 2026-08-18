@@ -5,7 +5,7 @@ import { PhArrowRight as ArrowRight, PhCheck as Check, PhCircleNotch as CircleNo
 import ArtifactCard from "./ArtifactCard.vue";
 import ArtifactVisual from "./ArtifactVisual.vue";
 import DropTarget from "./DropTarget.vue";
-import { type ActionControl, type ActionDescriptor, type ArtifactKind, type ArtifactRef, type Locale } from "../api/generated";
+import { type ActionControl, type ActionDescriptor, type ActionOption, type ArtifactKind, type ArtifactRef, type Locale } from "../api/generated";
 import { useStudioStore } from "../stores/studio";
 
 type ToolMode = "cutout" | "pixelize";
@@ -16,7 +16,7 @@ const mode = ref<ToolMode>("cutout");
 const source = ref<ArtifactRef | null>(null);
 const output = ref<ArtifactRef | null>(null);
 const error = ref("");
-const values = ref<Record<string, unknown>>({ target_width: 128, target_height: 128 });
+const values = ref<Record<string, unknown>>({ target_size: 128, palette_budget: "32", detail_level: "production" });
 
 const actionId = computed(() => mode.value === "cutout" ? "image.cutout" : "image.pixelize");
 const action = computed(() => store.actions.find((item) => item.id === actionId.value));
@@ -24,7 +24,7 @@ const accepts = computed<ArtifactKind[]>(() => {
   const declared = action.value?.accepts.source?.type;
   return declared ? (Array.isArray(declared) ? declared : [declared]) : ["Image"];
 });
-const pixelControls = computed(() => action.value?.controls.filter((control) => ["target_width", "target_height"].includes(control.id)) || []);
+const pixelControls = computed(() => action.value?.controls.filter((control) => ["target_size", "palette_budget", "detail_level"].includes(control.id)) || []);
 // Keep mode-local state in the UI, but only send controls declared by the
 // active Action. This prevents pixelize values from leaking into cutout (and
 // keeps future Tool controls similarly isolated).
@@ -40,16 +40,31 @@ const actionText = computed(() => mode.value === "cutout" ? "studio.toolRunCutou
 
 function copy(control: ActionControl) { return control.i18n[locale.value as Locale]; }
 
+function options(control: ActionControl): ActionOption[] {
+  if (control.options.length) return control.options;
+  const range = control.options_range;
+  if (!range) return [];
+  const [start, stop, step] = range;
+  return Array.from({ length: Math.floor((stop - start) / step) + 1 }, (_, index) => {
+    const value = start + index * step;
+    return { id: String(value), i18n: { "zh-CN": { name: String(value), description: "" }, en: { name: String(value), description: "" } } };
+  });
+}
+
 function fillDefaults(next = action.value) {
   if (!next) return;
   if (mode.value === "cutout") {
+    delete values.value.target_size;
+    delete values.value.palette_budget;
+    delete values.value.detail_level;
     delete values.value.target_width;
     delete values.value.target_height;
   }
   for (const control of next.controls) if (values.value[control.id] === undefined) values.value[control.id] = JSON.parse(JSON.stringify(control.default));
   if (mode.value === "pixelize") {
-    if (values.value.target_width === undefined) values.value.target_width = 128;
-    if (values.value.target_height === undefined) values.value.target_height = 128;
+    if (values.value.target_size === undefined) values.value.target_size = 128;
+    if (values.value.palette_budget === undefined) values.value.palette_budget = "32";
+    if (values.value.detail_level === undefined) values.value.detail_level = "production";
   }
 }
 
@@ -161,10 +176,11 @@ function useOutput() {
     </div>
 
     <div v-if="mode === 'pixelize'" class="tool-bench-controls">
-      <span class="tool-bench-label">{{ $t("studio.toolTargetSize") }}</span>
       <label v-for="control in pixelControls" :key="control.id" class="tool-size-field">
         <span>{{ copy(control).name }}</span>
-        <input v-model.number="values[control.id]" type="number" :min="control.min" :max="control.max" :step="control.step" />
+        <select v-model="values[control.id]">
+          <option v-for="option in options(control)" :key="option.id" :value="option.id">{{ option.i18n[locale as Locale].name }}</option>
+        </select>
       </label>
     </div>
     <p v-if="error" class="tool-bench-error" role="alert">{{ error }}</p>

@@ -56,6 +56,10 @@ class CookSpriteRegistry:
                 option_ids = [option.id for option in control.options]
                 if len(option_ids) != len(set(option_ids)):
                     raise RegistryError(f"{action.id}.{control.id}: duplicate option id")
+                if control.options_range:
+                    start, stop, step = control.options_range
+                    if step <= 0 or stop < start:
+                        raise RegistryError(f"{action.id}.{control.id}: invalid options_range")
         self._actions = {action.id: action for action in actions}
         self._examples: dict[str, ArtifactRef] = {}
 
@@ -171,7 +175,16 @@ class CookSpriteRegistry:
             if control.options:
                 allowed = {option.id for option in control.options}
                 selected = value if isinstance(value, list) else [value]
-                if any(item not in allowed for item in selected):
+                if any(str(item) not in allowed for item in selected):
+                    raise RegistryError(f"{key} contains an unsupported option")
+            if control.options_range:
+                start, stop, step = control.options_range
+                selected = value if isinstance(value, list) else [value]
+                try:
+                    numeric = [int(item) for item in selected]
+                except (TypeError, ValueError) as exc:
+                    raise RegistryError(f"{key} must be an integer option") from exc
+                if any(item < start or item > stop or (item - start) % step for item in numeric):
                     raise RegistryError(f"{key} contains an unsupported option")
             if isinstance(value, (int, float)):
                 if control.min is not None and value < control.min:

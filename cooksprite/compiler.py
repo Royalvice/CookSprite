@@ -98,7 +98,13 @@ class Compiler(PlanBuilder):
         if port_type == "Video":
             return self.bridge.download_url(value.id, self.run_id)
         try:
-            return self.load_artifact(value.id)
+            image_ref = self.load_artifact(value.id)
+            if port_type == "Mask":
+                mask_ref = self.mask_for_image(image_ref)
+                if mask_ref is None:
+                    raise CompileError(f"artifact {value.id} has no alpha mask")
+                return mask_ref
+            return image_ref
         except ValueError as exc:
             raise CompileError(str(exc)) from exc
 
@@ -130,7 +136,12 @@ class Compiler(PlanBuilder):
             for name, ref in n.inputs.items():
                 if name not in ports:
                     raise CompileError(f"{n.id}.{name}: not a declared input")
-                data[name] = self._port_value(self._value(ref, bindings), ports[name].type)
+                value = self._port_value(self._value(ref, bindings), ports[name].type)
+                data[name] = value
+                if ports[name].type in {"Image", "ImageBatch"} and "mask" in ports:
+                    mask = self.mask_for_image(value)
+                    if mask is not None and "mask" not in data:
+                        data["mask"] = mask
             for p in tool.inputs:
                 if p.required and p.name not in data:
                     raise CompileError(f"{n.id}.{p.name}: missing required input")
@@ -144,8 +155,18 @@ class Compiler(PlanBuilder):
             if not lowered:
                 raise CompileError(f"{tool.id}: no Comfy lowering")
             cid = self._node(lowered, data)
+            output_refs: dict[str, list[Any]] = {}
             for index, port in enumerate(tool.outputs):
-                bindings[f"{n.id}.{port.name}"] = [cid, index]
+                output_refs[port.name] = [cid, index]
+                bindings[f"{n.id}.{port.name}"] = output_refs[port.name]
+            mask_ref = next(
+                (output_refs[port.name] for port in tool.outputs if port.type == "Mask"),
+                None,
+            )
+            if mask_ref is not None:
+                for port in tool.outputs:
+                    if port.type in {"Image", "ImageBatch"}:
+                        self.register_image_mask(output_refs[port.name], mask_ref)
         result = {name: self._value(ref, bindings) for name, ref in wf.outputs.items()}
         return result
 

@@ -122,6 +122,7 @@
               "id": "vfx"
             }
           ],
+          "options_range": null,
           "step": null,
           "type": "select"
         },
@@ -241,6 +242,7 @@
               "id": "smooth"
             }
           ],
+          "options_range": null,
           "step": null,
           "type": "select"
         },
@@ -261,6 +263,7 @@
           "max": null,
           "min": null,
           "options": [],
+          "options_range": null,
           "step": null,
           "type": "text"
         },
@@ -281,8 +284,101 @@
           "max": null,
           "min": null,
           "options": [],
+          "options_range": null,
           "step": null,
           "type": "toggle"
+        },
+        {
+          "advanced": false,
+          "default": "512",
+          "i18n": {
+            "en": {
+              "description": "Generate a 1:1 image at this edge size",
+              "name": "Resolution"
+            },
+            "zh-CN": {
+              "description": "生成 1:1 图片，选择边长",
+              "name": "分辨率"
+            }
+          },
+          "id": "resolution",
+          "max": null,
+          "min": null,
+          "options": [
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "64"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "64"
+                }
+              },
+              "id": "64"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "128"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "128"
+                }
+              },
+              "id": "128"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "256"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "256"
+                }
+              },
+              "id": "256"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "512"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "512"
+                }
+              },
+              "id": "512"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "1024"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "1024"
+                }
+              },
+              "id": "1024"
+            }
+          ],
+          "options_range": null,
+          "step": null,
+          "type": "select"
         },
         {
           "advanced": true,
@@ -301,6 +397,7 @@
           "max": 1.0,
           "min": 0.0,
           "options": [],
+          "options_range": null,
           "step": 0.05,
           "type": "range"
         },
@@ -321,6 +418,7 @@
           "max": 8.0,
           "min": 1.0,
           "options": [],
+          "options_range": null,
           "step": 1.0,
           "type": "number"
         },
@@ -341,6 +439,7 @@
           "max": null,
           "min": null,
           "options": [],
+          "options_range": null,
           "step": null,
           "type": "seed"
         }
@@ -386,6 +485,7 @@
           "max": null,
           "min": null,
           "options": [],
+          "options_range": null,
           "step": null,
           "type": "text"
         },
@@ -406,6 +506,7 @@
           "max": null,
           "min": null,
           "options": [],
+          "options_range": null,
           "step": null,
           "type": "toggle"
         },
@@ -539,6 +640,7 @@
               "id": "death"
             }
           ],
+          "options_range": null,
           "step": null,
           "type": "select"
         },
@@ -588,6 +690,7 @@
               "id": "top45"
             }
           ],
+          "options_range": null,
           "step": null,
           "type": "select"
         },
@@ -721,6 +824,7 @@
               "id": "nw"
             }
           ],
+          "options_range": null,
           "step": null,
           "type": "select"
         },
@@ -741,6 +845,7 @@
           "max": 16.0,
           "min": 1.0,
           "options": [],
+          "options_range": null,
           "step": 1.0,
           "type": "number"
         },
@@ -761,6 +866,7 @@
           "max": null,
           "min": null,
           "options": [],
+          "options_range": null,
           "step": null,
           "type": "seed"
         }
@@ -806,6 +912,7 @@
           "max": null,
           "min": null,
           "options": [],
+          "options_range": null,
           "step": null,
           "type": "text"
         },
@@ -826,6 +933,7 @@
           "max": 1.0,
           "min": 0.0,
           "options": [],
+          "options_range": null,
           "step": 0.05,
           "type": "range"
         },
@@ -846,6 +954,7 @@
           "max": 8.0,
           "min": 1.0,
           "options": [],
+          "options_range": null,
           "step": 1.0,
           "type": "number"
         }
@@ -1004,6 +1113,7 @@
               "id": "death"
             }
           ],
+          "options_range": null,
           "step": null,
           "type": "select"
         },
@@ -1053,6 +1163,7 @@
               "id": "top45"
             }
           ],
+          "options_range": null,
           "step": null,
           "type": "select"
         },
@@ -1186,6 +1297,7 @@
               "id": "nw"
             }
           ],
+          "options_range": null,
           "step": null,
           "type": "select"
         },
@@ -1206,6 +1318,7 @@
           "max": 256.0,
           "min": 0.0,
           "options": [],
+          "options_range": null,
           "step": 1.0,
           "type": "number"
         },
@@ -1226,6 +1339,7 @@
           "max": 256.0,
           "min": 0.0,
           "options": [],
+          "options_range": null,
           "step": 1.0,
           "type": "number"
         },
@@ -1246,6 +1360,7 @@
           "max": 4096.0,
           "min": 1.0,
           "options": [],
+          "options_range": null,
           "step": 1.0,
           "type": "number"
         },
@@ -1266,6 +1381,7 @@
           "max": 4096.0,
           "min": 1.0,
           "options": [],
+          "options_range": null,
           "step": 1.0,
           "type": "number"
         },
@@ -1286,6 +1402,7 @@
           "max": 512.0,
           "min": 0.0,
           "options": [],
+          "options_range": null,
           "step": 1.0,
           "type": "number"
         },
@@ -1306,6 +1423,7 @@
           "max": 512.0,
           "min": 0.0,
           "options": [],
+          "options_range": null,
           "step": 1.0,
           "type": "number"
         },
@@ -1326,6 +1444,7 @@
           "max": null,
           "min": null,
           "options": [],
+          "options_range": null,
           "step": null,
           "type": "toggle"
         }
@@ -1484,6 +1603,7 @@
               "id": "death"
             }
           ],
+          "options_range": null,
           "step": null,
           "type": "select"
         },
@@ -1533,6 +1653,7 @@
               "id": "top45"
             }
           ],
+          "options_range": null,
           "step": null,
           "type": "select"
         },
@@ -1666,6 +1787,7 @@
               "id": "nw"
             }
           ],
+          "options_range": null,
           "step": null,
           "type": "select"
         },
@@ -1686,6 +1808,7 @@
           "max": 60.0,
           "min": 1.0,
           "options": [],
+          "options_range": null,
           "step": 1.0,
           "type": "range"
         },
@@ -1706,6 +1829,7 @@
           "max": 240.0,
           "min": 1.0,
           "options": [],
+          "options_range": null,
           "step": 1.0,
           "type": "number"
         }
@@ -1755,6 +1879,7 @@
           "max": 2.0,
           "min": 0.0,
           "options": [],
+          "options_range": null,
           "step": 0.05,
           "type": "range"
         },
@@ -1775,6 +1900,7 @@
           "max": null,
           "min": null,
           "options": [],
+          "options_range": null,
           "step": null,
           "type": "toggle"
         }
@@ -1829,43 +1955,198 @@
       "controls": [
         {
           "advanced": false,
-          "default": 128,
+          "default": "128",
           "i18n": {
             "en": {
-              "description": "",
-              "name": "Target width"
+              "description": "Output longest edge while preserving aspect ratio",
+              "name": "Pixel size"
             },
             "zh-CN": {
-              "description": "",
-              "name": "目标宽度"
+              "description": "输出最长边，自动保持原图长宽比",
+              "name": "像素尺寸"
             }
           },
-          "id": "target_width",
-          "max": 512.0,
-          "min": 16.0,
+          "id": "target_size",
+          "max": null,
+          "min": null,
           "options": [],
-          "step": 1.0,
-          "type": "number"
+          "options_range": [
+            16,
+            512,
+            1
+          ],
+          "step": null,
+          "type": "select"
         },
         {
           "advanced": false,
-          "default": 128,
+          "default": "32",
           "i18n": {
             "en": {
-              "description": "",
-              "name": "Target height"
+              "description": "Number of colors in the Oklab palette",
+              "name": "Palette"
             },
             "zh-CN": {
-              "description": "",
-              "name": "目标高度"
+              "description": "Oklab 调色板颜色数量",
+              "name": "调色板"
             }
           },
-          "id": "target_height",
-          "max": 512.0,
-          "min": 16.0,
-          "options": [],
-          "step": 1.0,
-          "type": "number"
+          "id": "palette_budget",
+          "max": null,
+          "min": null,
+          "options": [
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "8 colors"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "8 色"
+                }
+              },
+              "id": "8"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "16 colors"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "16 色"
+                }
+              },
+              "id": "16"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "32 colors"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "32 色"
+                }
+              },
+              "id": "32"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "64 colors"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "64 色"
+                }
+              },
+              "id": "64"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "128 colors"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "128 色"
+                }
+              },
+              "id": "128"
+            }
+          ],
+          "options_range": null,
+          "step": null,
+          "type": "select"
+        },
+        {
+          "advanced": false,
+          "default": "production",
+          "i18n": {
+            "en": {
+              "description": "Control contour and local-detail preservation",
+              "name": "Detail"
+            },
+            "zh-CN": {
+              "description": "控制轮廓和局部细节的保留程度",
+              "name": "细节级别"
+            }
+          },
+          "id": "detail_level",
+          "max": null,
+          "min": null,
+          "options": [
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Graphic"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "简洁"
+                }
+              },
+              "id": "graphic"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Balanced"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "平衡"
+                }
+              },
+              "id": "balanced"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Production"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "标准"
+                }
+              },
+              "id": "production"
+            },
+            {
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Fidelity"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "细节"
+                }
+              },
+              "id": "fidelity"
+            }
+          ],
+          "options_range": null,
+          "step": null,
+          "type": "select"
         }
       ],
       "i18n": {
@@ -1953,11 +2234,17 @@
               "persistable": false,
               "required": true,
               "type": "Image"
+            },
+            {
+              "name": "mask",
+              "persistable": false,
+              "required": true,
+              "type": "Mask"
             }
           ],
           "package_id": "bridge",
           "params_schema": {},
-          "schema_hash": "66f2b8fc7d47dee68f30cddf9c671ab2fb03b769debbfe8aa1531a331aecd6c3",
+          "schema_hash": "bf17feaf7f615d52f87cf5a3ba6e6ae247068e9895ff2b47cef0aa3045e80b7a",
           "source": "cooksprite",
           "title": "Load an artifact",
           "version": 1
@@ -1976,6 +2263,12 @@
               "persistable": false,
               "required": true,
               "type": "Text"
+            },
+            {
+              "name": "mask",
+              "persistable": false,
+              "required": false,
+              "type": "Mask"
             }
           ],
           "outputs": [
@@ -1988,7 +2281,7 @@
           ],
           "package_id": "bridge",
           "params_schema": {},
-          "schema_hash": "042954ff70c1b920af28aa2bf20b949bb60b9f7716651378cf454ab03bfe61ac",
+          "schema_hash": "136786bf3853b799f70bc35e07c20cc3755f76aad9bd458d7da6799f7d5e4e52",
           "source": "cooksprite",
           "title": "Store an artifact",
           "version": 1
@@ -2254,6 +2547,11 @@
               "min": 16,
               "type": "integer"
             },
+            "target_size": {
+              "max": 512,
+              "min": 16,
+              "type": "integer"
+            },
             "target_width": {
               "max": 512,
               "min": 16,
@@ -2263,7 +2561,7 @@
               "type": "boolean"
             }
           },
-          "schema_hash": "38e54e8e7c5e22601088e69acbe145193f8b2847c59fe1afb72093409ebf31db",
+          "schema_hash": "3936f88a1e1e60e12204c79d10b50c43eb608dd6293faeb0408cb821fd25e282",
           "source": "cooksprite",
           "title": "Pixelize with the deterministic CookSprite pixel compiler",
           "version": 1

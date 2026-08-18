@@ -25,6 +25,7 @@ MANIFEST = ToolPackageManifest(
             [("image", "Image"), ("mask", "Mask", False)],
             [("image", "Image", True), ("mask", "Mask", False)],
             {
+                "target_size": {"type": "integer", "min": 16, "max": 512},
                 "target_width": {"type": "integer", "min": 16, "max": 512},
                 "target_height": {"type": "integer", "min": 16, "max": 512},
                 "profile": {"type": "string", "enum": PIXEL_PROFILES},

@@ -47,6 +47,18 @@ actions:
         i18n:
           zh-CN: {name: 提示词模板, description: 开启后使用 CookSprite 提示词模板；关闭后原文直传}
           en: {name: Prompt Template, description: Use the CookSprite prompt template; off sends your exact text unchanged}
+      - id: resolution
+        type: select
+        default: "512"
+        i18n:
+          zh-CN: {name: 分辨率, description: 生成 1:1 图片，选择边长}
+          en: {name: Resolution, description: Generate a 1:1 image at this edge size}
+        options:
+          - {id: "64", i18n: {zh-CN: {name: "64"}, en: {name: "64"}}}
+          - {id: "128", i18n: {zh-CN: {name: "128"}, en: {name: "128"}}}
+          - {id: "256", i18n: {zh-CN: {name: "256"}, en: {name: "256"}}}
+          - {id: "512", i18n: {zh-CN: {name: "512"}, en: {name: "512"}}}
+          - {id: "1024", i18n: {zh-CN: {name: "1024"}, en: {name: "1024"}}}
       - id: strength
         type: range
         default: 0.65
@@ -236,8 +248,36 @@ actions:
       source: {type: Image, required: true, max: 1}
     produces: [Image]
     controls:
-      - {id: target_width, type: number, default: 128, min: 16, max: 512, step: 1, i18n: {zh-CN: {name: 目标宽度}, en: {name: Target width}}}
-      - {id: target_height, type: number, default: 128, min: 16, max: 512, step: 1, i18n: {zh-CN: {name: 目标高度}, en: {name: Target height}}}
+      - id: target_size
+        type: select
+        default: "128"
+        options_range: [16, 512, 1]
+        i18n:
+          zh-CN: {name: 像素尺寸, description: 输出最长边，自动保持原图长宽比}
+          en: {name: Pixel size, description: Output longest edge while preserving aspect ratio}
+      - id: palette_budget
+        type: select
+        default: "32"
+        i18n:
+          zh-CN: {name: 调色板, description: Oklab 调色板颜色数量}
+          en: {name: Palette, description: Number of colors in the Oklab palette}
+        options:
+          - {id: "8", i18n: {zh-CN: {name: 8 色}, en: {name: 8 colors}}}
+          - {id: "16", i18n: {zh-CN: {name: 16 色}, en: {name: 16 colors}}}
+          - {id: "32", i18n: {zh-CN: {name: 32 色}, en: {name: 32 colors}}}
+          - {id: "64", i18n: {zh-CN: {name: 64 色}, en: {name: 64 colors}}}
+          - {id: "128", i18n: {zh-CN: {name: 128 色}, en: {name: 128 colors}}}
+      - id: detail_level
+        type: select
+        default: production
+        i18n:
+          zh-CN: {name: 细节级别, description: 控制轮廓和局部细节的保留程度}
+          en: {name: Detail, description: Control contour and local-detail preservation}
+        options:
+          - {id: graphic, i18n: {zh-CN: {name: 简洁}, en: {name: Graphic}}}
+          - {id: balanced, i18n: {zh-CN: {name: 平衡}, en: {name: Balanced}}}
+          - {id: production, i18n: {zh-CN: {name: 标准}, en: {name: Production}}}
+          - {id: fidelity, i18n: {zh-CN: {name: 细节}, en: {name: Fidelity}}}
 
   - id: image.cutout
     i18n:

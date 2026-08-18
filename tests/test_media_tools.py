@@ -105,3 +105,14 @@ def test_store_png_preserves_official_rgba_output():
         assert image.mode == "RGBA"
         assert image.getpixel((0, 0))[3] == 255
         assert image.getpixel((1, 1))[3] == 0
+
+    rgb = np.zeros((2, 2, 3), dtype=np.float32)
+    rgb[...] = (0.2, 0.8, 0.3)
+    mask = np.zeros((2, 2), dtype=np.float32)
+    mask[0, 0] = 1.0
+    masked_output = _png(FakeTensor(rgb), "Image", FakeTensor(mask))
+
+    with Image.open(io.BytesIO(masked_output)) as image:
+        assert image.mode == "RGBA"
+        assert image.getpixel((0, 0)) == (51, 204, 76, 255)
+        assert image.getpixel((1, 1)) == (0, 0, 0, 0)

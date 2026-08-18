@@ -46,20 +46,28 @@ def _initial_centers(values: np.ndarray, weights: np.ndarray, count: int, fixed:
 def _weighted_kmeans(values: np.ndarray, weights: np.ndarray, count: int, fixed: np.ndarray) -> tuple[np.ndarray, float]:
     centers = _initial_centers(values, weights, count, fixed)
     fixed_count = len(fixed)
+    positive_weights = np.maximum(weights, 1e-9)
     for _ in range(32):
         distance = np.sum((values[:, None, :] - centers[None, :, :]) ** 2, axis=2)
         labels = np.argmin(distance, axis=1)
         updated = centers.copy()
-        for index in range(fixed_count, count):
-            selected = labels == index
-            if np.any(selected):
-                updated[index] = np.average(values[selected], axis=0, weights=np.maximum(weights[selected], 1e-9))
+        totals = np.bincount(labels, weights=positive_weights, minlength=count)
+        channels = values.shape[1]
+        offsets = np.arange(channels, dtype=labels.dtype)[None, :] * count
+        weighted_values = np.bincount(
+            (labels[:, None] + offsets).ravel(),
+            weights=(values * positive_weights[:, None]).ravel(),
+            minlength=count * channels,
+        ).reshape(channels, count).T
+        movable = totals[fixed_count:] > 0.0
+        movable_indices = np.flatnonzero(movable) + fixed_count
+        updated[movable_indices] = weighted_values[movable_indices] / totals[movable_indices, None]
         if float(np.max(np.abs(updated - centers))) < 1e-6:
             centers = updated
             break
         centers = updated
     distance = np.sum((values - centers[labels]) ** 2, axis=1)
-    inertia = float(np.average(distance, weights=np.maximum(weights, 1e-9)))
+    inertia = float(np.average(distance, weights=positive_weights))
     return centers, inertia
 
 

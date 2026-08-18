@@ -28,6 +28,18 @@ from .recipe_assembler import (
 from .recipes import OFFICIAL_ALPHA_MODEL, Recipe, recipe_mode
 from .store import Store
 
+IMAGE_RESOLUTIONS = (64, 128, 256, 512, 1024)
+
+
+def _image_resolution(value: Any) -> int:
+    try:
+        resolution = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"resolution must be one of {IMAGE_RESOLUTIONS}") from exc
+    if resolution not in IMAGE_RESOLUTIONS:
+        raise ValueError(f"resolution must be one of {IMAGE_RESOLUTIONS}")
+    return resolution
+
 
 def _core_image_workflow(
     runtime_id: str,
@@ -49,6 +61,7 @@ def _core_image_workflow(
         "seed": "Number",
         "strength": "Number",
         "pixel_enabled": "Boolean",
+        "resolution": "Number",
     }
     source_slot = ""
     if mode in {"i2i", "i2v"}:
@@ -88,8 +101,8 @@ def _core_image_workflow(
                     inputs={
                         "image": input_ref(source_slot),
                         "upscale_method": literal("nearest-exact"),
-                        "width": literal(512),
-                        "height": literal(512),
+                        "width": input_ref("resolution"),
+                        "height": input_ref("resolution"),
                         "crop": literal("disabled"),
                     },
                 ),
@@ -119,8 +132,8 @@ def _core_image_workflow(
                 id="latent",
                 tool="comfy.EmptyLatentImage",
                 inputs={
-                    "width": literal(512),
-                    "height": literal(512),
+                    "width": input_ref("resolution"),
+                    "height": input_ref("resolution"),
                     "batch_size": input_ref("count"),
                 },
             )
@@ -171,6 +184,7 @@ def _core_image_workflow(
                     tool="cooksprite.pixelize",
                     inputs={"image": output_ref("isolate", "image")},
                     params={
+                        "target_size": literal(128),
                         "target_width": literal(128),
                         "target_height": literal(128),
                         "profile": literal("production"),
@@ -271,17 +285,25 @@ def _pixel_workflow(runtime_id: str, recipe: Recipe) -> WorkflowDefinition:
         id=f"{recipe.id}.image.pixelize",
         title=f"{recipe.label} · image.pixelize",
         runtime_id=runtime_id,
-        inputs={"source": "Image", "target_width": "Number", "target_height": "Number"},
+        inputs={
+            "source": "Image",
+            "target_size": "Number",
+            "palette_budget": "Number",
+            "detail_level": "Text",
+        },
         nodes=[
             ToolNode(
                 id="pixel",
                 tool="cooksprite.pixelize",
                 inputs={"image": input_ref("source")},
                 params={
-                    "target_width": input_ref("target_width"),
-                    "target_height": input_ref("target_height"),
-                    "profile": literal("production"),
-                    "palette_budget": literal(0),
+                    "target_size": input_ref("target_size"),
+                    # Legacy ports stay in the standalone graph for old
+                    # ComfyUI node contracts; target_size takes precedence.
+                    "target_width": literal(128),
+                    "target_height": literal(128),
+                    "profile": input_ref("detail_level"),
+                    "palette_budget": input_ref("palette_budget"),
                     "padding_x": literal(-1),
                     "padding_y": literal(-1),
                     "variants": literal(False),
@@ -426,6 +448,10 @@ def bind_action_task(
         "seed",
         "strength",
         "pixel_enabled",
+        "resolution",
+        "target_size",
+        "palette_budget",
+        "detail_level",
         "flip_y",
         "columns",
         "rows",
@@ -505,8 +531,10 @@ def bind_action_task(
             "exclude_empty": bool(values.get("exclude_empty", True)),
             "sample_fps": float(values.get("sample_fps", 12)),
             "max_frames": int(values.get("max_frames", 48)),
-            "target_width": int(values.get("target_width", 128)),
-            "target_height": int(values.get("target_height", 128)),
+            "resolution": _image_resolution(values.get("resolution", 512)),
+            "target_size": int(values.get("target_size", 128)),
+            "palette_budget": int(values.get("palette_budget", 32)),
+            "detail_level": str(values.get("detail_level", "production")),
         }
     )
 
