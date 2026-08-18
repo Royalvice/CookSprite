@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from .discovery import validate_comfy_directory
-from .managed import _comfy_cli, _comfy_root, _workspace_for_comfy_cli
+from .managed import _comfy_cli, _comfy_root
 
 Progress = Callable[[dict[str, Any]], None]
 
@@ -64,7 +64,11 @@ def official_download_command(directory: str | Path, file: dict[str, Any]) -> st
         raise ModelDownloadError("model source must use HTTPS", code="model_source_invalid")
     folder = _safe_folder(file.get("folder"))
     cli = _comfy_cli(root) or "comfy"
-    workspace = _workspace_for_comfy_cli(root)
+    # ``launch`` uses the managed runtime parent as its CLI workspace, but
+    # model download resolves paths relative to the actual ComfyUI checkout.
+    # Keep those lifecycle concerns separate so downloads land under
+    # ``ComfyUI/models`` rather than the runtime parent.
+    workspace = root
     return (
         f'{cli} --workspace="{workspace}" model download '
         f'--url "{url}" --relative-path "models/{folder}"'
@@ -112,7 +116,10 @@ def _run_cli(
         raise ModelDownloadError("model source must use HTTPS", code="model_source_invalid")
     name = _safe_file_name(file.get("name"))
     folder = _safe_folder(file.get("folder"))
-    workspace = _workspace_for_comfy_cli(root)
+    # The model command must run with the ComfyUI checkout as its workspace;
+    # the parent runtime workspace is only valid for lifecycle commands such
+    # as ``comfy launch``.
+    workspace = root
     staging_relative = Path("models") / ".cooksprite-downloads" / folder
     staging = root / staging_relative / name
     final = root / "models" / folder / name

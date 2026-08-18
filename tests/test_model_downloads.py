@@ -43,7 +43,7 @@ def test_model_download_uses_cli_staging_and_atomic_move(tmp_path, monkeypatch):
     assert not (
         root / "models" / ".cooksprite-downloads" / "diffusion_models" / file["name"]
     ).exists()
-    assert command_seen[:4] == ["fake-comfy", "--workspace=" + str(tmp_path), "model", "download"]
+    assert command_seen[:4] == ["fake-comfy", "--workspace=" + str(root), "model", "download"]
     assert events[-1]["progress"] == 1.0
 
 
@@ -62,5 +62,6 @@ def test_official_download_command_contains_no_api_credentials(tmp_path):
         },
     )
     assert "model download" in command
+    assert f'--workspace="{root}"' in command
     assert "test-vae.safetensors" in command
     assert "token" not in command.lower()
