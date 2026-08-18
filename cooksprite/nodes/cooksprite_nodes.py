@@ -39,7 +39,11 @@ def _tensor(image: Image.Image):
 
 def _png(value, kind):
     array = (value.detach().cpu().numpy().clip(0, 1) * 255).astype("uint8")
-    image = Image.fromarray(array).convert("RGB")
+    has_alpha = array.shape[-1] >= 4
+    if has_alpha:
+        image = Image.fromarray(array[..., :4], "RGBA")
+    else:
+        image = Image.fromarray(array[..., :3], "RGB")
     if kind != "NormalMap":
         rgba = image.convert("RGBA")
         pixels = np.array(rgba)

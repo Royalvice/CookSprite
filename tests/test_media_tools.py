@@ -9,7 +9,7 @@ import pytest
 from PIL import Image
 
 from cooksprite.nodes.alpha import _session, remove_background_batch
-from cooksprite.nodes.cooksprite_nodes import CS_Pixelize, CS_PixelSnap, CS_RemoveBackground
+from cooksprite.nodes.cooksprite_nodes import CS_Pixelize, CS_PixelSnap, CS_RemoveBackground, _png
 
 
 def test_new_node_contracts_expose_image_and_mask():
@@ -80,3 +80,28 @@ def test_pixel_adapter_is_deterministic_and_keeps_batch_mask():
     )
     assert snapped_image.shape[0] == 2
     assert snapped_mask.shape == snapped_image.shape[:3]
+
+
+def test_store_png_preserves_official_rgba_output():
+    class FakeTensor:
+        def __init__(self, value):
+            self.value = value
+
+        def detach(self):
+            return self
+
+        def cpu(self):
+            return self
+
+        def numpy(self):
+            return self.value
+
+    rgba = np.zeros((2, 2, 4), dtype=np.float32)
+    rgba[..., :3] = (0.2, 0.8, 0.3)
+    rgba[0, 0, 3] = 1.0
+    output = _png(FakeTensor(rgba), "Image")
+
+    with Image.open(io.BytesIO(output)) as image:
+        assert image.mode == "RGBA"
+        assert image.getpixel((0, 0))[3] == 255
+        assert image.getpixel((1, 1))[3] == 0
