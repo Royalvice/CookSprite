@@ -197,10 +197,6 @@ class ImagePromptRequest:
         if mode == PromptMode.T2I and self.edit_instruction and self.edit_instruction.strip():
             raise ValueError("edit_instruction requires i2i mode")
         coerce_enum(self.style, RenderStyle, "style")
-        if str(self.category).strip().lower() == "character":
-            _character_camera_option(self.camera_option)
-        coerce_enum(self.camera_preset, CameraPreset, "camera_preset")
-        coerce_enum(self.orientation, Orientation, "orientation")
         if self.facing not in {"left", "right"}:
             raise ValueError("facing must be 'left' or 'right'")
         _validate_resolution(self.resolution)
@@ -208,7 +204,9 @@ class ImagePromptRequest:
             raise ValueError("background cannot be empty")
 
     def resolved_camera(self) -> CameraContract:
-        return self.camera or CameraContract.from_view(self.orientation, self.camera_preset)
+        # Compatibility accessor: image camera is intentionally not a user
+        # input anymore.
+        return CameraContract()
 
 
 @dataclass(frozen=True)
@@ -279,7 +277,7 @@ class CompiledPrompt:
 
 @dataclass(frozen=True)
 class PromptSpec:
-    """Legacy 24-combination request shape retained for callers."""
+    """Legacy request shape retained for callers; image camera is fixed."""
 
     style: str
     camera_preset: str
@@ -293,7 +291,12 @@ class PromptSpec:
         return f"{self.style}-{self.camera_preset}-{self.orientation}-{self.mode}"
 
 
-COMPILER_VERSION = "sprite_prompt_package_v1.2"
+COMPILER_VERSION = "sprite_prompt_package_v1.3"
+
+# Image generation has one deliberate camera contract. Keep the old camera
+# enums and request fields for saved graphs and callers, but never let them
+# change an image prompt.
+FIXED_IMAGE_CAMERA_OPTION = "front_eye_level"
 
 CHARACTER_COMPOSITION_CORE = "Single full-body character"
 CHARACTER_COMPOSITION_GENERAL = "centered with generous margin, neutral standing pose"
@@ -394,22 +397,14 @@ class SpritePromptCompiler:
         style = coerce_enum(request.style, RenderStyle, "style")
         category_id = str(request.category).strip().lower()
         humanoid = category_id == "character"
-        orientation = (
-            Orientation.FRONT
-            if humanoid
-            else coerce_enum(request.orientation, Orientation, "orientation")
-        )
-        camera = (
-            _character_camera_contract(request.camera_option)
-            if humanoid
-            else request.resolved_camera()
-        )
+        orientation = Orientation.FRONT
+        camera = CameraContract()
         width, height = request.resolution
         caption = _clean_caption(request.caption)
         category = CATEGORY_TEXT.get(str(request.category), f"one complete {request.category} game asset")
         if humanoid:
             style_option = _character_style_option(style)
-            camera_option = _character_camera_option(request.camera_option)
+            camera_option = FIXED_IMAGE_CAMERA_OPTION
             prompt = (
                 f"{caption}. {CHARACTER_COMPOSITION_CORE}, {CHARACTER_COMPOSITION_GENERAL}. "
                 f"{CHARACTER_CAMERA_OPTIONS[camera_option]}, {CHARACTER_CAMERA_GENERAL}. "
@@ -440,19 +435,17 @@ class SpritePromptCompiler:
                     "category": category_id,
                     "style": style_option,
                     "style_option": style_option,
-                    "camera": camera_option,
-                    "camera_option": camera_option,
-                    "camera_preset": camera.preset.value,
-                    "orientation": _character_orientation(camera_option),
+                    "camera": FIXED_IMAGE_CAMERA_OPTION,
+                    "camera_preset": CameraPreset.EYE_LEVEL.value,
+                    "orientation": Orientation.FRONT.value,
                     "screen_facing": None,
                     "background": "pure_solid_green",
                     "resolution": [int(width), int(height)],
                     "edit_instruction": request.edit_instruction,
                     "combination": {
-                        "camera_count": len(CHARACTER_CAMERA_OPTIONS),
                         "style_count": len(CHARACTER_STYLE_OPTIONS),
-                        "total_variants": len(CHARACTER_CAMERA_OPTIONS) * len(CHARACTER_STYLE_OPTIONS),
-                        "rule": "Cartesian product of camera.options and style.options",
+                        "total_variants": len(CHARACTER_STYLE_OPTIONS),
+                        "rule": "style.options",
                     },
                 },
             )
@@ -482,7 +475,7 @@ class SpritePromptCompiler:
             f"Composition: one complete subject centered on a {request.background}; no floor, scene, or background detail."
         )
         negative = _negative_prompt(request.negative_terms, DEFAULT_IMAGE_NEGATIVE)
-        request_id = f"image-{style.value}-{camera.preset.value}-{orientation.value}-{mode.value}-{width}x{height}"
+        request_id = f"image-{style.value}-eye_level-front-{mode.value}-{width}x{height}"
         return CompiledPrompt(
             request_id=request_id,
             task="image",
@@ -497,9 +490,9 @@ class SpritePromptCompiler:
                 "mode": mode.value,
                 "category": request.category,
                 "style": style.value,
-                "camera_preset": camera.preset.value,
-                "orientation": orientation.value,
-                "screen_facing": request.facing if orientation == Orientation.RIGHT else None,
+                "camera_preset": CameraPreset.EYE_LEVEL.value,
+                "orientation": Orientation.FRONT.value,
+                "screen_facing": None,
                 "resolution": [int(width), int(height)],
                 "edit_instruction": request.edit_instruction,
             },
@@ -570,16 +563,12 @@ class SpritePromptCompiler:
                 ImagePromptRequest(
                     caption=caption,
                     style=style,
-                    camera_preset=preset,
-                    orientation=orientation,
                     mode=mode,
                     resolution=resolution,
                 )
             )
-            for style, preset, orientation, mode in itertools.product(
+            for style, mode in itertools.product(
                 (RenderStyle.PIXEL, RenderStyle.HIGH_RES),
-                CameraPreset,
-                Orientation,
                 (PromptMode.T2I, PromptMode.I2I),
             )
         ]
@@ -590,7 +579,7 @@ class SpritePromptCompiler:
         mode: PromptMode | str = PromptMode.T2I,
         resolution: tuple[int, int] = (512, 512),
     ) -> list[CompiledPrompt]:
-        """Compile the 30 deterministic character packet combinations."""
+        """Compile the five deterministic character style variants."""
 
         return [
             self.compile_image(
@@ -598,12 +587,11 @@ class SpritePromptCompiler:
                     caption=caption,
                     category="character",
                     style=style,
-                    camera_option=camera,
                     mode=mode,
                     resolution=resolution,
                 )
             )
-            for camera, style in itertools.product(CHARACTER_CAMERA_OPTIONS, CHARACTER_STYLE_OPTIONS)
+            for style in CHARACTER_STYLE_OPTIONS
         ]
 
     def video_actions(
@@ -661,10 +649,10 @@ def compile_legacy_image(spec: PromptSpec, character_caption: str) -> dict[str, 
         {
             "id": spec.id,
             "style": spec.style,
-            "camera_preset": spec.camera_preset,
-            "orientation": spec.orientation,
+            "camera_preset": CameraPreset.EYE_LEVEL.value,
+            "orientation": Orientation.FRONT.value,
             "mode": spec.mode,
-            "screen_facing": spec.facing if spec.orientation in {"right"} else None,
+            "screen_facing": None,
             "resolution": list(spec.resolution),
         }
     )

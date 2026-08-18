@@ -238,10 +238,13 @@ class CS_CompilePromptPacket:
                     mode=mode or "t2i",
                     style=style or "pixel",
                     category=category or "character",
-                    camera_option=camera_option or "front_eye_level",
-                    camera_preset=camera_preset or ("top45" if view == "top45" else "level"),
-                    orientation=orientation or "front",
-                    facing=facing or "right",
+                    # Image generation has one product camera contract. The
+                    # optional legacy camera inputs remain in the node schema
+                    # so saved graphs still load, but cannot change output.
+                    camera_option="front_eye_level",
+                    camera_preset="eye_level",
+                    orientation="front",
+                    facing="right",
                     resolution=(int(width), int(height)),
                     background=background or DEFAULT_GREEN_SCREEN_BACKGROUND,
                     edit_instruction=edit_instruction or None,
