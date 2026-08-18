@@ -26,6 +26,11 @@ class _ValueEnum(str, Enum):
 class RenderStyle(_ValueEnum):
     PIXEL = "pixel"
     HIGH_RES = "smooth"
+    ULTRA_REALISTIC = "ultra_realistic"
+    ACTION_2D = "2d_action_game"
+    STYLIZED_3D = "stylized_3d"
+    ANIME = "anime"
+    PIXEL_ART = "pixel_art"
 
 
 class CameraPreset(_ValueEnum):
@@ -171,8 +176,9 @@ CATEGORY_TEXT = {
 class ImagePromptRequest:
     caption: str
     mode: PromptMode | str = PromptMode.T2I
-    style: RenderStyle | str = RenderStyle.HIGH_RES
+    style: RenderStyle | str = RenderStyle.ACTION_2D
     category: str = "character"
+    camera_option: str = "front_eye_level"
     camera_preset: CameraPreset | str = CameraPreset.EYE_LEVEL
     orientation: Orientation | str = Orientation.FRONT
     facing: str = "right"
@@ -191,6 +197,8 @@ class ImagePromptRequest:
         if mode == PromptMode.T2I and self.edit_instruction and self.edit_instruction.strip():
             raise ValueError("edit_instruction requires i2i mode")
         coerce_enum(self.style, RenderStyle, "style")
+        if str(self.category).strip().lower() == "character":
+            _character_camera_option(self.camera_option)
         coerce_enum(self.camera_preset, CameraPreset, "camera_preset")
         coerce_enum(self.orientation, Orientation, "orientation")
         if self.facing not in {"left", "right"}:
@@ -285,7 +293,44 @@ class PromptSpec:
         return f"{self.style}-{self.camera_preset}-{self.orientation}-{self.mode}"
 
 
-COMPILER_VERSION = "sprite_prompt_package_v1.1"
+COMPILER_VERSION = "sprite_prompt_package_v1.2"
+
+CHARACTER_COMPOSITION_CORE = "Single full-body character"
+CHARACTER_COMPOSITION_GENERAL = "centered with generous margin, neutral standing pose"
+CHARACTER_CAMERA_GENERAL = (
+    "flat orthographic character presentation, full figure clearly visible, clean framing, no perspective distortion"
+)
+CHARACTER_STYLE_GENERAL = "clean contours, clear component boundaries, readable face, and restrained highlights"
+CHARACTER_BACKGROUND_CORE = "Pure solid green background"
+CHARACTER_BACKGROUND_GENERAL = (
+    "uniform color, flat color field, seamless backdrop, featureless background, clean subject separation, "
+    "no floor, no cast shadow, no reflection, no gradient, no texture, no pattern, no scenery, no horizon, "
+    "no background objects, no environmental details, no text, no logo, no watermark"
+)
+
+CHARACTER_CAMERA_OPTIONS = {
+    "front_eye_level": "Straight-on front view at eye level, the character faces directly toward the viewer",
+    "right_eye_level": "Straight-on right-side view at eye level, the character's right side faces the viewer",
+    "rear_eye_level": "Straight-on rear view at eye level, the back of the character faces the viewer",
+    "front_top_down_45": "45-degree top-down front view, camera positioned above and in front of the character",
+    "right_top_down_45": "45-degree top-down right-side view, camera positioned above and to the character's right",
+    "rear_top_down_45": "45-degree top-down rear view, camera positioned above and behind the character",
+}
+CHARACTER_CAMERA_CONTRACTS = {
+    "front_eye_level": (0.0, 0.0),
+    "right_eye_level": (90.0, 0.0),
+    "rear_eye_level": (180.0, 0.0),
+    "front_top_down_45": (0.0, 45.0),
+    "right_top_down_45": (90.0, 45.0),
+    "rear_top_down_45": (180.0, 45.0),
+}
+CHARACTER_STYLE_OPTIONS = {
+    "ultra_realistic": "Ultra-realistic high-resolution character render",
+    "2d_action_game": "Polished high-resolution 2D action-game character illustration",
+    "stylized_3d": "Polished high-resolution stylized 3D character render",
+    "anime": "Polished high-resolution anime character illustration with cel shading",
+    "pixel_art": "Crisp pixel-art character sprite with deliberate pixel clusters and a limited color palette",
+}
 
 HUMANOID_FIXED_COMPOSITION = (
     "Single full-body character, centered with generous margin, neutral standing pose"
@@ -312,6 +357,11 @@ IMAGE_STYLE_TEXT = {
         "high-resolution non-pixel art with clean anti-aliased contours, "
         "flat cel-shaded material planes, controlled highlights and detailed surface construction"
     ),
+    RenderStyle.ULTRA_REALISTIC: CHARACTER_STYLE_OPTIONS["ultra_realistic"],
+    RenderStyle.ACTION_2D: CHARACTER_STYLE_OPTIONS["2d_action_game"],
+    RenderStyle.STYLIZED_3D: CHARACTER_STYLE_OPTIONS["stylized_3d"],
+    RenderStyle.ANIME: CHARACTER_STYLE_OPTIONS["anime"],
+    RenderStyle.PIXEL_ART: CHARACTER_STYLE_OPTIONS["pixel_art"],
 }
 IMAGE_VIEW_TEXT = {
     Orientation.FRONT: "front view with the face and chest toward the camera",
@@ -350,7 +400,7 @@ class SpritePromptCompiler:
             else coerce_enum(request.orientation, Orientation, "orientation")
         )
         camera = (
-            CameraContract.from_view(Orientation.FRONT, CameraPreset.EYE_LEVEL)
+            _character_camera_contract(request.camera_option)
             if humanoid
             else request.resolved_camera()
         )
@@ -358,12 +408,16 @@ class SpritePromptCompiler:
         caption = _clean_caption(request.caption)
         category = CATEGORY_TEXT.get(str(request.category), f"one complete {request.category} game asset")
         if humanoid:
+            style_option = _character_style_option(style)
+            camera_option = _character_camera_option(request.camera_option)
             prompt = (
-                f"{caption}. {HUMANOID_FIXED_COMPOSITION}. {HUMANOID_FIXED_CAMERA}. "
-                f"{HUMANOID_FIXED_STYLE}. {HUMANOID_FIXED_BACKGROUND}."
+                f"{caption}. {CHARACTER_COMPOSITION_CORE}, {CHARACTER_COMPOSITION_GENERAL}. "
+                f"{CHARACTER_CAMERA_OPTIONS[camera_option]}, {CHARACTER_CAMERA_GENERAL}. "
+                f"{CHARACTER_STYLE_OPTIONS[style_option]}, {CHARACTER_STYLE_GENERAL}. "
+                f"{CHARACTER_BACKGROUND_CORE}, {CHARACTER_BACKGROUND_GENERAL}."
             )
             negative = _negative_prompt(request.negative_terms, DEFAULT_IMAGE_NEGATIVE)
-            request_id = f"image-humanoid-front-eye_level-{mode.value}-{width}x{height}"
+            request_id = f"image-character-{style_option}-{camera_option}-{mode.value}-{width}x{height}"
             return CompiledPrompt(
                 request_id=request_id,
                 task="image",
@@ -374,17 +428,32 @@ class SpritePromptCompiler:
                 camera_contract=camera,
                 metadata={
                     "compiler_version": self.version,
-                    "prompt_template": "humanoid_v1",
+                    "packet_type": "character_prompt_packet",
+                    "packet_version": "1.0",
+                    "prompt_template": (
+                        "{USER_INPUT}. {COMPOSITION_CORE}, {COMPOSITION_GENERAL}. "
+                        "{CAMERA_CORE}, {CAMERA_GENERAL}. {STYLE_CORE}, {STYLE_GENERAL}. "
+                        "{BACKGROUND_CORE}, {BACKGROUND_GENERAL}."
+                    ),
                     "task": "image",
                     "mode": mode.value,
                     "category": category_id,
-                    "style": style.value,
-                    "camera_preset": CameraPreset.EYE_LEVEL.value,
-                    "orientation": Orientation.FRONT.value,
+                    "style": style_option,
+                    "style_option": style_option,
+                    "camera": camera_option,
+                    "camera_option": camera_option,
+                    "camera_preset": camera.preset.value,
+                    "orientation": _character_orientation(camera_option),
                     "screen_facing": None,
                     "background": "pure_solid_green",
                     "resolution": [int(width), int(height)],
                     "edit_instruction": request.edit_instruction,
+                    "combination": {
+                        "camera_count": len(CHARACTER_CAMERA_OPTIONS),
+                        "style_count": len(CHARACTER_STYLE_OPTIONS),
+                        "total_variants": len(CHARACTER_CAMERA_OPTIONS) * len(CHARACTER_STYLE_OPTIONS),
+                        "rule": "Cartesian product of camera.options and style.options",
+                    },
                 },
             )
         mode_line = (
@@ -404,7 +473,7 @@ class SpritePromptCompiler:
             mode_line,
             f"Asset contract: {category}.",
             f"Camera: {camera.phrase()}; {view_line}.",
-            f"Rendering: {IMAGE_STYLE_TEXT[style]}.",
+            f"Rendering: {IMAGE_STYLE_TEXT.get(style, style.value)}.",
             f"Description: {caption}.",
         ]
         if edit_line:
@@ -508,8 +577,33 @@ class SpritePromptCompiler:
                 )
             )
             for style, preset, orientation, mode in itertools.product(
-                RenderStyle, CameraPreset, Orientation, (PromptMode.T2I, PromptMode.I2I)
+                (RenderStyle.PIXEL, RenderStyle.HIGH_RES),
+                CameraPreset,
+                Orientation,
+                (PromptMode.T2I, PromptMode.I2I),
             )
+        ]
+
+    def character_matrix(
+        self,
+        caption: str,
+        mode: PromptMode | str = PromptMode.T2I,
+        resolution: tuple[int, int] = (512, 512),
+    ) -> list[CompiledPrompt]:
+        """Compile the 30 deterministic character packet combinations."""
+
+        return [
+            self.compile_image(
+                ImagePromptRequest(
+                    caption=caption,
+                    category="character",
+                    style=style,
+                    camera_option=camera,
+                    mode=mode,
+                    resolution=resolution,
+                )
+            )
+            for camera, style in itertools.product(CHARACTER_CAMERA_OPTIONS, CHARACTER_STYLE_OPTIONS)
         ]
 
     def video_actions(
@@ -599,6 +693,37 @@ def _validate_resolution(resolution: tuple[int, int]) -> None:
         raise ValueError(f"resolution must contain two positive integers, got {resolution!r}")
 
 
+def _character_camera_option(value: str) -> str:
+    option = str(value or "").strip().lower()
+    if option not in CHARACTER_CAMERA_OPTIONS:
+        choices = ", ".join(CHARACTER_CAMERA_OPTIONS)
+        raise ValueError(f"camera_option must be one of ({choices}), got {value!r}")
+    return option
+
+
+def _character_style_option(value: RenderStyle | str) -> str:
+    style = coerce_enum(value, RenderStyle, "style").value
+    # Keep old API/CLI callers working while the character UI uses the packet
+    # names.  This is only a compatibility translation; it does not enable any
+    # post-processing.
+    return {"pixel": "pixel_art", "smooth": "2d_action_game"}.get(style, style)
+
+
+def _character_camera_contract(option: str) -> CameraContract:
+    selected = _character_camera_option(option)
+    yaw, pitch = CHARACTER_CAMERA_CONTRACTS[selected]
+    return CameraContract(yaw_deg=yaw, pitch_deg=pitch)
+
+
+def _character_orientation(option: str) -> str:
+    selected = _character_camera_option(option)
+    if selected.startswith("right_"):
+        return Orientation.RIGHT.value
+    if selected.startswith("rear_"):
+        return Orientation.BACK.value
+    return Orientation.FRONT.value
+
+
 def _action_motion_prefix(action: Action, direction: MotionDirection) -> str:
     if action == Action.TURN_360 or direction == MotionDirection.IN_PLACE:
         return "In place:"
@@ -637,6 +762,10 @@ def _negative_prompt(extra: Iterable[str], base: str) -> str:
 
 
 __all__ = [
+    "CHARACTER_CAMERA_OPTIONS",
+    "CHARACTER_COMPOSITION_CORE",
+    "CHARACTER_COMPOSITION_GENERAL",
+    "CHARACTER_STYLE_OPTIONS",
     "COMPILER_VERSION",
     "DEFAULT_GREEN_SCREEN_BACKGROUND",
     "Action",
