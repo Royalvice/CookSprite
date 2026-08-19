@@ -81,18 +81,19 @@ def _selective_outer_stroke(evidence: CellEvidence, silhouette: np.ndarray) -> n
 
 
 def _micro_detail_mask(evidence: CellEvidence, tones: ToneRoleMap, silhouette: np.ndarray) -> np.ndarray:
-    """Return compact source details that must win over contour painting.
+    """Return interior highlights that must win over contour painting.
 
-    This is deliberately generic rather than face-specific: the same rule
-    protects eyes and mouths, belt glints, buckles, buttons, and other small
-    high-contrast marks without adding a detector or a model dependency.
+    Dark compact ink is intentional sprite structure: eyes, mouths, buckles
+    and seams should keep the black contour treatment.  Only bright material
+    details bypass the forced outline, and only away from the outside
+    silhouette.  This keeps the readable black edge while preserving silver
+    glints and other small highlights.
     """
 
-    compact_ink = (evidence.ink_coverage >= 0.08) & (
-        evidence.protect | (evidence.feature >= 0.54)
-    )
+    eroded = cv2.erode(silhouette.astype(np.uint8), np.ones((3, 3), np.uint8), iterations=1) > 0
+    interior = silhouette & eroded
     highlight = tones.highlight_mask & (evidence.feature >= 0.20)
-    return silhouette & (compact_ink | highlight)
+    return interior & highlight
 
 
 def _role_adjusted_evidence(evidence: CellEvidence, tones: ToneRoleMap) -> CellEvidence:
@@ -181,9 +182,9 @@ def compile_continuous(
         internal_strokes.append(internal)
         tone_maps.append(tones)
         adjusted.append(_role_adjusted_evidence(evidence, tones))
-        # Keep the raw contour in the diagnostics/role analysis, but remove
-        # cells reserved for compact details from the forced contour overlay.
-        stroke_masks.append(strokes & ~detail)
+        # Keep the complete contour in diagnostics.  ``map_palette`` applies
+        # the narrow interior-highlight exception when it assigns labels.
+        stroke_masks.append(strokes)
         detail_masks.append(detail)
     budget = target.resolved_palette_budget
     if profile == "fidelity":

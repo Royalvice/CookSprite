@@ -112,6 +112,45 @@ def test_pixel_palette_detail_wins_over_forced_outline():
     assert int(labels[0, 0]) == 1
 
 
+def test_pixel_detail_protection_does_not_remove_outer_outline():
+    pytest.importorskip("cv2", reason="pixel algorithm dependencies are ComfyUI-only")
+    from cooksprite.nodes.pixel.pipelines.continuous import _micro_detail_mask
+    from cooksprite.nodes.pixel.stages.evidence import CellEvidence
+    from cooksprite.nodes.pixel.stages.tones import ToneRoleMap
+
+    shape = (5, 5)
+    zeros = np.zeros(shape, dtype=np.float32)
+    evidence = CellEvidence(
+        zeros,
+        zeros,
+        np.zeros((*shape, 3), dtype=np.float32),
+        zeros,
+        np.ones(shape, dtype=np.float32),
+        zeros,
+        zeros,
+        zeros,
+        np.zeros(shape, dtype=bool),
+        np.zeros(shape, dtype=bool),
+        np.zeros(shape, dtype=bool),
+        np.zeros(shape, dtype=np.int32),
+        np.zeros(shape, dtype=np.int32),
+    )
+    highlights = np.zeros(shape, dtype=bool)
+    highlights[0, 2] = True
+    highlights[2, 2] = True
+    tones = ToneRoleMap(
+        np.zeros(shape, dtype=np.uint8),
+        highlights,
+        np.zeros(shape, dtype=bool),
+        {},
+    )
+
+    protected = _micro_detail_mask(evidence, tones, np.ones(shape, dtype=bool))
+
+    assert not protected[0, 2]
+    assert protected[2, 2]
+
+
 def test_store_png_preserves_official_rgba_output():
     class FakeTensor:
         def __init__(self, value):
