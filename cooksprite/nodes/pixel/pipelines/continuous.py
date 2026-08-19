@@ -80,6 +80,21 @@ def _selective_outer_stroke(evidence: CellEvidence, silhouette: np.ndarray) -> n
     )
 
 
+def _micro_detail_mask(evidence: CellEvidence, tones: ToneRoleMap, silhouette: np.ndarray) -> np.ndarray:
+    """Return compact source details that must win over contour painting.
+
+    This is deliberately generic rather than face-specific: the same rule
+    protects eyes and mouths, belt glints, buckles, buttons, and other small
+    high-contrast marks without adding a detector or a model dependency.
+    """
+
+    compact_ink = (evidence.ink_coverage >= 0.08) & (
+        evidence.protect | (evidence.feature >= 0.54)
+    )
+    highlight = tones.highlight_mask & (evidence.feature >= 0.20)
+    return silhouette & (compact_ink | highlight)
+
+
 def _role_adjusted_evidence(evidence: CellEvidence, tones: ToneRoleMap) -> CellEvidence:
     lab = evidence.lab.copy()
     roles = tones.roles
@@ -150,6 +165,7 @@ def compile_continuous(
     tone_maps: list[ToneRoleMap] = []
     adjusted: list[CellEvidence] = []
     stroke_masks: list[np.ndarray] = []
+    detail_masks: list[np.ndarray] = []
     for rgba, semantic_path in zip(rgba_frames, semantic_mask_paths, strict=True):
         semantic = _semantic_mask(semantic_path, rgba.shape[:2])
         analysis = analyse_frame(rgba, transform, semantic, supersample)
@@ -158,13 +174,17 @@ def compile_continuous(
         internal = compile_internal_strokes(evidence, silhouette.mask)
         strokes = internal.mask | _selective_outer_stroke(evidence, silhouette.mask)
         tones = extract_tone_roles(evidence, silhouette.mask, strokes)
+        detail = _micro_detail_mask(evidence, tones, silhouette.mask)
         analyses.append(analysis)
         cells.append(evidence)
         silhouettes.append(silhouette)
         internal_strokes.append(internal)
         tone_maps.append(tones)
         adjusted.append(_role_adjusted_evidence(evidence, tones))
-        stroke_masks.append(strokes)
+        # Keep the raw contour in the diagnostics/role analysis, but remove
+        # cells reserved for compact details from the forced contour overlay.
+        stroke_masks.append(strokes & ~detail)
+        detail_masks.append(detail)
     budget = target.resolved_palette_budget
     if profile == "fidelity":
         budget = min(256, max(budget, round(budget * 1.20)))
@@ -174,10 +194,12 @@ def compile_continuous(
     labels: list[np.ndarray] = []
     alphas_out: list[np.ndarray] = []
     foregrounds: list[np.ndarray] = []
-    for evidence, tones, silhouette, strokes in zip(adjusted, tone_maps, silhouettes, stroke_masks, strict=True):
+    for evidence, tones, silhouette, strokes, detail in zip(
+        adjusted, tone_maps, silhouettes, stroke_masks, detail_masks, strict=True
+    ):
         alpha = _alpha_from_semantics(evidence, silhouette.mask)
         foreground = alpha > 0.0
-        mapped, _ = map_palette(evidence.lab, alpha, palette, strokes)
+        mapped, _ = map_palette(evidence.lab, alpha, palette, strokes, detail)
         mapped = clean_label_clusters(mapped, palette.lab, foreground, tones.protect)
         labels.append(mapped)
         alphas_out.append(alpha)

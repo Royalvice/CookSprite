@@ -26,13 +26,18 @@ const animationValues = ref<Record<string, unknown>>({});
 const inputs = ref<Record<string, string | string[]>>({});
 const selectedArtifact = ref<ArtifactRef | null>(null);
 const transientPreview = ref<ArtifactRef | null>(null);
+const canvasCleared = ref(false);
+const fitToCanvas = ref(false);
 const showAdvanced = ref(false);
 const inspectorTab = ref<"properties" | "lineage">("properties");
 const reveal = ref(false);
 const importInput = ref<HTMLInputElement | null>(null);
+const stageContent = ref<HTMLElement | null>(null);
 type HoverPreviewState = { artifact: ArtifactRef; label: string; description: string; motion: string; x: number; y: number };
 const hoverPreview = ref<HoverPreviewState | null>(null);
 let hoverHideTimer = 0;
+let artifactPreviewHideTimer = 0;
+let assetGalleryInside = false;
 let workspaceReady = false;
 let normalTimer = 0;
 const normalSequence = ref<FrameSequenceView | null>(null);
@@ -87,8 +92,14 @@ const character = computed(() => {
   const id = Array.isArray(raw) ? raw[0] : raw;
   return store.artifactById.get(String(id || ""));
 });
-const activeArtifact = computed(() => transientPreview.value || selectedArtifact.value || diffuse.value || store.curatedSequence?.artifact || store.activeSequence?.artifact || store.artifacts[0]);
-const createDisplayArtifact = computed(() => transientPreview.value || selectedArtifact.value || recentCreateOutputs.value[0] || imageCandidates.value[0]);
+const activeArtifact = computed(() => {
+  if (transientPreview.value || selectedArtifact.value) return transientPreview.value || selectedArtifact.value;
+  if (canvasCleared.value) return null;
+  return diffuse.value || store.curatedSequence?.artifact || store.activeSequence?.artifact || store.artifacts[0];
+});
+const createDisplayArtifact = computed(() => transientPreview.value || selectedArtifact.value || (canvasCleared.value ? null : recentCreateOutputs.value[0] || imageCandidates.value[0]));
+const activeDimensions = ref<{ width: number; height: number } | null>(null);
+let dimensionLoadGeneration = 0;
 const exportIssues = computed(() => store.activeRun?.action_id === "project.export" && store.activeRun.status === "failed"
   ? store.activeRun.error?.issues || [store.activeRun.error?.message || store.activeRun.message] : []);
 const running = computed(() => Boolean(store.activeRun && ["queued", "running"].includes(store.activeRun.status)));
@@ -150,10 +161,50 @@ watch(stage, (next) => {
   if (workspaceReady && next === "normal" && selectedArtifact.value && ["Image", "FrameSeq", "SpriteSheet"].includes(selectedArtifact.value.kind)) void useForNormal(selectedArtifact.value);
 });
 watch(() => store.lastOutputsByAction["image.generate"], (outputs) => {
-  if (outputs?.length) selectedArtifact.value = outputs[0];
+  if (outputs?.length) {
+    canvasCleared.value = false;
+    selectedArtifact.value = outputs[0];
+  }
 });
 
-watch([stage, imageValues, animationValues, inputs, () => selectedArtifact.value?.id, () => store.activeSequence?.artifact.id], persistWorkspace, { deep: true });
+function readArtifactDimensions(artifact: ArtifactRef | null) {
+  const generation = ++dimensionLoadGeneration;
+  activeDimensions.value = null;
+  if (!artifact) return;
+  const metadata = artifact.meta || {};
+  const metadataWidth = Number(metadata.width ?? metadata.pixel_width);
+  const metadataHeight = Number(metadata.height ?? metadata.pixel_height);
+  if (Number.isFinite(metadataWidth) && metadataWidth > 0 && Number.isFinite(metadataHeight) && metadataHeight > 0) {
+    activeDimensions.value = { width: metadataWidth, height: metadataHeight };
+    return;
+  }
+  const coverId = typeof metadata.cover_artifact === "string" ? metadata.cover_artifact : "";
+  const source = artifact.media_type.startsWith("image/") || artifact.media_type.startsWith("video/")
+    ? artifact
+    : store.artifactById.get(coverId);
+  if (!source) return;
+  if (source.media_type.startsWith("image/")) {
+    const image = new window.Image();
+    image.onload = () => {
+      if (generation === dimensionLoadGeneration) activeDimensions.value = { width: image.naturalWidth, height: image.naturalHeight };
+    };
+    image.src = source.url;
+    return;
+  }
+  if (source.media_type.startsWith("video/")) {
+    const video = document.createElement("video");
+    video.onloadedmetadata = () => {
+      if (generation === dimensionLoadGeneration) activeDimensions.value = { width: video.videoWidth, height: video.videoHeight };
+      video.removeAttribute("src");
+      video.load();
+    };
+    video.src = source.url;
+  }
+}
+
+watch(() => activeArtifact.value?.id, () => readArtifactDimensions(activeArtifact.value || null), { immediate: true });
+
+watch([stage, imageValues, animationValues, inputs, canvasCleared, fitToCanvas, () => selectedArtifact.value?.id, () => store.activeSequence?.artifact.id], persistWorkspace, { deep: true });
 
 onMounted(async () => {
   const projectId = route.params.projectId as string | undefined;
@@ -166,7 +217,7 @@ onMounted(async () => {
 });
 watch(() => route.params.projectId, async (id) => { if (id && id !== store.currentProject?.id) { workspaceReady = false; await store.openProject(String(id)); await restoreWorkspace(); workspaceReady = true; } });
 watch(() => store.currentProject?.id, (id) => { if (id && route.params.projectId !== id) void router.replace(`/studio/${id}`); });
-onBeforeUnmount(() => { window.clearInterval(normalTimer); window.clearTimeout(hoverHideTimer); });
+onBeforeUnmount(() => { window.clearInterval(normalTimer); window.clearTimeout(hoverHideTimer); window.clearTimeout(artifactPreviewHideTimer); });
 
 function controlCopy(control: ActionControl) { return control.i18n[locale.value as Locale]; }
 function optionCopy(option: ActionControl["options"][number]) { return option.i18n[locale.value as Locale]; }
@@ -175,6 +226,15 @@ function toggleImageControl(id: string) {
   if (id === "prompt_compile" && imageValues.value[id] !== true) hideHoverPreview(true);
 }
 function toggleAnimationControl(id: string) { animationValues.value[id] = animationValues.value[id] !== true; }
+function forwardInspectorWheel(event: WheelEvent) {
+  const target = event.target as HTMLElement | null;
+  if (target?.closest("button, input, select, textarea, [contenteditable='true']")) return;
+  const stage = stageContent.value;
+  if (!stage || (!event.deltaX && !event.deltaY)) return;
+  event.preventDefault();
+  const multiplier = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? stage.clientHeight : 1;
+  stage.scrollBy({ left: event.deltaX * multiplier, top: event.deltaY * multiplier, behavior: "auto" });
+}
 function acceptedKinds(action: ActionDescriptor | undefined, slot: string): ArtifactKind[] {
   const declared = action?.accepts[slot]?.type;
   return declared ? (Array.isArray(declared) ? declared : [declared]) : [];
@@ -250,12 +310,38 @@ async function normalRun() {
 }
 async function redrawCurrent() { if (diffuse.value?.kind === "Image") await store.runAction("frame.redraw", { frame: diffuse.value.id }, { prompt: "", strength: 0.35, count: 4 }); }
 function selectArtifact(artifact: ArtifactRef) {
+  if (selectedArtifact.value?.id === artifact.id) {
+    selectedArtifact.value = null;
+    transientPreview.value = null;
+    canvasCleared.value = true;
+    return;
+  }
+  canvasCleared.value = false;
   selectedArtifact.value = artifact;
   transientPreview.value = null;
   if (artifact.kind === "FrameSeq" && stage.value === "animate") void store.loadSequence(artifact.id);
   if (stage.value === "create" && store.document?.type === "static" && artifact.kind === "Image") store.mutateDocument((document) => { if (document.static) document.static.primary = artifact.id; }, "select_primary");
 }
-function previewArtifact(artifact: ArtifactRef | null) { transientPreview.value = artifact; }
+function previewArtifact(artifact: ArtifactRef | null) {
+  window.clearTimeout(artifactPreviewHideTimer);
+  if (artifact) {
+    transientPreview.value = artifact;
+    return;
+  }
+  if (assetGalleryInside) return;
+  // Keep the last frame while the pointer crosses the small gaps between cards.
+  // The gallery itself clears it immediately when the pointer leaves the strip.
+  artifactPreviewHideTimer = window.setTimeout(() => { transientPreview.value = null; }, 220);
+}
+function enterArtifactGallery() {
+  assetGalleryInside = true;
+  window.clearTimeout(artifactPreviewHideTimer);
+}
+function clearArtifactPreview() {
+  window.clearTimeout(artifactPreviewHideTimer);
+  transientPreview.value = null;
+  assetGalleryInside = false;
+}
 function selectStage(id: string) { if (["create", "animate", "normal", "export"].includes(id)) stage.value = id as typeof stage.value; }
 function workspaceKey() { return store.currentProject ? `cooksprite.workspace.${store.currentProject.id}` : ""; }
 function persistWorkspace() {
@@ -265,6 +351,8 @@ function persistWorkspace() {
     imageValues: imageValues.value,
     animationValues: animationValues.value,
     inputs: inputs.value,
+    canvasCleared: canvasCleared.value,
+    fitToCanvas: fitToCanvas.value,
     selectedArtifactId: selectedArtifact.value?.id,
     activeSequenceId: store.activeSequence?.artifact.id,
     curatedSequenceId: store.curatedSequence?.artifact.id,
@@ -277,6 +365,8 @@ async function restoreWorkspace() {
   if (["create", "animate", "normal", "export"].includes(String(state.stage))) stage.value = state.stage as StudioStage;
   if (state.imageValues && typeof state.imageValues === "object") Object.assign(imageValues.value, state.imageValues);
   if (state.animationValues && typeof state.animationValues === "object") Object.assign(animationValues.value, state.animationValues);
+  canvasCleared.value = state.canvasCleared === true;
+  fitToCanvas.value = state.fitToCanvas === true;
   const storedInputs = state.inputs && typeof state.inputs === "object" ? state.inputs as Record<string, string | string[]> : {};
   inputs.value = Object.fromEntries(Object.entries(storedInputs).flatMap(([slot, value]) => {
     const ids = (Array.isArray(value) ? value : [value]).map(String).filter((id) => Boolean(store.artifactById.get(id)));
@@ -287,6 +377,7 @@ async function restoreWorkspace() {
     || store.artifacts.find((item) => item.kind === "Image" && item.meta.action_id === "image.generate")
     || createArtifacts.value[0]
     || null;
+  if (canvasCleared.value) selectedArtifact.value = null;
   const curated = store.artifacts.find((item) => item.id === String(state.curatedSequenceId || "") && item.kind === "FrameSeq")
     || store.artifacts.find((item) => item.kind === "FrameSeq" && item.meta.role === "curated_sequence");
   if (curated) await store.loadCuratedSequence(curated.id).catch(() => undefined);
@@ -312,6 +403,7 @@ async function applyRouteIntent() {
 }
 function useAsReference(artifact: ArtifactRef) {
   if (artifact.kind !== "Image") return;
+  canvasCleared.value = false;
   selectedArtifact.value = artifact;
   inputs.value.reference = [artifact.id];
   stage.value = "create";
@@ -324,6 +416,7 @@ function removeReference(id: string) {
 function clearReference() { delete inputs.value.reference; }
 function useForAnimation(artifact: ArtifactRef) {
   if (artifact.kind !== "Image") return;
+  canvasCleared.value = false;
   selectedArtifact.value = artifact;
   inputs.value.character = artifact.id;
   stage.value = "animate";
@@ -338,6 +431,7 @@ async function loadNormalSequence(id: string) {
 }
 async function useForNormal(artifact: ArtifactRef) {
   if (!["Image", "FrameSeq", "SpriteSheet"].includes(artifact.kind)) return;
+  canvasCleared.value = false;
   selectedArtifact.value = artifact;
   inputs.value.source = artifact.id;
   stage.value = "normal";
@@ -370,7 +464,6 @@ function scheduleNormalPlayback() {
 }
 function toggleNormalPlayback() { normalPlaying.value = !normalPlaying.value; scheduleNormalPlayback(); }
 watch([normalPlaying, () => normalFrames.value.length], scheduleNormalPlayback);
-function setPivot(axis: "x" | "y", value: number) { store.mutateDocument((document) => { const pivot = document.static?.pivot || document.character?.pivot; if (pivot) pivot[axis] = value; }, "pivot_update"); }
 async function publish() { await store.publish(diffuse.value?.id); }
 async function exportPack(allow = false) { await store.exportPack(allow); }
 function downloadPack(artifact: ArtifactRef) { const anchor = document.createElement("a"); anchor.href = artifact.url; anchor.download = artifact.title || "sprite.cooksprite"; anchor.click(); }
@@ -384,7 +477,7 @@ function downloadPack(artifact: ArtifactRef) { const anchor = document.createEle
       <div v-if="store.runtimeStatus !== 'ready'" class="runtime-warning" role="status"><Warning :size="18" weight="fill" /><span>{{ $t("studio.noRuntime") }} <b>{{ $t(`common.${store.runtimeStatus}`) }}</b></span><RouterLink to="/settings">{{ $t("common.setup") }}<ArrowRight :size="15" /></RouterLink></div>
       <RunStatusPanel v-if="store.activeRun" :run="store.activeRun" />
 
-      <div class="studio-stage-content">
+      <div ref="stageContent" class="studio-stage-content">
         <template v-if="stage === 'create'">
           <section v-if="imageAction" class="creation-deck">
             <div class="creation-layout"><div class="creation-fields"><div class="action-heading"><span class="eyebrow">ACTION · IMAGE.GENERATE</span><h1>{{ imageAction.i18n[locale as Locale].name }}</h1><p>{{ imageAction.i18n[locale as Locale].description }}</p></div><div class="prompt-field"><label for="prompt">{{ $t("studio.promptLabel") }}</label><textarea id="prompt" :value="String(imageValues.prompt || '')" :placeholder="$t('studio.prompt')" rows="3" @input="imageValues.prompt = ($event.target as HTMLTextAreaElement).value"></textarea><span>{{ String(imageValues.prompt || '').length }}</span></div><aside class="artifact-input-panel image-reference-panel"><DropTarget clearable multiple :max-files="4" :accepts="acceptedKinds(imageAction, 'reference')" :artifact="referenceArtifacts[0]" :label="referenceArtifacts.length ? `${referenceArtifacts.length}/4 ${$t('studio.selectedReference')}` : $t('studio.drop')" :reason="$t('studio.referenceReason')" @artifact="acceptArtifact('reference', $event)" @clear="clearReference" @files="importFiles($event, 'reference')" /><div v-if="referenceArtifacts.length" class="reference-list"><div v-for="(artifact, index) in referenceArtifacts" :key="artifact.id" class="reference-item"><span>{{ index + 1 }}</span><ArtifactVisual :artifact="artifact" :draggable="false" /><strong>{{ artifact.title || artifact.id.slice(0, 10) }}</strong><button class="text-button" type="button" :aria-label="`${$t('common.clear')} ${artifact.title || artifact.id}`" @click="removeReference(artifact.id)">×</button></div></div></aside><button v-if="imageAction.controls.find(item => item.id === 'prompt_compile')" type="button" class="prompt-compiler-toggle" :class="{ active: imageValues.prompt_compile === true }" :aria-pressed="imageValues.prompt_compile === true" @click="toggleImageControl('prompt_compile')"><span class="toggle-track" aria-hidden="true"><i></i></span><span class="control-copy"><b>{{ controlCopy(imageAction.controls.find(item => item.id === 'prompt_compile')!).name }}</b><small>{{ controlCopy(imageAction.controls.find(item => item.id === 'prompt_compile')!).description }}</small></span></button><div class="control-stack"><template v-for="control in imageAction.controls.filter(item => !item.advanced && item.id === 'category')" :key="control.id"><div v-if="control.type === 'select'" class="segmented-control" :class="{ 'is-disabled': imageValues.prompt_compile !== true }"><span class="control-copy"><b>{{ controlCopy(control).name }}</b><small>{{ controlCopy(control).description }}</small></span><div><button v-for="option in control.options" :key="option.id" :disabled="imageValues.prompt_compile !== true" :class="{ active: imageValues[control.id] === option.id }" @mouseenter="imageValues.prompt_compile === true && showHoverPreview($event, option.example, optionCopy(option).name, optionCopy(option).description, option.id)" @focus="imageValues.prompt_compile === true && showHoverPreview($event, option.example, optionCopy(option).name, optionCopy(option).description, option.id)" @mouseleave="hideHoverPreview()" @blur="hideHoverPreview()" @click="imageValues[control.id] = option.id">{{ optionCopy(option).name }}</button></div></div><button v-else-if="control.type === 'toggle'" type="button" class="prompt-compiler-toggle" :class="{ active: imageValues[control.id] === true }" :aria-pressed="imageValues[control.id] === true" @click="toggleImageControl(control.id)"><span class="toggle-track" aria-hidden="true"><i></i></span><span class="control-copy"><b>{{ controlCopy(control).name }}</b><small>{{ controlCopy(control).description }}</small></span></button><label v-else-if="control.type === 'number'" class="inline-control"><span>{{ controlCopy(control).name }}</span><input v-model.number="imageValues[control.id]" type="number" :min="control.min" :max="control.max" :step="control.step" /></label></template><ImageStyleCameraControls :style-control="imageAction.controls.find(item => item.id === 'style')" :camera-control="imageAction.controls.find(item => item.id === 'camera')" :values="imageValues" /><div class="image-size-count-row"><label v-for="control in imageAction.controls.filter(item => item.id === 'resolution' || item.id === 'count')" :key="control.id" class="prompt-select-field"><span>{{ controlCopy(control).name }}</span><small>{{ controlCopy(control).description }}</small><select v-model="imageValues[control.id]" :aria-label="controlCopy(control).name"><option v-for="option in control.options" :key="option.id" :value="option.id">{{ optionCopy(option).name }}</option></select></label></div><template v-for="control in imageAction.controls.filter(item => !item.advanced && item.id !== 'prompt' && item.id !== 'prompt_compile' && item.id !== 'category' && item.id !== 'resolution' && item.id !== 'count' && (item.id !== 'style' || imageValues.category !== 'character') && item.id !== 'camera')" :key="control.id"><div v-if="control.type === 'select'" class="segmented-control" :class="{ 'is-disabled': imageValues.prompt_compile !== true }"><span class="control-copy"><b>{{ controlCopy(control).name }}</b><small>{{ controlCopy(control).description }}</small></span><div><button v-for="option in control.options" :key="option.id" :disabled="imageValues.prompt_compile !== true" :class="{ active: imageValues[control.id] === option.id }" @mouseenter="imageValues.prompt_compile === true && showHoverPreview($event, option.example, optionCopy(option).name, optionCopy(option).description, option.id)" @focus="imageValues.prompt_compile === true && showHoverPreview($event, option.example, optionCopy(option).name, optionCopy(option).description, option.id)" @mouseleave="hideHoverPreview()" @blur="hideHoverPreview()" @click="imageValues[control.id] = option.id">{{ optionCopy(option).name }}</button></div></div><button v-else-if="control.type === 'toggle'" type="button" class="prompt-compiler-toggle" :class="{ active: imageValues[control.id] === true }" :aria-pressed="imageValues[control.id] === true" @click="toggleImageControl(control.id)"><span class="toggle-track" aria-hidden="true"><i></i></span><span class="control-copy"><b>{{ controlCopy(control).name }}</b><small>{{ controlCopy(control).description }}</small></span></button><label v-else-if="control.type === 'number'" class="inline-control"><span>{{ controlCopy(control).name }}</span><input v-model.number="imageValues[control.id]" type="number" :min="control.min" :max="control.max" :step="control.step" /></label></template></div><div class="model-row"><label>{{ $t("studio.model") }}<select v-model="imageValues.model" :disabled="!imageAction.models.length"><option v-if="!imageAction.models.length" value="">{{ $t("studio.noModel") }}</option><option v-for="model in imageAction.models" :key="model.id" :value="model.id">{{ model.label }}</option></select></label><button class="text-button" :aria-expanded="showAdvanced" @click="showAdvanced = !showAdvanced"><SlidersHorizontal :size="17" />{{ $t("common.advanced") }}<CaretDown :size="14" /></button></div><div v-if="showAdvanced" class="advanced-grid"><template v-for="control in imageAction.controls.filter(item => item.advanced)" :key="control.id"><label v-if="control.type === 'range'"><span>{{ controlCopy(control).name }} <b>{{ imageValues[control.id] }}</b></span><input v-model.number="imageValues[control.id]" type="range" :min="control.min" :max="control.max" :step="control.step" /></label><label v-else-if="control.type === 'seed' || control.type === 'number'"><span>{{ controlCopy(control).name }}</span><input v-model.number="imageValues[control.id]" type="number" :min="control.min" :max="control.max" /></label></template></div></div><ImageToolsBench /></div>
@@ -392,8 +485,8 @@ function downloadPack(artifact: ArtifactRef) { const anchor = document.createEle
           </section>
           <section v-if="recentCreateOutputs.length" class="run-results panel"><header><div><span class="eyebrow">{{ $t('studio.currentRun') }}</span><strong>{{ $t('studio.chooseResult') }}</strong></div><small>{{ recentCreateOutputs.length }} {{ $t('studio.results') }}</small></header><div class="artifact-strip"><ArtifactCard v-for="artifact in recentCreateOutputs" :key="artifact.id" :artifact="artifact" :selected="selectedArtifact?.id === artifact.id" compact @select="selectArtifact" @preview="previewArtifact" /></div></section>
           <section v-if="selectedArtifact?.kind === 'Image'" class="continue-bar" :aria-label="$t('studio.continueCreating')"><div class="continue-preview checker"><ArtifactVisual :artifact="selectedArtifact" :draggable="false" /></div><div><span class="eyebrow">{{ $t('studio.nextStep') }}</span><strong>{{ selectedArtifact.title || selectedArtifact.id.slice(0, 14) }}</strong></div><button class="arcade-button" type="button" @click="useAsReference(selectedArtifact)">{{ $t('studio.useReference') }}</button><button class="arcade-button primary" type="button" @click="useForAnimation(selectedArtifact)"><FilmStrip :size="17" />{{ $t('studio.makeAnimation') }}<ArrowRight :size="16" /></button><button class="arcade-button" type="button" @click="useForNormal(selectedArtifact)"><Sparkle :size="17" />{{ $t('studio.makeNormal') }}</button></section>
-          <section class="canvas-workspace create-canvas"><div class="canvas-head"><span class="eyebrow">{{ $t("studio.canvas") }}</span><div class="zoom-controls"><span class="canvas-fit">{{ $t("studio.fit") }}</span></div></div><div class="sprite-canvas checker" :class="{ empty: !createDisplayArtifact }"><ArtifactVisual v-if="createDisplayArtifact" :artifact="createDisplayArtifact" /><div v-else class="canvas-empty"><UploadSimple :size="40" /><strong>{{ $t("studio.canvasEmpty") }}</strong><span>{{ $t("studio.transparentNote") }}</span></div><span class="canvas-origin"><i></i>{{ $t("studio.pivot") }}</span></div></section>
-          <section class="asset-dock"><header><div class="dock-tabs"><button class="active">{{ $t("studio.projectStills") }} <b>{{ createArtifacts.length }}</b></button></div><button class="text-button" @click="importInput?.click()"><Plus :size="16" />{{ $t("common.import") }}</button><input ref="importInput" class="visually-hidden" type="file" aria-label="Import project still" accept="image/png,image/jpeg,image/webp,image/svg+xml,image/gif,video/mp4,video/webm" @change="importFiles([...(($event.target as HTMLInputElement).files || [])])" /></header><div class="artifact-strip"><ArtifactCard v-for="artifact in createArtifacts" :key="artifact.id" :artifact="artifact" :selected="selectedArtifact?.id === artifact.id" compact @select="selectArtifact" @preview="previewArtifact" /><DropTarget v-if="!createArtifacts.length" :accepts="['Image','SpriteSheet','Video']" :label="$t('studio.canvasEmpty')" @files="importFiles" /></div></section>
+          <section class="canvas-workspace create-canvas"><div class="canvas-head"><span class="eyebrow">{{ $t("studio.canvas") }}</span><div class="zoom-controls"><button type="button" class="canvas-fit" :class="{ active: fitToCanvas }" :aria-pressed="fitToCanvas" @click="fitToCanvas = !fitToCanvas">{{ $t("studio.fit") }}</button></div></div><div class="sprite-canvas checker" :class="{ empty: !createDisplayArtifact, 'fit-to-canvas': fitToCanvas }"><ArtifactVisual v-if="createDisplayArtifact" :artifact="createDisplayArtifact" /><div v-else class="canvas-empty"><UploadSimple :size="40" /><strong>{{ $t("studio.canvasEmpty") }}</strong><span>{{ $t("studio.transparentNote") }}</span></div><span v-if="createDisplayArtifact" class="canvas-origin"><i></i>{{ $t("studio.pivot") }}</span></div></section>
+          <section class="asset-dock" @mouseenter="enterArtifactGallery" @mouseleave="clearArtifactPreview"><header><div class="dock-tabs"><button class="active">{{ $t("studio.projectStills") }} <b>{{ createArtifacts.length }}</b></button></div><button class="text-button" @click="importInput?.click()"><Plus :size="16" />{{ $t("common.import") }}</button><input ref="importInput" class="visually-hidden" type="file" aria-label="Import project still" accept="image/png,image/jpeg,image/webp,image/svg+xml,image/gif,video/mp4,video/webm" @change="importFiles([...(($event.target as HTMLInputElement).files || [])])" /></header><div class="artifact-strip"><ArtifactCard v-for="artifact in createArtifacts" :key="artifact.id" :artifact="artifact" :selected="selectedArtifact?.id === artifact.id" compact @select="selectArtifact" @preview="previewArtifact" /><DropTarget v-if="!createArtifacts.length" :accepts="['Image','SpriteSheet','Video']" :label="$t('studio.canvasEmpty')" @files="importFiles" /></div></section>
         </template>
 
         <template v-else-if="stage === 'animate'">
@@ -410,7 +503,7 @@ function downloadPack(artifact: ArtifactRef) { const anchor = document.createEle
       </div>
     </section>
 
-    <aside class="studio-inspector"><header class="inspector-tabs"><button :class="{ active: inspectorTab === 'properties' }" @click="inspectorTab = 'properties'">{{ $t("studio.properties") }}</button><button :class="{ active: inspectorTab === 'lineage' }" @click="inspectorTab = 'lineage'">{{ $t("studio.lineage") }}</button></header><div v-if="inspectorTab === 'properties'" class="inspector-body"><template v-if="activeArtifact"><div class="inspector-preview checker"><ArtifactVisual :artifact="activeArtifact" animated /></div><span class="eyebrow">{{ activeArtifact.kind }}</span><h2>{{ activeArtifact.title || activeArtifact.id.slice(0, 14) }}</h2><dl><dt>ARTIFACT</dt><dd>{{ activeArtifact.id }}</dd><dt>SIZE</dt><dd>{{ (activeArtifact.size / 1024).toFixed(1) }} KB</dd><dt>ACTION</dt><dd>{{ activeArtifact.meta.action_id || 'import' }}</dd></dl></template><template v-else><div class="inspector-empty"><ImageSquare :size="34" /><p>{{ $t("studio.inspectorEmpty") }}</p></div></template><div v-if="store.document" class="pivot-editor"><h3>{{ $t("studio.projectPivot") }}</h3><div><label>X<input type="number" step="0.01" :value="store.document.static?.pivot.x ?? store.document.character?.pivot.x ?? 0.5" @change="setPivot('x', Number(($event.target as HTMLInputElement).value))" /></label><label>Y<input type="number" step="0.01" :value="store.document.static?.pivot.y ?? store.document.character?.pivot.y ?? 1" @change="setPivot('y', Number(($event.target as HTMLInputElement).value))" /></label></div></div></div><div v-else class="inspector-body lineage-list"><article v-for="(entry, index) in [...(store.document?.history || [])].reverse().slice(0, 30)" :key="index"><i></i><div><strong>{{ entry.operation }}</strong><span>{{ entry.at }}</span></div></article><p v-if="!store.document?.history.length" class="muted">{{ $t("studio.historyEmpty") }}</p><div class="lineage-actions"><button class="arcade-button" :disabled="!store.undoStack.length" @click="store.undo">{{ $t("studio.undo") }}</button><button class="arcade-button" :disabled="!store.redoStack.length" @click="store.redo">{{ $t("studio.redo") }}</button></div></div><footer v-if="stage === 'export'" class="inspector-footer"><button class="arcade-button" :disabled="!diffuse" @click="publish"><Check :size="17" />{{ $t("common.publish") }}</button></footer></aside>
+    <aside class="studio-inspector" @wheel="forwardInspectorWheel"><header class="inspector-tabs"><button :class="{ active: inspectorTab === 'properties' }" @click="inspectorTab = 'properties'">{{ $t("studio.properties") }}</button><button :class="{ active: inspectorTab === 'lineage' }" @click="inspectorTab = 'lineage'">{{ $t("studio.lineage") }}</button></header><div v-if="inspectorTab === 'properties'" class="inspector-body"><template v-if="activeArtifact"><div class="inspector-preview checker"><ArtifactVisual :artifact="activeArtifact" animated /></div><span class="eyebrow">{{ activeArtifact.kind }}</span><h2>{{ activeArtifact.title || activeArtifact.id.slice(0, 14) }}</h2><dl><dt>ARTIFACT</dt><dd>{{ activeArtifact.id }}</dd><dt>SIZE</dt><dd>{{ (activeArtifact.size / 1024).toFixed(1) }} KB</dd><dt>RESOLUTION</dt><dd>{{ activeDimensions ? `${activeDimensions.width} × ${activeDimensions.height}` : "—" }}</dd><dt>ACTION</dt><dd>{{ activeArtifact.meta.action_id || 'import' }}</dd></dl></template><template v-else><div class="inspector-empty"><ImageSquare :size="34" /><p>{{ $t("studio.inspectorEmpty") }}</p></div></template></div><div v-else class="inspector-body lineage-list"><article v-for="(entry, index) in [...(store.document?.history || [])].reverse().slice(0, 30)" :key="index"><i></i><div><strong>{{ entry.operation }}</strong><span>{{ entry.at }}</span></div></article><p v-if="!store.document?.history.length" class="muted">{{ $t("studio.historyEmpty") }}</p><div class="lineage-actions"><button class="arcade-button" :disabled="!store.undoStack.length" @click="store.undo">{{ $t("studio.undo") }}</button><button class="arcade-button" :disabled="!store.redoStack.length" @click="store.redo">{{ $t("studio.redo") }}</button></div></div><footer v-if="stage === 'export'" class="inspector-footer"><button class="arcade-button" :disabled="!diffuse" @click="publish"><Check :size="17" />{{ $t("common.publish") }}</button></footer></aside>
   </div>
   <Teleport to="body">
     <aside v-if="hoverPreview" class="hover-example" :class="`motion-${hoverPreview.motion}`" :style="{ left: `${hoverPreview.x}px`, top: `${hoverPreview.y}px` }" role="tooltip" @mouseenter="keepHoverPreview" @mouseleave="hideHoverPreview()" @dragstart.capture="keepHoverPreview" @dragend.capture="hideHoverPreview(true)">

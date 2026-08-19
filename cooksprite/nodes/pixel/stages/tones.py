@@ -75,7 +75,11 @@ def extract_tone_roles(evidence: CellEvidence, silhouette: np.ndarray, strokes: 
     chroma = np.hypot(evidence.lab[..., 1], evidence.lab[..., 2])
     emission = highlight & (chroma >= 0.105) & (evidence.highlight >= 0.70)
     roles[emission] = int(ToneRole.EMISSION)
-    roles[strokes] = int(ToneRole.OUTLINE)
+    # Keep a detected highlight role ahead of the generic stroke role.  A
+    # bright metal edge or eye highlight can occupy the same logical cell as
+    # an internal contour; turning the whole cell into OUTLINE here would
+    # remove the only palette anchor that can preserve that detail.
+    roles[strokes & ~highlight] = int(ToneRole.OUTLINE)
     protect = evidence.protect | highlight | strokes
     counts = {role.name.lower(): int(np.count_nonzero(roles == int(role))) for role in ToneRole}
     return ToneRoleMap(roles, highlight, protect, counts)

@@ -180,5 +180,9 @@ but only an explicit node installation may modify their environment.
 - No user accounts in v0.1; use trusted localhost or private networking.
 - Do not commit secrets, models, generated outputs, `.env`, `.agent-os`, or
   `.local`.
+- SQLite is a current-state metadata store by default: write the latest state
+  in place, keep only what is needed for current operation, and do not append
+  unbounded snapshots, events, or history. Any required history must be an
+  explicitly bounded, separately designed feature with a retention policy.
 - Preserve user changes. Do not commit, push, rewrite history, or publish
   packages without explicit permission.

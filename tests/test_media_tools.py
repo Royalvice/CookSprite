@@ -82,6 +82,36 @@ def test_pixel_adapter_is_deterministic_and_keeps_batch_mask():
     assert snapped_mask.shape == snapped_image.shape[:3]
 
 
+def test_pixel_palette_detail_wins_over_forced_outline():
+    pytest.importorskip("cv2", reason="pixel algorithm dependencies are ComfyUI-only")
+    from cooksprite.nodes.pixel.color import srgb_to_oklab
+    from cooksprite.nodes.pixel.stages.palette import PaletteBuildResult, map_palette
+
+    colors = np.asarray(
+        [
+            (0.03, 0.03, 0.03),
+            (0.92, 0.92, 0.92),
+        ],
+        dtype=np.float32,
+    )
+    palette = PaletteBuildResult(
+        colors,
+        srgb_to_oklab(colors),
+        outline_index=0,
+        fixed_count=2,
+        inertia=0.0,
+        receipt={},
+    )
+    cell_lab = palette.lab[1][None, None, :]
+    alpha = np.ones((1, 1), dtype=np.float32)
+    strokes = np.ones((1, 1), dtype=bool)
+    details = np.ones((1, 1), dtype=bool)
+
+    labels, _ = map_palette(cell_lab, alpha, palette, strokes, details)
+
+    assert int(labels[0, 0]) == 1
+
+
 def test_store_png_preserves_official_rgba_output():
     class FakeTensor:
         def __init__(self, value):

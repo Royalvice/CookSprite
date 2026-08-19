@@ -126,11 +126,26 @@ def build_palette(evidences: list[CellEvidence], tone_maps: list[ToneRoleMap], s
     )
 
 
-def map_palette(cell_lab: np.ndarray, alpha: np.ndarray, palette: PaletteBuildResult, strokes: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def map_palette(
+    cell_lab: np.ndarray,
+    alpha: np.ndarray,
+    palette: PaletteBuildResult,
+    strokes: np.ndarray,
+    detail_mask: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Map cells to the shared palette without overwriting protected details.
+
+    ``strokes`` is an intentional black/dark contour overlay.  It must not be
+    allowed to overwrite compact source details such as eyes, mouths, or
+    specular metal pixels; those cells still use normal palette distance
+    mapping and therefore retain their source-relative tone.
+    """
     distance = np.sum((cell_lab[..., None, :] - palette.lab[None, None, :, :]) ** 2, axis=3)
     labels = np.argmin(distance, axis=2).astype(np.int16)
     labels[alpha <= 0.0] = -1
-    labels[strokes & (alpha > 0.0)] = palette.outline_index
+    if detail_mask is None:
+        detail_mask = np.zeros_like(strokes, dtype=bool)
+    labels[strokes & ~detail_mask & (alpha > 0.0)] = palette.outline_index
     return labels, distance
 
 
