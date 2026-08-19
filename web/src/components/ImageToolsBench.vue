@@ -12,11 +12,35 @@ type ToolMode = "cutout" | "pixelize";
 
 const store = useStudioStore();
 const { locale } = useI18n();
-const mode = ref<ToolMode>("cutout");
+const TOOL_STATE_KEY = "cooksprite.image-tools.state.v1";
+const DEFAULT_PIXEL_VALUES: Record<string, unknown> = {
+  target_size: "128",
+  palette_budget: "32",
+  outline: false,
+  outline_color: "#000000",
+};
+
+function readToolState(): { mode?: ToolMode; values?: Record<string, unknown> } {
+  if (typeof window === "undefined") return {};
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(TOOL_STATE_KEY) || "{}");
+    if (!parsed || typeof parsed !== "object") return {};
+    const state = parsed as { mode?: unknown; values?: unknown };
+    return {
+      mode: state.mode === "cutout" || state.mode === "pixelize" ? state.mode : undefined,
+      values: state.values && typeof state.values === "object" ? state.values as Record<string, unknown> : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+const savedToolState = readToolState();
+const mode = ref<ToolMode>(savedToolState.mode || "cutout");
 const source = ref<ArtifactRef | null>(null);
 const output = ref<ArtifactRef | null>(null);
 const error = ref("");
-const values = ref<Record<string, unknown>>({ target_size: 128, palette_budget: "32", outline: false, outline_color: "#000000" });
+const values = ref<Record<string, unknown>>({ ...DEFAULT_PIXEL_VALUES, ...(savedToolState.values || {}) });
 
 const actionId = computed(() => mode.value === "cutout" ? "image.cutout" : "image.pixelize");
 const action = computed(() => store.actions.find((item) => item.id === actionId.value));
@@ -53,24 +77,19 @@ function options(control: ActionControl): ActionOption[] {
 
 function fillDefaults(next = action.value) {
   if (!next) return;
-  if (mode.value === "cutout") {
-    delete values.value.target_size;
-    delete values.value.palette_budget;
-    delete values.value.outline;
-    delete values.value.outline_color;
-    delete values.value.target_width;
-    delete values.value.target_height;
-  }
   for (const control of next.controls) if (values.value[control.id] === undefined) values.value[control.id] = JSON.parse(JSON.stringify(control.default));
   if (mode.value === "pixelize") {
-    if (values.value.target_size === undefined) values.value.target_size = 128;
-    if (values.value.palette_budget === undefined) values.value.palette_budget = "32";
-    if (values.value.outline === undefined) values.value.outline = false;
-    if (values.value.outline_color === undefined) values.value.outline_color = "#000000";
+    for (const [id, defaultValue] of Object.entries(DEFAULT_PIXEL_VALUES)) {
+      if (values.value[id] === undefined) values.value[id] = defaultValue;
+    }
   }
 }
 
 watch(action, fillDefaults, { immediate: true });
+watch([mode, values], () => {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(TOOL_STATE_KEY, JSON.stringify({ mode: mode.value, values: values.value }));
+}, { deep: true });
 watch(() => store.lastOutputsByAction[actionId.value], (artifacts) => {
   if (artifacts?.length) output.value = artifacts[0];
 });
