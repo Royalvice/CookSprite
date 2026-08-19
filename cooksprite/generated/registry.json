@@ -2361,6 +2361,9 @@
             "background": {
               "type": "string"
             },
+            "camera_option": {
+              "type": "string"
+            },
             "camera_preset": {
               "type": "string"
             },
@@ -2413,7 +2416,7 @@
               "type": "integer"
             }
           },
-          "schema_hash": "858f78cd499067a8d3fdf872b542ddddc1797652ad324552cc704fe48efae8b2",
+          "schema_hash": "cc49e92c4b18ad4a58847d8365bd8012528f181971d4c8ecda04f421ccbc90e8",
           "source": "cooksprite",
           "title": "Compile a model-neutral Sprite prompt packet",
           "version": 1

@@ -16,6 +16,7 @@ _PARAMS = {
     "caption": {"type": "string"},
     "compile_prompt": {"type": "boolean"},
     "action": {"type": "string"},
+    "camera_option": {"type": "string"},
     "camera_preset": {"type": "string"},
     "orientation": {"type": "string"},
     "facing": {"type": "string"},

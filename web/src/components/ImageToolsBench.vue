@@ -181,11 +181,27 @@ function useOutput() {
       <label v-for="control in pixelControls" :key="control.id" :class="['tool-size-field', { 'tool-toggle-field': control.type === 'toggle' }]">
         <template v-if="control.type === 'toggle'">
           <span>{{ copy(control).name }}</span>
-          <input v-model="values[control.id]" type="checkbox" :aria-label="copy(control).name" />
+          <button
+            type="button"
+            class="tool-toggle-button"
+            :class="{ active: Boolean(values[control.id]) }"
+            role="switch"
+            :aria-checked="Boolean(values[control.id])"
+            :aria-label="copy(control).name"
+            @click="values[control.id] = !Boolean(values[control.id])"
+          >
+            {{ Boolean(values[control.id]) ? "ON" : "OFF" }}
+          </button>
         </template>
         <template v-else-if="control.type === 'color'">
           <span>{{ copy(control).name }}</span>
-          <input v-model="values[control.id]" class="tool-color-input" type="color" :aria-label="copy(control).name" />
+          <input
+            v-model="values[control.id]"
+            class="tool-color-input"
+            type="color"
+            :disabled="!Boolean(values.outline)"
+            :aria-label="copy(control).name"
+          />
         </template>
         <template v-else>
           <span>{{ copy(control).name }}</span>
