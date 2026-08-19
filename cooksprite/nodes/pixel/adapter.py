@@ -77,6 +77,8 @@ def pixelize_batch(
     padding_y: int = -1,
     variants: bool = False,
     target_size: int | None = None,
+    outline: bool = True,
+    outline_color: str = "#000000",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compile one shared deterministic pixelization for a ComfyUI batch."""
 
@@ -97,7 +99,14 @@ def pixelize_batch(
     # the flag is accepted for graph compatibility without creating hidden
     # side effects or unreturned artifacts.
     del variants
-    result = compile_continuous(frames, [None] * len(frames), target, profile)
+    result = compile_continuous(
+        frames,
+        [None] * len(frames),
+        target,
+        profile,
+        bool(outline),
+        str(outline_color),
+    )
     return _outputs(result.frames)
 
 

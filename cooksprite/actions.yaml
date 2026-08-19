@@ -269,17 +269,18 @@ actions:
           - {id: "32", i18n: {zh-CN: {name: 32 色}, en: {name: 32 colors}}}
           - {id: "64", i18n: {zh-CN: {name: 64 色}, en: {name: 64 colors}}}
           - {id: "128", i18n: {zh-CN: {name: 128 色}, en: {name: 128 colors}}}
-      - id: detail_level
-        type: select
-        default: production
+      - id: outline
+        type: toggle
+        default: false
         i18n:
-          zh-CN: {name: 细节级别, description: 控制轮廓和局部细节的保留程度}
-          en: {name: Detail, description: Control contour and local-detail preservation}
-        options:
-          - {id: graphic, i18n: {zh-CN: {name: 简洁}, en: {name: Graphic}}}
-          - {id: balanced, i18n: {zh-CN: {name: 平衡}, en: {name: Balanced}}}
-          - {id: production, i18n: {zh-CN: {name: 标准}, en: {name: Production}}}
-          - {id: fidelity, i18n: {zh-CN: {name: 细节}, en: {name: Fidelity}}}
+          zh-CN: {name: 描边, description: 开启后使用黑边算法；关闭后保留更多眼睛和高光细节}
+          en: {name: Outline, description: Use the outline algorithm; turn off to preserve more small highlights}
+      - id: outline_color
+        type: color
+        default: "#000000"
+        i18n:
+          zh-CN: {name: 描边颜色, description: 描边开启时使用的颜色}
+          en: {name: Outline color, description: Color used when outline is enabled}
 
   - id: image.cutout
     i18n:

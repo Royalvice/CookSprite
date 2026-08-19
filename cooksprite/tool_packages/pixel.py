@@ -29,10 +29,13 @@ MANIFEST = ToolPackageManifest(
                 "target_width": {"type": "integer", "min": 16, "max": 512},
                 "target_height": {"type": "integer", "min": 16, "max": 512},
                 "profile": {"type": "string", "enum": PIXEL_PROFILES},
+                "outline": {"type": "boolean"},
+                "outline_color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
                 "palette_budget": {"type": "integer", "min": 0, "max": 256},
                 "padding_x": {"type": "integer", "min": -1, "max": 256},
                 "padding_y": {"type": "integer", "min": -1, "max": 256},
                 "variants": {"type": "boolean"},
+                "enabled": {"type": "boolean"},
             },
         ),
         tool(

@@ -83,6 +83,8 @@ CORE_NODES = {
             "target_width": "INT",
             "target_height": "INT",
             "profile": "STRING",
+            "outline": "BOOLEAN",
+            "outline_color": "STRING",
             "palette_budget": "INT",
             "padding_x": "INT",
             "padding_y": "INT",
@@ -734,13 +736,14 @@ def test_pixelize_and_cutout_actions_compile_to_their_nodes(tmp_path):
         (
             "image.pixelize",
             "CS_Pixelize",
-            {"target_size": 32, "palette_budget": "32", "detail_level": "production"},
+            {"target_size": 32, "palette_budget": "32", "outline": False, "outline_color": "#000000"},
         ),
     ):
         action = client.get(f"/api/v1/actions/{action_id}").json()
         assert action["available"] is True
         control_ids = {control["id"] for control in action["controls"]}
-        assert {"target_size", "palette_budget", "detail_level"}.issubset(control_ids)
+        assert {"target_size", "palette_budget", "outline", "outline_color"}.issubset(control_ids)
+        assert "detail_level" not in control_ids
         assert not {"target_width", "target_height"}.intersection(control_ids)
         target_size = next(control for control in action["controls"] if control["id"] == "target_size")
         assert target_size["options_range"] == [16, 512, 16]

@@ -310,6 +310,8 @@ class CS_Pixelize:
                 # New Action graphs use one longest-edge size.  The legacy
                 # width/height ports remain for saved ComfyUI workflows.
                 "target_size": ("INT", {"default": 0, "min": 0, "max": 512}),
+                "outline": ("BOOLEAN", {"default": True}),
+                "outline_color": ("STRING", {"default": "#000000"}),
             },
         }
 
@@ -331,6 +333,8 @@ class CS_Pixelize:
         enabled=True,
         mask=None,
         target_size=0,
+        outline=True,
+        outline_color="#000000",
     ):
         if not enabled:
             passthrough_mask = mask
@@ -344,12 +348,14 @@ class CS_Pixelize:
             mask.detach().cpu().numpy() if mask is not None else None,
             int(target_width),
             int(target_height),
-            str(profile),
-            int(palette_budget),
-            int(padding_x),
-            int(padding_y),
-            bool(variants),
-            int(target_size) if int(target_size) > 0 else None,
+            profile=str(profile),
+            palette_budget=int(palette_budget),
+            padding_x=int(padding_x),
+            padding_y=int(padding_y),
+            variants=bool(variants),
+            target_size=int(target_size) if int(target_size) > 0 else None,
+            outline=bool(outline),
+            outline_color=str(outline_color),
         )
         return (
             torch.from_numpy(output).to(device=image.device, dtype=image.dtype),

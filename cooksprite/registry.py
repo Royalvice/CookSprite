@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -186,6 +187,10 @@ class CookSpriteRegistry:
                     raise RegistryError(f"{key} must be an integer option") from exc
                 if any(item < start or item > stop or (item - start) % step for item in numeric):
                     raise RegistryError(f"{key} contains an unsupported option")
+            if control.type == "color" and (
+                not isinstance(value, str) or re.fullmatch(r"#[0-9A-Fa-f]{6}", value) is None
+            ):
+                raise RegistryError(f"{key} must be a six-digit RGB hex color")
             if isinstance(value, (int, float)):
                 if control.min is not None and value < control.min:
                     raise RegistryError(f"{key} is below minimum {control.min}")

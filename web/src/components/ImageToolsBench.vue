@@ -16,7 +16,7 @@ const mode = ref<ToolMode>("cutout");
 const source = ref<ArtifactRef | null>(null);
 const output = ref<ArtifactRef | null>(null);
 const error = ref("");
-const values = ref<Record<string, unknown>>({ target_size: 128, palette_budget: "32", detail_level: "production" });
+const values = ref<Record<string, unknown>>({ target_size: 128, palette_budget: "32", outline: false, outline_color: "#000000" });
 
 const actionId = computed(() => mode.value === "cutout" ? "image.cutout" : "image.pixelize");
 const action = computed(() => store.actions.find((item) => item.id === actionId.value));
@@ -24,7 +24,7 @@ const accepts = computed<ArtifactKind[]>(() => {
   const declared = action.value?.accepts.source?.type;
   return declared ? (Array.isArray(declared) ? declared : [declared]) : ["Image"];
 });
-const pixelControls = computed(() => action.value?.controls.filter((control) => ["target_size", "palette_budget", "detail_level"].includes(control.id)) || []);
+const pixelControls = computed(() => action.value?.controls.filter((control) => ["target_size", "palette_budget", "outline", "outline_color"].includes(control.id)) || []);
 // Keep mode-local state in the UI, but only send controls declared by the
 // active Action. This prevents pixelize values from leaking into cutout (and
 // keeps future Tool controls similarly isolated).
@@ -56,7 +56,8 @@ function fillDefaults(next = action.value) {
   if (mode.value === "cutout") {
     delete values.value.target_size;
     delete values.value.palette_budget;
-    delete values.value.detail_level;
+    delete values.value.outline;
+    delete values.value.outline_color;
     delete values.value.target_width;
     delete values.value.target_height;
   }
@@ -64,7 +65,8 @@ function fillDefaults(next = action.value) {
   if (mode.value === "pixelize") {
     if (values.value.target_size === undefined) values.value.target_size = 128;
     if (values.value.palette_budget === undefined) values.value.palette_budget = "32";
-    if (values.value.detail_level === undefined) values.value.detail_level = "production";
+    if (values.value.outline === undefined) values.value.outline = false;
+    if (values.value.outline_color === undefined) values.value.outline_color = "#000000";
   }
 }
 
@@ -176,11 +178,21 @@ function useOutput() {
     </div>
 
     <div v-if="mode === 'pixelize'" class="tool-bench-controls">
-      <label v-for="control in pixelControls" :key="control.id" class="tool-size-field">
-        <span>{{ copy(control).name }}</span>
-        <select v-model="values[control.id]">
-          <option v-for="option in options(control)" :key="option.id" :value="option.id">{{ option.i18n[locale as Locale].name }}</option>
-        </select>
+      <label v-for="control in pixelControls" :key="control.id" :class="['tool-size-field', { 'tool-toggle-field': control.type === 'toggle' }]">
+        <template v-if="control.type === 'toggle'">
+          <span>{{ copy(control).name }}</span>
+          <input v-model="values[control.id]" type="checkbox" :aria-label="copy(control).name" />
+        </template>
+        <template v-else-if="control.type === 'color'">
+          <span>{{ copy(control).name }}</span>
+          <input v-model="values[control.id]" class="tool-color-input" type="color" :aria-label="copy(control).name" />
+        </template>
+        <template v-else>
+          <span>{{ copy(control).name }}</span>
+          <select v-model="values[control.id]">
+            <option v-for="option in options(control)" :key="option.id" :value="option.id">{{ option.i18n[locale as Locale].name }}</option>
+          </select>
+        </template>
       </label>
     </div>
     <p v-if="error" class="tool-bench-error" role="alert">{{ error }}</p>

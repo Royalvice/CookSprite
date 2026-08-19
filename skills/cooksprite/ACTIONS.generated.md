@@ -10,7 +10,7 @@
 | `video.sample` | `video:Video` | `action`, `view`, `direction`, `sample_fps`, `max_frames` | `FrameSeq` |
 | `normal.generate` | `source:['Image', 'FrameSeq', 'SpriteSheet']` | `strength`, `flip_y` | `NormalMap` |
 | `image.views` | `source:Image` | - | `ImageBatch` |
-| `image.pixelize` | `source:Image` | `target_size`, `palette_budget`, `detail_level` | `Image` |
+| `image.pixelize` | `source:Image` | `target_size`, `palette_budget`, `outline`, `outline_color` | `Image` |
 | `image.cutout` | `source:Image` | - | `Image` |
 
 Project export is intentionally not an Action. Use `cspr project export`.

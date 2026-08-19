@@ -280,9 +280,12 @@ h2 { font-size: 21px; }
 .tool-output-empty span { max-width: 90px; font-size: 8px; line-height: 1.4; }
 .tool-output-link { justify-self: end; border: 0; background: transparent; color: var(--aux); padding: 3px 0; font-size: 8px; }
 .tool-output-link:hover { color: var(--text); }
-.tool-bench-controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: end; gap: 8px; border-top: 1px solid var(--line); padding-top: 9px; }
+.tool-bench-controls { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: end; gap: 8px; border-top: 1px solid var(--line); padding-top: 9px; }
 .tool-size-field { min-width: 0; flex: 1; display: grid; gap: 4px; color: var(--muted); font-size: 8px; }
 .tool-size-field select { min-width: 0; width: 100%; min-height: 32px; border: 1px solid var(--line); background: var(--bg); color: var(--text); padding: 5px 7px; }
+.tool-toggle-field { display: flex; align-items: center; justify-content: space-between; min-height: 32px; border: 1px solid var(--line); background: var(--bg); padding: 5px 8px; }
+.tool-toggle-field input { width: 16px; height: 16px; margin: 0; accent-color: var(--primary-strong); }
+.tool-color-input { width: 100%; height: 32px; min-height: 32px; border: 1px solid var(--line); background: var(--bg); padding: 3px; }
 .tool-bench-hint, .tool-bench-error { min-height: 28px; margin: 0; border-left: 2px solid var(--aux); background: color-mix(in srgb, var(--aux) 5%, var(--bg)); padding: 6px 8px; color: var(--muted); font-size: 8px; line-height: 1.45; }
 .tool-bench-error { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--bg)); color: var(--danger); overflow-wrap: anywhere; }
 .tool-bench-footer { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; border-top: 1px solid var(--line); padding-top: 10px; }

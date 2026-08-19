@@ -71,10 +71,20 @@ def _weighted_kmeans(values: np.ndarray, weights: np.ndarray, count: int, fixed:
     return centers, inertia
 
 
-def build_palette(evidences: list[CellEvidence], tone_maps: list[ToneRoleMap], silhouettes: list[np.ndarray], budget: int) -> PaletteBuildResult:
+def build_palette(
+    evidences: list[CellEvidence],
+    tone_maps: list[ToneRoleMap],
+    silhouettes: list[np.ndarray],
+    budget: int,
+    *,
+    preserve_highlights: bool = False,
+    outline_color: str | None = None,
+) -> PaletteBuildResult:
     values: list[np.ndarray] = []
     weights: list[np.ndarray] = []
     roles: list[np.ndarray] = []
+    highlights: list[np.ndarray] = []
+    highlight_weights: list[np.ndarray] = []
     for evidence, tones, silhouette in zip(evidences, tone_maps, silhouettes, strict=True):
         values.append(evidence.lab[silhouette])
         role_values = tones.roles[silhouette]
@@ -84,12 +94,21 @@ def build_palette(evidences: list[CellEvidence], tone_maps: list[ToneRoleMap], s
         role_weight *= 1.0 + evidence.feature[silhouette] * 1.25
         weights.append(role_weight)
         roles.append(role_values)
+        if preserve_highlights:
+            highlight = tones.highlight_mask & silhouette
+            if np.any(highlight):
+                highlights.append(evidence.lab[highlight])
+                highlight_weights.append((1.0 + evidence.feature[highlight] * 1.25).astype(np.float64))
     all_values = np.concatenate(values).astype(np.float32)
     all_weights = np.concatenate(weights).astype(np.float64)
     all_roles = np.concatenate(roles)
     fixed_values: list[np.ndarray] = []
     outline_values = all_values[np.isin(all_roles, (int(ToneRole.OUTLINE), int(ToneRole.DEEP_SHADOW)))]
-    if outline_values.size:
+    if outline_color is not None:
+        from ..color import hex_to_srgb
+
+        outline = srgb_to_oklab(hex_to_srgb(outline_color)[None, :])[0]
+    elif outline_values.size:
         outline = outline_values[int(np.argmin(outline_values[:, 0]))]
     else:
         outline = all_values[int(np.argmin(all_values[:, 0]))]
@@ -98,10 +117,16 @@ def build_palette(evidences: list[CellEvidence], tone_maps: list[ToneRoleMap], s
         selected = all_roles == int(role)
         if np.count_nonzero(selected) >= 1 and len(fixed_values) < min(5, budget):
             fixed_values.append(_medoid(all_values[selected], all_weights[selected]))
+    if preserve_highlights and highlights and len(fixed_values) < min(5, budget):
+        fixed_values.append(_medoid(np.concatenate(highlights), np.concatenate(highlight_weights)))
     fixed = np.stack(fixed_values).astype(np.float32)
     centers, inertia = _weighted_kmeans(all_values, all_weights, budget, fixed)
     srgb = oklab_to_srgb(centers)
     srgb_u8 = np.rint(np.clip(srgb, 0.0, 1.0) * 255.0).astype(np.uint8)
+    if outline_color is not None:
+        from ..color import hex_to_srgb
+
+        srgb_u8[0] = np.rint(hex_to_srgb(outline_color) * 255.0).astype(np.uint8)
     # Quantized duplicates are removed deterministically. The hard contract is
     # a maximum budget, not a requirement to invent exactly N colours.
     unique: list[np.ndarray] = []
@@ -121,6 +146,8 @@ def build_palette(evidences: list[CellEvidence], tone_maps: list[ToneRoleMap], s
             "requested_budget": budget,
             "actual_colors": len(srgb_final),
             "fixed_role_colors": len(fixed_values),
+            "preserve_highlights": preserve_highlights,
+            "outline_color": outline_color,
             "inertia": inertia,
         },
     )

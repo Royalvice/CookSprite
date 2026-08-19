@@ -6,6 +6,7 @@ Comfy graph. Only :mod:`cooksprite.compiler` performs that lowering.
 
 from __future__ import annotations
 
+import re
 import secrets
 from typing import Any
 
@@ -29,6 +30,7 @@ from .recipes import OFFICIAL_ALPHA_MODEL, Recipe, recipe_mode, recipe_variants
 from .store import Store
 
 IMAGE_RESOLUTIONS = (64, 128, 256, 512, 1024)
+_HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 
 def _image_resolution(value: Any) -> int:
@@ -39,6 +41,13 @@ def _image_resolution(value: Any) -> int:
     if resolution not in IMAGE_RESOLUTIONS:
         raise ValueError(f"resolution must be one of {IMAGE_RESOLUTIONS}")
     return resolution
+
+
+def _outline_color(value: Any) -> str:
+    color = str(value or "#000000").strip()
+    if _HEX_COLOR.fullmatch(color) is None:
+        raise ValueError("outline_color must be a six-digit RGB hex color")
+    return color.upper()
 
 
 def _core_image_workflow(
@@ -187,11 +196,13 @@ def _core_image_workflow(
                         "target_size": literal(128),
                         "target_width": literal(128),
                         "target_height": literal(128),
-                        "profile": literal("production"),
+                        "profile": literal("fidelity"),
                         "palette_budget": literal(0),
                         "padding_x": literal(-1),
                         "padding_y": literal(-1),
                         "variants": literal(False),
+                        "outline": literal(True),
+                        "outline_color": literal("#000000"),
                         "enabled": input_ref("pixel_enabled"),
                     },
                 ),
@@ -289,7 +300,8 @@ def _pixel_workflow(runtime_id: str, recipe: Recipe) -> WorkflowDefinition:
             "source": "Image",
             "target_size": "Number",
             "palette_budget": "Number",
-            "detail_level": "Text",
+            "outline": "Boolean",
+            "outline_color": "Text",
         },
         nodes=[
             ToolNode(
@@ -302,12 +314,14 @@ def _pixel_workflow(runtime_id: str, recipe: Recipe) -> WorkflowDefinition:
                     # ComfyUI node contracts; target_size takes precedence.
                     "target_width": literal(128),
                     "target_height": literal(128),
-                    "profile": input_ref("detail_level"),
+                    "profile": literal("fidelity"),
                     "palette_budget": input_ref("palette_budget"),
                     "padding_x": literal(-1),
                     "padding_y": literal(-1),
                     "variants": literal(False),
                     "enabled": literal(True),
+                    "outline": input_ref("outline"),
+                    "outline_color": input_ref("outline_color"),
                 },
             )
         ],
@@ -468,7 +482,8 @@ def bind_action_task(
         "resolution",
         "target_size",
         "palette_budget",
-        "detail_level",
+        "outline",
+        "outline_color",
         "flip_y",
         "columns",
         "rows",
@@ -556,7 +571,8 @@ def bind_action_task(
             "resolution": _image_resolution(values.get("resolution", 512)),
             "target_size": int(values.get("target_size", 128)),
             "palette_budget": int(values.get("palette_budget", 32)),
-            "detail_level": str(values.get("detail_level", "production")),
+            "outline": bool(values.get("outline", False)),
+            "outline_color": _outline_color(values.get("outline_color", "#000000")),
         }
     )
 

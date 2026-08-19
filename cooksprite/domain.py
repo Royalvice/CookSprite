@@ -244,7 +244,16 @@ class ActionOption(BaseModel):
 
 class ActionControl(BaseModel):
     id: str
-    type: Literal["select", "multi-select", "toggle", "range", "number", "text", "seed"]
+    type: Literal[
+        "select",
+        "multi-select",
+        "toggle",
+        "range",
+        "number",
+        "text",
+        "color",
+        "seed",
+    ]
     default: Any = None
     options: list[ActionOption] = Field(default_factory=list)
     # Compact numeric select support.  The API and Web projections can expand

@@ -2129,81 +2129,45 @@
         },
         {
           "advanced": false,
-          "default": "production",
+          "default": false,
           "i18n": {
             "en": {
-              "description": "Control contour and local-detail preservation",
-              "name": "Detail"
+              "description": "Use the outline algorithm; turn off to preserve more small highlights",
+              "name": "Outline"
             },
             "zh-CN": {
-              "description": "控制轮廓和局部细节的保留程度",
-              "name": "细节级别"
+              "description": "开启后使用黑边算法；关闭后保留更多眼睛和高光细节",
+              "name": "描边"
             }
           },
-          "id": "detail_level",
+          "id": "outline",
           "max": null,
           "min": null,
-          "options": [
-            {
-              "example": null,
-              "i18n": {
-                "en": {
-                  "description": "",
-                  "name": "Graphic"
-                },
-                "zh-CN": {
-                  "description": "",
-                  "name": "简洁"
-                }
-              },
-              "id": "graphic"
-            },
-            {
-              "example": null,
-              "i18n": {
-                "en": {
-                  "description": "",
-                  "name": "Balanced"
-                },
-                "zh-CN": {
-                  "description": "",
-                  "name": "平衡"
-                }
-              },
-              "id": "balanced"
-            },
-            {
-              "example": null,
-              "i18n": {
-                "en": {
-                  "description": "",
-                  "name": "Production"
-                },
-                "zh-CN": {
-                  "description": "",
-                  "name": "标准"
-                }
-              },
-              "id": "production"
-            },
-            {
-              "example": null,
-              "i18n": {
-                "en": {
-                  "description": "",
-                  "name": "Fidelity"
-                },
-                "zh-CN": {
-                  "description": "",
-                  "name": "细节"
-                }
-              },
-              "id": "fidelity"
-            }
-          ],
+          "options": [],
           "options_range": null,
           "step": null,
-          "type": "select"
+          "type": "toggle"
+        },
+        {
+          "advanced": false,
+          "default": "#000000",
+          "i18n": {
+            "en": {
+              "description": "Color used when outline is enabled",
+              "name": "Outline color"
+            },
+            "zh-CN": {
+              "description": "描边开启时使用的颜色",
+              "name": "描边颜色"
+            }
+          },
+          "id": "outline_color",
+          "max": null,
+          "min": null,
+          "options": [],
+          "options_range": null,
+          "step": null,
+          "type": "color"
         }
       ],
       "i18n": {
@@ -2575,6 +2539,16 @@
           ],
           "package_id": "pixel",
           "params_schema": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "outline": {
+              "type": "boolean"
+            },
+            "outline_color": {
+              "pattern": "^#[0-9A-Fa-f]{6}$",
+              "type": "string"
+            },
             "padding_x": {
               "max": 256,
               "min": -1,
@@ -2618,7 +2592,7 @@
               "type": "boolean"
             }
           },
-          "schema_hash": "3936f88a1e1e60e12204c79d10b50c43eb608dd6293faeb0408cb821fd25e282",
+          "schema_hash": "48c9c0abec256bde70c0d20d46f5ee083db7da2d2060d40f214f44d42f92002b",
           "source": "cooksprite",
           "title": "Pixelize with the deterministic CookSprite pixel compiler",
           "version": 1

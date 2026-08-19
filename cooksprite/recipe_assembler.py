@@ -98,7 +98,8 @@ def _task_inputs(recipe: Recipe, action_id: str, mode: str) -> dict[str, str]:
         "resolution": "Number",
         "target_size": "Number",
         "palette_budget": "Number",
-        "detail_level": "Text",
+        "outline": "Boolean",
+        "outline_color": "Text",
     }
     source_slot = _source_slot(action_id, mode)
     if source_slot and not any(name.startswith("reference_") for name in recipe.slots):
@@ -245,12 +246,14 @@ def assemble_recipe_workflow(
                     "target_size": input_ref("target_size"),
                     "target_width": literal(128),
                     "target_height": literal(128),
-                    "profile": input_ref("detail_level"),
+                    "profile": literal("fidelity"),
                     "palette_budget": input_ref("palette_budget"),
                     "padding_x": literal(-1),
                     "padding_y": literal(-1),
                     "variants": literal(False),
                     "enabled": input_ref("pixel_enabled"),
+                    "outline": literal(True),
+                    "outline_color": literal("#000000"),
                 },
             )
         )

@@ -13,7 +13,7 @@ export interface ActionInput { type: ArtifactKind | ArtifactKind[]; required: bo
 export interface ActionOption { id: string; i18n: Record<Locale, LocalizedText>; example?: ArtifactRef }
 export interface ActionControl {
   id: string;
-  type: "select" | "multi-select" | "toggle" | "range" | "number" | "text" | "seed";
+  type: "select" | "multi-select" | "toggle" | "range" | "number" | "text" | "color" | "seed";
   default: unknown;
   options: ActionOption[];
   options_range?: [number, number, number];
