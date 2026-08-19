@@ -153,11 +153,20 @@ def build_palette(
     )
 
 
-def map_palette(cell_lab: np.ndarray, alpha: np.ndarray, palette: PaletteBuildResult, strokes: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def map_palette(
+    cell_lab: np.ndarray,
+    alpha: np.ndarray,
+    palette: PaletteBuildResult,
+    strokes: np.ndarray,
+    detail_mask: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Map cells to the palette while protecting compact source details."""
     distance = np.sum((cell_lab[..., None, :] - palette.lab[None, None, :, :]) ** 2, axis=3)
     labels = np.argmin(distance, axis=2).astype(np.int16)
     labels[alpha <= 0.0] = -1
-    labels[strokes & (alpha > 0.0)] = palette.outline_index
+    if detail_mask is None:
+        detail_mask = np.zeros_like(strokes, dtype=bool)
+    labels[strokes & ~detail_mask & (alpha > 0.0)] = palette.outline_index
     return labels, distance
 
 
