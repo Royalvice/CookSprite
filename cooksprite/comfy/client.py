@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import WebSocketException
 from websockets.sync.client import connect
 
 
@@ -118,7 +118,7 @@ class ComfyClient:
         if client_id:
             try:
                 return self._wait_websocket(prompt_id, client_id, timeout, progress, event)
-            except (OSError, TimeoutError, ConnectionClosed):
+            except (OSError, TimeoutError, WebSocketException):
                 # A proxy may block WebSockets. History polling remains authoritative.
                 pass
         return self._wait_polling(prompt_id, timeout, progress, event)
