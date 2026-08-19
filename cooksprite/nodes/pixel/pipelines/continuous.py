@@ -100,7 +100,10 @@ def _role_adjusted_evidence(evidence: CellEvidence, tones: ToneRoleMap) -> CellE
     lab = evidence.lab.copy()
     roles = tones.roles
     highlight = np.isin(roles, (int(ToneRole.SPECULAR), int(ToneRole.RIM_HIGHLIGHT), int(ToneRole.EMISSION)))
-    deep = np.isin(roles, (int(ToneRole.OUTLINE), int(ToneRole.DEEP_SHADOW)))
+    # A highlight can share a logical cell with a contour.  Keep the contour
+    # role for ink, but do not darken the highlight evidence before palette
+    # construction; the separate mask below supplies its color anchor.
+    deep = np.isin(roles, (int(ToneRole.OUTLINE), int(ToneRole.DEEP_SHADOW))) & ~tones.highlight_mask
     lab[..., 0][highlight] = np.clip(lab[..., 0][highlight] + evidence.highlight[highlight] * 0.065, 0.0, 1.0)
     lab[..., 0][deep] = np.clip(lab[..., 0][deep] - evidence.edge[deep] * 0.035, 0.0, 1.0)
     return replace(evidence, lab=lab)

@@ -151,6 +151,36 @@ def test_pixel_detail_protection_does_not_remove_outer_outline():
     assert protected[2, 2]
 
 
+def test_pixel_strokes_keep_outline_role():
+    pytest.importorskip("cv2", reason="pixel algorithm dependencies are ComfyUI-only")
+    from cooksprite.nodes.pixel.stages.evidence import CellEvidence
+    from cooksprite.nodes.pixel.stages.tones import ToneRole, extract_tone_roles
+
+    shape = (3, 3)
+    zeros = np.zeros(shape, dtype=np.float32)
+    evidence = CellEvidence(
+        zeros,
+        zeros,
+        np.zeros((*shape, 3), dtype=np.float32),
+        zeros,
+        np.ones(shape, dtype=np.float32),
+        np.zeros(shape, dtype=np.float32),
+        zeros,
+        zeros,
+        np.zeros(shape, dtype=bool),
+        np.zeros(shape, dtype=bool),
+        np.zeros(shape, dtype=bool),
+        np.zeros(shape, dtype=np.int32),
+        np.zeros(shape, dtype=np.int32),
+    )
+    silhouette = np.ones(shape, dtype=bool)
+    strokes = np.zeros(shape, dtype=bool)
+    strokes[1, 1] = True
+    tones = extract_tone_roles(evidence, silhouette, strokes)
+
+    assert tones.roles[1, 1] == int(ToneRole.OUTLINE)
+
+
 def test_store_png_preserves_official_rgba_output():
     class FakeTensor:
         def __init__(self, value):
