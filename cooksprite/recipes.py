@@ -74,7 +74,6 @@ FLUX2_T2I_NODES = {
     "CLIPLoader",
     "VAELoader",
     "CLIPTextEncode",
-    "ConditioningZeroOut",
     "PrimitiveInt",
     "EmptyFlux2LatentImage",
     "RandomNoise",
@@ -255,7 +254,6 @@ def _unet_recipe(
         "CLIPLoader",
         "VAELoader",
         "CLIPTextEncode",
-        "ConditioningZeroOut",
         "KSampler",
         "VAEDecode",
     }
@@ -289,8 +287,8 @@ def _unet_recipe(
             "inputs": {"clip": ["clip", 0], "text": ""},
         },
         "negative": {
-            "class_type": "ConditioningZeroOut",
-            "inputs": {"conditioning": ["positive", 0]},
+            "class_type": "CLIPTextEncode",
+            "inputs": {"clip": ["clip", 0], "text": ""},
         },
         "sample": {
             "class_type": "KSampler",
@@ -298,7 +296,7 @@ def _unet_recipe(
                 "model": ["model", 0],
                 "seed": 0,
                 "steps": 8,
-                "cfg": 1.0,
+                "cfg": 5.0,
                 "sampler_name": "res_multistep"
                 if "res_multistep" in _choices(report, "KSampler", "sampler_name")
                 else "euler",
@@ -344,6 +342,7 @@ def _unet_recipe(
         workflow["sample"]["inputs"]["denoise"] = 0.65
         slots = {
             "text": "positive.text",
+            "negative": "negative.text",
             "seed": "sample.seed",
             "count": "latent.amount",
             "image": "source.image",
@@ -354,7 +353,20 @@ def _unet_recipe(
             "class_type": latent_node,
             "inputs": {"width": 1024, "height": 1024, "batch_size": 1},
         }
-        slots = {"text": "positive.text", "seed": "sample.seed", "count": "latent.batch_size"}
+        slots = {
+            "text": "positive.text",
+            "negative": "negative.text",
+            "seed": "sample.seed",
+            "count": "latent.batch_size",
+        }
+    slot_types = {
+        "text": "Text",
+        "negative": "Text",
+        "seed": "Number",
+        "count": "Number",
+    }
+    if i2i:
+        slot_types.update({"image": "Image", "strength": "Number"})
     return Recipe(
         id=recipe_id,
         label=label,
@@ -364,6 +376,7 @@ def _unet_recipe(
         checkpoint=model,
         workflow=workflow,
         slots=slots,
+        slot_types=slot_types,
         output=["decode", 0],
         source="discovered",
     )

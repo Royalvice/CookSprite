@@ -3,9 +3,12 @@
 The source templates are UI-format ComfyUI subgraphs.  CookSprite stores the
 small, API-format graph needed by its sealed-tool compiler so the API never
 imports ComfyUI or fetches a workflow at startup.  The node topology follows
-the official 4B distilled text-to-image and 4B/9B distilled image-edit
-templates; the 9B text-to-image graph uses the same official graph with the
-FP8 distilled loader and distilled sampler settings.
+the official FLUX.2 loader, sampler, guider, and reference-latent layout. The
+official distilled templates zero the negative conditioning and use CFG=1,
+which makes a CookSprite negative prompt inert. CookSprite keeps the
+distilled loader/sampler topology but uses the official base-workflow
+negative path (CLIPTextEncode -> CFGGuider) and CFG=5 so the compiled
+negative prompt is an actual sampler input.
 """
 
 from __future__ import annotations
@@ -78,7 +81,7 @@ _COMMON_NODES = {
     "clip": {"class_type": "CLIPLoader", "inputs": {}},
     "vae": {"class_type": "VAELoader", "inputs": {}},
     "positive": {"class_type": "CLIPTextEncode", "inputs": {}},
-    "negative": {"class_type": "ConditioningZeroOut", "inputs": {}},
+    "negative": {"class_type": "CLIPTextEncode", "inputs": {}},
     "width": {"class_type": "PrimitiveInt", "inputs": {"value": 1024}},
     "height": {"class_type": "PrimitiveInt", "inputs": {"value": 1024}},
     "latent": {"class_type": "EmptyFlux2LatentImage", "inputs": {}},
@@ -95,7 +98,7 @@ def _link(node: dict[str, Any], name: str, source: str, output: int = 0) -> None
     node["inputs"][name] = [source, output]
 
 
-def _graph_base(bundle_id: str, *, cfg: float = 1.0) -> dict[str, Any]:
+def _graph_base(bundle_id: str, *, cfg: float = 5.0) -> dict[str, Any]:
     bundle = FLUX2_BUNDLES[bundle_id]
     files = {item["folder"]: item["name"] for item in bundle["files"]}
     nodes = deepcopy(_COMMON_NODES)
@@ -110,7 +113,7 @@ def _graph_base(bundle_id: str, *, cfg: float = 1.0) -> dict[str, Any]:
     }
     nodes["vae"]["inputs"] = {"vae_name": files["vae"]}
     nodes["positive"]["inputs"] = {"clip": ["clip", 0], "text": ""}
-    nodes["negative"]["inputs"] = {"conditioning": ["positive", 0]}
+    nodes["negative"]["inputs"] = {"clip": ["clip", 0], "text": ""}
     nodes["latent"]["inputs"] = {
         "width": ["width", 0],
         "height": ["height", 0],
@@ -205,6 +208,7 @@ def flux2_klein_graph(
         raise ValueError(f"unsupported FLUX.2 Klein mode: {mode}")
     slots = {
         "prompt": "positive.text",
+        "negative": "negative.text",
         "seed": "noise.noise_seed",
         "count": "latent.batch_size",
         "width": "width.value",
@@ -213,6 +217,7 @@ def flux2_klein_graph(
     }
     slot_types = {
         "prompt": "Text",
+        "negative": "Text",
         "seed": "Number",
         "count": "Number",
         "width": "Number",

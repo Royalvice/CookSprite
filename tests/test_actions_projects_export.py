@@ -380,6 +380,13 @@ def test_official_z_image_and_krea_adapters_are_text_to_image_only():
         "krea2-turbo-bf16-t2i",
     }
     assert all(recipe.modes == ["t2i"] for recipe in recipes)
+    for recipe in recipes:
+        assert recipe.workflow["negative"]["class_type"] == "CLIPTextEncode"
+        assert recipe.workflow["negative"]["inputs"] == {"clip": ["clip", 0], "text": ""}
+        assert recipe.workflow["sample"]["inputs"]["negative"] == ["negative", 0]
+        assert recipe.workflow["sample"]["inputs"]["cfg"] == 5.0
+        assert recipe.slots["negative"] == "negative.text"
+        assert recipe.slot_types["negative"] == "Text"
 
 
 def test_stale_i2i_recipes_for_t2i_only_models_are_not_loaded():

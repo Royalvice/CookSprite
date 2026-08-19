@@ -36,7 +36,6 @@ def _report(*, include_9b: bool = True) -> dict:
         "CLIPLoader": _node({"clip_name": "COMBO", "type": "COMBO"}, ["CLIP"]),
         "VAELoader": _node({"vae_name": "COMBO"}, ["VAE"]),
         "CLIPTextEncode": _node({"clip": "CLIP", "text": "STRING"}, ["CONDITIONING"]),
-        "ConditioningZeroOut": _node({"conditioning": "CONDITIONING"}, ["CONDITIONING"]),
         "PrimitiveInt": _node({"value": "INT"}, ["INT"]),
         "EmptyFlux2LatentImage": _node(
             {"batch_size": "INT", "height": "INT", "width": "INT"}, ["LATENT"]
@@ -105,7 +104,11 @@ def test_flux2_klein_discovers_complete_turbo_bundles_and_official_sampler_contr
     for recipe in recipes:
         assert recipe_contract_is_valid(recipe)
         assert recipe.workflow["schedule"]["inputs"]["steps"] == 4
-        assert recipe.workflow["guider"]["inputs"]["cfg"] == 1.0
+        assert recipe.workflow["guider"]["inputs"]["cfg"] == 5.0
+        assert recipe.workflow["negative"]["class_type"] == "CLIPTextEncode"
+        assert recipe.workflow["negative"]["inputs"] == {"clip": ["clip", 0], "text": ""}
+        assert recipe.slots["negative"] == "negative.text"
+        assert recipe.slot_types["negative"] == "Text"
     edit = next(item for item in recipes if item.id == "flux2-klein-9b-turbo-i2i")
     four = next(item for item in recipe_variants(edit) if item.workflow_variant == "i2i-4")
     assert {name for name in four.slots if name.startswith("reference_")} == {
