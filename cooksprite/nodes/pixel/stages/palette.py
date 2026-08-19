@@ -75,8 +75,6 @@ def build_palette(evidences: list[CellEvidence], tone_maps: list[ToneRoleMap], s
     values: list[np.ndarray] = []
     weights: list[np.ndarray] = []
     roles: list[np.ndarray] = []
-    highlights: list[np.ndarray] = []
-    highlight_weights: list[np.ndarray] = []
     for evidence, tones, silhouette in zip(evidences, tone_maps, silhouettes, strict=True):
         values.append(evidence.lab[silhouette])
         role_values = tones.roles[silhouette]
@@ -86,10 +84,6 @@ def build_palette(evidences: list[CellEvidence], tone_maps: list[ToneRoleMap], s
         role_weight *= 1.0 + evidence.feature[silhouette] * 1.25
         weights.append(role_weight)
         roles.append(role_values)
-        highlight = tones.highlight_mask & silhouette
-        if np.any(highlight):
-            highlights.append(evidence.lab[highlight])
-            highlight_weights.append((1.0 + evidence.feature[highlight] * 1.25).astype(np.float64))
     all_values = np.concatenate(values).astype(np.float32)
     all_weights = np.concatenate(weights).astype(np.float64)
     all_roles = np.concatenate(roles)
@@ -104,13 +98,6 @@ def build_palette(evidences: list[CellEvidence], tone_maps: list[ToneRoleMap], s
         selected = all_roles == int(role)
         if np.count_nonzero(selected) >= 1 and len(fixed_values) < min(5, budget):
             fixed_values.append(_medoid(all_values[selected], all_weights[selected]))
-    # Stroke cells intentionally keep the OUTLINE role, but a bright metal
-    # glint may share that same cell.  Keep one deterministic highlight anchor
-    # independent from the role assignment so the glint is not quantized to
-    # the outline color.  This adds at most one fixed center and does not
-    # change the contour palette or the k-means weighting.
-    if highlights and len(fixed_values) < min(5, budget):
-        fixed_values.append(_medoid(np.concatenate(highlights), np.concatenate(highlight_weights)))
     fixed = np.stack(fixed_values).astype(np.float32)
     centers, inertia = _weighted_kmeans(all_values, all_weights, budget, fixed)
     srgb = oklab_to_srgb(centers)
@@ -139,26 +126,11 @@ def build_palette(evidences: list[CellEvidence], tone_maps: list[ToneRoleMap], s
     )
 
 
-def map_palette(
-    cell_lab: np.ndarray,
-    alpha: np.ndarray,
-    palette: PaletteBuildResult,
-    strokes: np.ndarray,
-    detail_mask: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Map cells to the shared palette without overwriting protected details.
-
-    ``strokes`` is an intentional black/dark contour overlay.  It must not be
-    allowed to overwrite compact source details such as eyes, mouths, or
-    specular metal pixels; those cells still use normal palette distance
-    mapping and therefore retain their source-relative tone.
-    """
+def map_palette(cell_lab: np.ndarray, alpha: np.ndarray, palette: PaletteBuildResult, strokes: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     distance = np.sum((cell_lab[..., None, :] - palette.lab[None, None, :, :]) ** 2, axis=3)
     labels = np.argmin(distance, axis=2).astype(np.int16)
     labels[alpha <= 0.0] = -1
-    if detail_mask is None:
-        detail_mask = np.zeros_like(strokes, dtype=bool)
-    labels[strokes & ~detail_mask & (alpha > 0.0)] = palette.outline_index
+    labels[strokes & (alpha > 0.0)] = palette.outline_index
     return labels, distance
 
 

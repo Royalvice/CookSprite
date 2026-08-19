@@ -75,10 +75,6 @@ def extract_tone_roles(evidence: CellEvidence, silhouette: np.ndarray, strokes: 
     chroma = np.hypot(evidence.lab[..., 1], evidence.lab[..., 2])
     emission = highlight & (chroma >= 0.105) & (evidence.highlight >= 0.70)
     roles[emission] = int(ToneRole.EMISSION)
-    # Stroke classification is deliberately authoritative.  It keeps eyes,
-    # mouths, seams, and the outer silhouette in the outline role.  The
-    # independent highlight mask is retained for palette anchoring so a
-    # bright metal cell that overlaps a stroke is not lost.
     roles[strokes] = int(ToneRole.OUTLINE)
     protect = evidence.protect | highlight | strokes
     counts = {role.name.lower(): int(np.count_nonzero(roles == int(role))) for role in ToneRole}
