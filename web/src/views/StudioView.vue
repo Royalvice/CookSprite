@@ -9,6 +9,7 @@ import DropTarget from "../components/DropTarget.vue";
 import FrameStudio from "../components/FrameStudio.vue";
 import ImageStyleCameraControls from "../components/ImageStyleCameraControls.vue";
 import ImageToolsBench from "../components/ImageToolsBench.vue";
+import PixelizeControls from "../components/PixelizeControls.vue";
 import RunStatusPanel from "../components/RunStatusPanel.vue";
 import StageRail from "../components/StageRail.vue";
 import { api, inferArtifactKind, type ActionControl, type ActionDescriptor, type ArtifactKind, type ArtifactRef, type FrameSequenceView, type Locale } from "../api/generated";
@@ -41,12 +42,18 @@ let assetGalleryInside = false;
 let workspaceReady = false;
 let normalTimer = 0;
 const normalSequence = ref<FrameSequenceView | null>(null);
+const normalResultSequence = ref<FrameSequenceView | null>(null);
+const normalResultImage = ref<ArtifactRef | null>(null);
+const normalResultNormals = ref<ArtifactRef[]>([]);
 const normalFrameIndex = ref(0);
 const normalPlaying = ref(false);
+const normalPixelize = ref(false);
+const normalPixelValues = ref<Record<string, unknown>>({});
 
 const imageAction = computed(() => store.actions.find((item) => item.id === "image.generate"));
 const animationAction = computed(() => store.actions.find((item) => item.id === "animation.generate"));
 const normalAction = computed(() => store.actions.find((item) => item.id === "normal.generate"));
+const spritePixelAction = computed(() => store.actions.find((item) => item.id === "sprite.pixelize"));
 const activeAction = computed(() => stage.value === "animate" ? animationAction.value : imageAction.value);
 const activeValues = computed(() => stage.value === "animate" ? animationValues.value : imageValues.value);
 const imageCandidates = computed(() => store.artifacts.filter((item) => item.kind === "Image" && !["animation.generate", "sheet.slice", "video.sample", "normal.generate"].includes(String(item.meta.action_id || ""))));
@@ -66,7 +73,9 @@ const sourceArtifact = computed(() => {
   const id = Array.isArray(raw) ? raw[0] : raw;
   return store.artifactById.get(String(id || ""));
 });
-const normalFrames = computed(() => normalSequence.value?.frames || (sourceArtifact.value?.kind === "Image" ? [sourceArtifact.value] : []));
+const normalFrames = computed(() => normalResultSequence.value?.frames
+  || normalSequence.value?.frames
+  || (normalResultImage.value ? [normalResultImage.value] : sourceArtifact.value?.kind === "Image" ? [sourceArtifact.value] : []));
 const diffuse = computed(() => {
   if (stage.value === "normal" && normalFrames.value.length) return normalFrames.value[Math.min(normalFrameIndex.value, normalFrames.value.length - 1)];
   if (sourceArtifact.value?.kind === "Image" || sourceArtifact.value?.kind === "SpriteSheet") return sourceArtifact.value;
@@ -79,6 +88,10 @@ const diffuse = computed(() => {
 const normal = computed(() => {
   const sourceId = diffuse.value?.id;
   if (!sourceId) return undefined;
+  const runNormal = normalResultNormals.value.find((item) => (
+    Array.isArray(item.meta.source_artifacts) && item.meta.source_artifacts.includes(sourceId)
+  )) || (normalResultNormals.value.length === 1 ? normalResultNormals.value[0] : undefined);
+  if (runNormal) return runNormal;
   const linkedId = store.document?.static?.primary === sourceId
     ? store.document.static.normal
     : store.document?.tileset?.source === sourceId
@@ -121,6 +134,8 @@ const animationCanRun = computed(() => {
     ? modes.has("i2v") || modes.has("i2i-sequence")
     : modes.has("t2v") || modes.has("t2i-sequence");
 });
+const normalRunAction = computed(() => normalPixelize.value ? spritePixelAction.value : normalAction.value);
+const normalCanRun = computed(() => Boolean(sourceArtifact.value && normalRunAction.value?.available && !running.value));
 
 function fillDefaults(target: Record<string, unknown>, action = activeAction.value) {
   if (!action) return;
@@ -170,6 +185,7 @@ watch(imageAction, (action) => { if (action) fillDefaults(imageValues.value, act
 watch([imageAction, () => store.activeRuntimeId], () => { void applyImageRuntimeDefault(); }, { immediate: true });
 watch(() => [imageValues.value.category, imageValues.value.style], normalizeImageStyleForCategory, { immediate: true });
 watch(animationAction, (action) => { if (action) fillDefaults(animationValues.value, action); }, { immediate: true });
+watch(spritePixelAction, (action) => { if (action) fillDefaults(normalPixelValues.value, action); }, { immediate: true });
 watch(stage, (next) => {
   hideHoverPreview(true);
   if (workspaceReady && next === "animate" && selectedArtifact.value?.kind === "Image") inputs.value.character = selectedArtifact.value.id;
@@ -180,6 +196,14 @@ watch(() => store.lastOutputsByAction["image.generate"], (outputs) => {
     canvasCleared.value = false;
     selectedArtifact.value = outputs[0];
   }
+});
+watch(() => store.lastOutputsByAction["sprite.pixelize"], async (outputs) => {
+  if (!outputs?.length) return;
+  normalResultNormals.value = outputs.filter((item) => item.kind === "NormalMap");
+  const sequence = outputs.find((item) => item.kind === "FrameSeq");
+  normalResultSequence.value = sequence ? await store.readSequence(sequence.id) : null;
+  normalResultImage.value = outputs.find((item) => item.kind === "Image") || null;
+  normalFrameIndex.value = 0;
 });
 
 function readArtifactDimensions(artifact: ArtifactRef | null) {
@@ -219,7 +243,7 @@ function readArtifactDimensions(artifact: ArtifactRef | null) {
 
 watch(() => activeArtifact.value?.id, () => readArtifactDimensions(activeArtifact.value || null), { immediate: true });
 
-watch([stage, imageValues, animationValues, inputs, canvasCleared, fitToCanvas, () => selectedArtifact.value?.id, () => store.activeSequence?.artifact.id], persistWorkspace, { deep: true });
+watch([stage, imageValues, animationValues, normalPixelize, normalPixelValues, inputs, canvasCleared, fitToCanvas, () => selectedArtifact.value?.id, () => store.activeSequence?.artifact.id], persistWorkspace, { deep: true });
 
 onMounted(async () => {
   const projectId = route.params.projectId as string | undefined;
@@ -305,6 +329,7 @@ async function acceptArtifact(slot: string, payload: { artifact_id: string }) {
     if (slot === "source") await loadNormalSequence(artifact.id);
     else await store.loadSequence(artifact.id);
   }
+  if (slot === "source") clearNormalResult();
 }
 async function runCreate() {
   if (!imageAction.value) return;
@@ -319,9 +344,23 @@ async function runAnimation() {
   finally { window.setTimeout(() => { reveal.value = false; }, 500); }
 }
 async function normalRun() {
-  const raw = inputs.value.source;
-  const sources = (Array.isArray(raw) ? raw : raw ? [raw] : diffuse.value?.id ? [diffuse.value.id] : []).filter(Boolean);
-  if (sources.length) await store.runAction("normal.generate", { source: sources }, { strength: 1, flip_y: false });
+  if (!sourceArtifact.value || !normalCanRun.value) return;
+  clearNormalResult();
+  const actionId = normalPixelize.value ? "sprite.pixelize" : "normal.generate";
+  const values = normalPixelize.value
+    ? Object.fromEntries((spritePixelAction.value?.controls || []).map((control) => [
+      control.id,
+      normalPixelValues.value[control.id] ?? control.default,
+    ]))
+    : { strength: 1, flip_y: false };
+  await store.runAction(actionId, { source: sourceArtifact.value.id }, values);
+}
+function setNormalPixelValue(id: string, value: unknown) { normalPixelValues.value[id] = value; }
+function clearNormalResult() {
+  normalResultSequence.value = null;
+  normalResultImage.value = null;
+  normalResultNormals.value = [];
+  normalFrameIndex.value = 0;
 }
 async function redrawCurrent() { if (diffuse.value?.kind === "Image") await store.runAction("frame.redraw", { frame: diffuse.value.id }, { prompt: "", strength: 0.35, count: 4 }); }
 function selectArtifact(artifact: ArtifactRef) {
@@ -365,6 +404,8 @@ function persistWorkspace() {
     stage: stage.value,
     imageValues: imageValues.value,
     animationValues: animationValues.value,
+    normalPixelize: normalPixelize.value,
+    normalPixelValues: normalPixelValues.value,
     inputs: inputs.value,
     canvasCleared: canvasCleared.value,
     fitToCanvas: fitToCanvas.value,
@@ -380,6 +421,8 @@ async function restoreWorkspace() {
   if (["create", "animate", "normal", "export"].includes(String(state.stage))) stage.value = state.stage as StudioStage;
   if (state.imageValues && typeof state.imageValues === "object") Object.assign(imageValues.value, state.imageValues);
   if (state.animationValues && typeof state.animationValues === "object") Object.assign(animationValues.value, state.animationValues);
+  normalPixelize.value = state.normalPixelize === true;
+  if (state.normalPixelValues && typeof state.normalPixelValues === "object") Object.assign(normalPixelValues.value, state.normalPixelValues);
   canvasCleared.value = state.canvasCleared === true;
   fitToCanvas.value = state.fitToCanvas === true;
   const storedInputs = state.inputs && typeof state.inputs === "object" ? state.inputs as Record<string, string | string[]> : {};
@@ -452,6 +495,7 @@ async function useForNormal(artifact: ArtifactRef) {
   stage.value = "normal";
   transientPreview.value = null;
   normalSequence.value = null;
+  clearNormalResult();
   normalFrameIndex.value = 0;
   if (artifact.kind === "FrameSeq") await loadNormalSequence(artifact.id);
 }
@@ -512,7 +556,70 @@ function downloadPack(artifact: ArtifactRef) { const anchor = document.createEle
           <FrameStudio :sequence="store.activeSequence" @preview="previewArtifact" @use-normal="useForNormal" />
         </template>
 
-        <section v-else-if="stage === 'normal'" class="normal-workspace"><div class="normal-input panel"><span class="eyebrow">{{ $t("studio.diffusePair") }}</span><h2>{{ $t("studio.light") }}</h2><DropTarget :accepts="acceptedKinds(normalAction, 'source')" :multiple="inputMax('source') > 1" :max-files="inputMax('source')" :artifact="sourceArtifact" :label="sourceArtifact ? sourceArtifact.title || sourceArtifact.id : $t('studio.dropDiffuse')" @artifact="acceptArtifact('source', $event)" @files="importFiles($event, 'source')" /><div v-if="normalFrames.length > 1" class="normal-sequence-controls"><button class="arcade-button" type="button" @click="toggleNormalPlayback">{{ normalPlaying ? $t('frames.pause') : $t('frames.play') }}</button><span>{{ normalFrameIndex + 1 }} / {{ normalFrames.length }}</span></div><div v-if="normalFrames.length > 1" class="normal-frame-strip"><button v-for="(frame, index) in normalFrames" :key="frame.id" type="button" :class="{ active: normalFrameIndex === index, complete: Boolean(store.artifacts.find(item => item.kind === 'NormalMap' && Array.isArray(item.meta.source_artifacts) && item.meta.source_artifacts.includes(frame.id))) }" @click="normalFrameIndex = index"><ArtifactVisual :artifact="frame" :draggable="false" /><span>F{{ String(index + 1).padStart(2, '0') }}</span></button></div><div v-if="diffuse" class="normal-source-row"><ArtifactCard :artifact="diffuse" selected compact @select="selectArtifact" @preview="previewArtifact" /><ArtifactCard v-if="normal" :artifact="normal" compact @select="selectArtifact" @preview="previewArtifact" /></div><button class="arcade-button primary" :disabled="!sourceArtifact || !normalAction?.available || running" @click="normalRun"><Sparkle :size="18" />{{ normalFrames.length > 1 ? $t('studio.generateSequenceNormals', { count: normalFrames.length }) : $t("studio.generateNormals") }}</button><button class="text-button" :disabled="diffuse?.kind !== 'Image'" @click="redrawCurrent">{{ $t("studio.redoFrame") }}</button><button v-if="normal" class="arcade-button" type="button" @click="stage = 'export'">{{ $t('studio.continueDelivery') }}<ArrowRight :size="16" /></button></div><LightingPreview :diffuse="diffuse" :normal="normal" /></section>
+        <section v-else-if="stage === 'normal'" class="normal-workspace">
+          <div class="normal-input panel">
+            <span class="eyebrow">{{ $t("studio.diffusePair") }}</span>
+            <h2>{{ $t("studio.light") }}</h2>
+            <DropTarget
+              :accepts="acceptedKinds(normalAction, 'source')"
+              :artifact="sourceArtifact"
+              :label="sourceArtifact ? sourceArtifact.title || sourceArtifact.id : $t('studio.dropDiffuse')"
+              @artifact="acceptArtifact('source', $event)"
+              @files="importFiles($event, 'source')"
+            />
+
+            <section class="normal-pixelize-option" :class="{ active: normalPixelize }">
+              <button
+                type="button"
+                class="normal-pixelize-switch"
+                role="switch"
+                :aria-checked="normalPixelize"
+                @click="normalPixelize = !normalPixelize"
+              >
+                <span><b>{{ $t("studio.pixelizeNormals") }}</b><small>{{ $t("studio.pixelizeNormalsHint") }}</small></span>
+                <i>{{ normalPixelize ? "ON" : "OFF" }}</i>
+              </button>
+              <PixelizeControls
+                v-if="normalPixelize"
+                :action="spritePixelAction"
+                :values="normalPixelValues"
+                @change="setNormalPixelValue"
+              />
+            </section>
+
+            <div v-if="normalFrames.length > 1" class="normal-sequence-controls">
+              <button class="arcade-button" type="button" @click="toggleNormalPlayback">
+                {{ normalPlaying ? $t('frames.pause') : $t('frames.play') }}
+              </button>
+              <span>{{ normalFrameIndex + 1 }} / {{ normalFrames.length }}</span>
+            </div>
+            <div v-if="normalFrames.length > 1" class="normal-frame-strip">
+              <button
+                v-for="(frame, index) in normalFrames"
+                :key="`${frame.id}:${index}`"
+                type="button"
+                :class="{ active: normalFrameIndex === index, complete: Boolean(normalResultNormals[index] || store.artifacts.find(item => item.kind === 'NormalMap' && Array.isArray(item.meta.source_artifacts) && item.meta.source_artifacts.includes(frame.id))) }"
+                @click="normalFrameIndex = index"
+              >
+                <ArtifactVisual :artifact="frame" :draggable="false" />
+                <span>F{{ String(index + 1).padStart(2, '0') }}</span>
+              </button>
+            </div>
+            <div v-if="diffuse" class="normal-source-row">
+              <ArtifactCard :artifact="diffuse" selected compact @select="selectArtifact" @preview="previewArtifact" />
+              <ArtifactCard v-if="normal" :artifact="normal" compact @select="selectArtifact" @preview="previewArtifact" />
+            </div>
+            <button class="arcade-button primary" :disabled="!normalCanRun" @click="normalRun">
+              <Sparkle :size="18" />
+              {{ normalPixelize ? $t("studio.generatePixelNormals") : normalFrames.length > 1 ? $t('studio.generateSequenceNormals', { count: normalFrames.length }) : $t("studio.generateNormals") }}
+            </button>
+            <button class="text-button" :disabled="diffuse?.kind !== 'Image'" @click="redrawCurrent">{{ $t("studio.redoFrame") }}</button>
+            <button v-if="normal" class="arcade-button" type="button" @click="stage = 'export'">
+              {{ $t('studio.continueDelivery') }}<ArrowRight :size="16" />
+            </button>
+          </div>
+          <LightingPreview :diffuse="diffuse" :normal="normal" />
+        </section>
 
         <section v-else class="export-workspace"><div class="export-card panel"><Package :size="48" /><span class="eyebrow">{{ $t("export.eyebrow") }}</span><h1>.cooksprite</h1><p>manifest.json + frames/*.png + normals/*.png + provenance.json</p><ul><li v-for="index in 4" :key="index"><Check :size="16" />{{ $t(`export.checks.${index - 1}`) }}</li></ul><div v-if="exportIssues.length" class="export-warning" role="alert"><strong>{{ $t("export.incomplete") }}</strong><ul><li v-for="issue in exportIssues" :key="issue"><Warning :size="15" />{{ issue }}</li></ul></div><button class="arcade-button primary large" @click="exportPack(false)"><Package :size="20" />{{ $t("export.validate") }}</button><button class="text-button warning-link" @click="exportPack(true)">{{ $t("export.accept") }}</button></div><div class="package-list panel"><h2>{{ $t("export.packages") }}</h2><article v-for="artifact in store.artifacts.filter(item => item.kind === 'CookSpritePack')" :key="artifact.id"><Package :size="24" /><div><strong>{{ artifact.title }}</strong><span>{{ (artifact.size / 1024).toFixed(1) }} KB</span></div><button class="arcade-button" @click="downloadPack(artifact)"><DownloadSimple :size="17" />{{ $t("common.download") }}</button></article><p v-if="!store.artifacts.some(item => item.kind === 'CookSpritePack')" class="muted">{{ $t("export.empty") }}</p></div></section>
       </div>

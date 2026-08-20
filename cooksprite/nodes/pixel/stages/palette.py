@@ -35,12 +35,26 @@ def _initial_centers(values: np.ndarray, weights: np.ndarray, count: int, fixed:
     centers = [item.copy() for item in fixed]
     if not centers:
         centers.append(values[int(np.argmax(weights))].copy())
+    existing = np.stack(centers)
+    min_distance = np.min(np.sum((values[:, None, :] - existing[None, :, :]) ** 2, axis=2), axis=1)
     while len(centers) < count:
-        existing = np.stack(centers)
-        distance = np.min(np.sum((values[:, None, :] - existing[None, :, :]) ** 2, axis=2), axis=1)
-        score = distance * weights
-        centers.append(values[int(np.argmax(score))].copy())
+        center = values[int(np.argmax(min_distance * weights))].copy()
+        centers.append(center)
+        distance = np.sum((values - center) ** 2, axis=1)
+        min_distance = np.minimum(min_distance, distance)
     return np.stack(centers[:count]).astype(np.float32)
+
+
+def _nearest(values: np.ndarray, centers: np.ndarray, block_size: int = 65_536) -> tuple[np.ndarray, np.ndarray]:
+    labels = np.empty(len(values), dtype=np.int32)
+    minimum = np.empty(len(values), dtype=np.float32)
+    for start in range(0, len(values), block_size):
+        stop = min(len(values), start + block_size)
+        distance = np.sum((values[start:stop, None, :] - centers[None, :, :]) ** 2, axis=2)
+        block_labels = np.argmin(distance, axis=1)
+        labels[start:stop] = block_labels
+        minimum[start:stop] = distance[np.arange(stop - start), block_labels]
+    return labels, minimum
 
 
 def _weighted_kmeans(values: np.ndarray, weights: np.ndarray, count: int, fixed: np.ndarray) -> tuple[np.ndarray, float]:
@@ -48,8 +62,7 @@ def _weighted_kmeans(values: np.ndarray, weights: np.ndarray, count: int, fixed:
     fixed_count = len(fixed)
     positive_weights = np.maximum(weights, 1e-9)
     for _ in range(32):
-        distance = np.sum((values[:, None, :] - centers[None, :, :]) ** 2, axis=2)
-        labels = np.argmin(distance, axis=1)
+        labels, _ = _nearest(values, centers)
         updated = centers.copy()
         totals = np.bincount(labels, weights=positive_weights, minlength=count)
         channels = values.shape[1]
@@ -79,6 +92,8 @@ def build_palette(
     *,
     preserve_highlights: bool = False,
     outline_color: str | None = None,
+    equal_frame_weight: bool = False,
+    canonical_order: bool = False,
 ) -> PaletteBuildResult:
     values: list[np.ndarray] = []
     weights: list[np.ndarray] = []
@@ -92,6 +107,8 @@ def build_palette(
         role_weight[np.isin(role_values, (int(ToneRole.OUTLINE), int(ToneRole.DEEP_SHADOW)))] *= 2.4
         role_weight[np.isin(role_values, (int(ToneRole.SPECULAR), int(ToneRole.RIM_HIGHLIGHT), int(ToneRole.EMISSION)))] *= 3.2
         role_weight *= 1.0 + evidence.feature[silhouette] * 1.25
+        if equal_frame_weight:
+            role_weight /= max(float(np.sum(role_weight)), 1e-9)
         weights.append(role_weight)
         roles.append(role_values)
         if preserve_highlights:
@@ -102,6 +119,11 @@ def build_palette(
     all_values = np.concatenate(values).astype(np.float32)
     all_weights = np.concatenate(weights).astype(np.float64)
     all_roles = np.concatenate(roles)
+    if canonical_order:
+        order = np.lexsort((all_values[:, 2], all_values[:, 1], all_values[:, 0], all_roles))
+        all_values = all_values[order]
+        all_weights = all_weights[order]
+        all_roles = all_roles[order]
     fixed_values: list[np.ndarray] = []
     outline_values = all_values[np.isin(all_roles, (int(ToneRole.OUTLINE), int(ToneRole.DEEP_SHADOW)))]
     if outline_color is not None:
@@ -161,13 +183,14 @@ def map_palette(
     detail_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Map cells to the palette while protecting compact source details."""
-    distance = np.sum((cell_lab[..., None, :] - palette.lab[None, None, :, :]) ** 2, axis=3)
-    labels = np.argmin(distance, axis=2).astype(np.int16)
+    shape = cell_lab.shape[:2]
+    labels, minimum = _nearest(cell_lab.reshape(-1, 3), palette.lab)
+    labels = labels.reshape(shape).astype(np.int16)
     labels[alpha <= 0.0] = -1
     if detail_mask is None:
         detail_mask = np.zeros_like(strokes, dtype=bool)
     labels[strokes & ~detail_mask & (alpha > 0.0)] = palette.outline_index
-    return labels, distance
+    return labels, minimum.reshape(shape)
 
 
 def clean_label_clusters(labels: np.ndarray, palette_lab: np.ndarray, foreground: np.ndarray, protect: np.ndarray) -> np.ndarray:

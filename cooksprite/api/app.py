@@ -85,7 +85,7 @@ from ..store import DocumentConflict, Store, utcnow
 from ..supervisor import RunSupervisor
 from ..tool_packages import tool_packages
 
-SEQUENCE_ACTIONS = {"animation.generate", "sheet.slice", "video.sample"}
+SEQUENCE_ACTIONS = {"animation.generate", "sheet.slice", "video.sample", "sprite.pixelize"}
 TEST_RUNTIME_VERSIONS = {"test", "demo-test", "cooksprite-test-runtime"}
 
 
@@ -660,6 +660,7 @@ def create_app(
             return "video"
         if action_id in {
             "normal.generate",
+            "sprite.pixelize",
             "sheet.slice",
             "image.pixelize",
             "image.cutout",
@@ -987,7 +988,93 @@ def create_app(
         ]
         if len(ordered) != len(source_ids):
             raise RuntimeError("ComfyUI normal outputs do not match the requested source frames")
-        store.set_run_artifacts(run_id, ordered)
+        store.set_run_artifacts(run_id, ordered, preserve_duplicates=True)
+
+    def source_frame_ids(source_ids: list[str], *, limit: int | None = None) -> list[str]:
+        frames: list[str] = []
+        for source_id in source_ids:
+            row = store.artifact(source_id)
+            if row and row.get("kind") == "FrameSeq":
+                frames.extend(frame_sequence_view(source_id).sequence.frames)
+            else:
+                frames.append(source_id)
+        if limit is not None and len(frames) > limit:
+            raise ValueError(f"Sprite chunks may contain at most {limit} frames")
+        return frames
+
+    def finalize_sprite_pixelize(
+        run_id: str,
+        source_artifact: str,
+        sources: list[str],
+        project_id: str,
+    ) -> None:
+        record = store.run(run_id)
+        output_ids = json.loads(record.get("artifacts") or "[]") if record else []
+        images = [artifact_id for artifact_id in output_ids if (store.artifact(artifact_id) or {}).get("kind") == "Image"]
+        normals = [artifact_id for artifact_id in output_ids if (store.artifact(artifact_id) or {}).get("kind") == "NormalMap"]
+        if len(images) != len(sources) or len(normals) != len(sources):
+            raise RuntimeError("ComfyUI sprite outputs do not match the requested source frames")
+
+        image_relations: dict[str, dict[str, list[str]]] = {}
+        normal_relations: dict[str, dict[str, list[str]]] = {}
+        for source_id, image_id, normal_id in zip(sources, images, normals, strict=True):
+            image_relation = image_relations.setdefault(image_id, {"sources": [], "pairs": []})
+            image_relation["sources"].append(source_id)
+            image_relation["pairs"].append(normal_id)
+            normal_relation = normal_relations.setdefault(normal_id, {"sources": [], "pairs": []})
+            normal_relation["sources"].extend((image_id, source_id))
+            normal_relation["pairs"].append(image_id)
+        for artifact_id, relation in image_relations.items():
+            row = store.artifact(artifact_id)
+            meta = json.loads(row.get("meta") or "{}") if row else {}
+            meta.update(
+                source_artifacts=list(dict.fromkeys(relation["sources"])),
+                paired_normals=list(dict.fromkeys(relation["pairs"])),
+            )
+            store.update_artifact_meta(artifact_id, meta)
+        for artifact_id, relation in normal_relations.items():
+            row = store.artifact(artifact_id)
+            meta = json.loads(row.get("meta") or "{}") if row else {}
+            meta.update(
+                source_artifacts=list(dict.fromkeys(relation["sources"])),
+                paired_diffuses=list(dict.fromkeys(relation["pairs"])),
+            )
+            store.update_artifact_meta(artifact_id, meta)
+
+        source_row = store.artifact(source_artifact)
+        if source_row and source_row.get("kind") == "FrameSeq":
+            original = frame_sequence_view(source_artifact).sequence
+            manifest = FrameSequenceManifest(
+                action=original.action,
+                view=original.view,
+                direction=original.direction,
+                frames=images,
+            )
+            sequence = store.put_artifact(
+                manifest.model_dump_json(by_alias=True, exclude_none=False).encode(),
+                "application/vnd.cooksprite.frame-sequence+json",
+                "FrameSeq",
+                {
+                    "role": "pixel_frame_sequence",
+                    "run_id": run_id,
+                    "action_id": "sprite.pixelize",
+                    "frame_count": len(images),
+                    "cover_artifact": images[0],
+                    "action": original.action,
+                    "view": original.view,
+                    "direction": original.direction,
+                    "source_artifacts": [source_artifact],
+                },
+                project_id=project_id,
+                title="Pixelized Sprite Sequence",
+            )
+            store.set_run_artifacts(
+                run_id, [sequence.id, *normals], preserve_duplicates=True
+            )
+        else:
+            store.set_run_artifacts(
+                run_id, [images[0], normals[0]], preserve_duplicates=True
+            )
 
     def selected_runtime(values: dict[str, Any]) -> dict[str, Any] | None:
         runtime_id = values.get("runtime")
@@ -1147,15 +1234,16 @@ def create_app(
                 ),
             )
         normalized_inputs = validate_artifact_inputs(registered, request.inputs)
-        if action_id == "normal.generate":
-            expanded: list[str] = []
-            for artifact_id in normalized_inputs.get("source", []):
-                row = store.artifact(artifact_id)
-                if row and row["kind"] == "FrameSeq":
-                    expanded.extend(frame_sequence_view(artifact_id).sequence.frames)
-                else:
-                    expanded.append(artifact_id)
-            normalized_inputs["source"] = expanded
+        ordered_sources: list[str] = []
+        if action_id in {"normal.generate", "sprite.pixelize"}:
+            try:
+                ordered_sources = source_frame_ids(
+                    normalized_inputs.get("source", []), limit=32
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    422, _detail("sprite_chunk_too_large", str(exc))
+                ) from exc
         runtime = selected_runtime(values)
         runtime_recipes = recipes_from_runtime(runtime)
         descriptor = registry.view(
@@ -1288,10 +1376,17 @@ def create_app(
         )
 
         def finalize_action() -> None:
-            if action_id in SEQUENCE_ACTIONS:
+            if action_id == "sprite.pixelize":
+                finalize_sprite_pixelize(
+                    run_id,
+                    normalized_inputs["source"][0],
+                    ordered_sources,
+                    request.project,
+                )
+            elif action_id in SEQUENCE_ACTIONS:
                 finalize_frame_sequence(run_id, action_id, request.project, values)
             elif action_id == "normal.generate":
-                order_normal_outputs(run_id, normalized_inputs.get("source", []))
+                order_normal_outputs(run_id, ordered_sources)
 
         execute_plan(run_id, runtime, compiled, finalize_action)
         return run_view(run_id)
@@ -1753,6 +1848,7 @@ def create_app(
         run_id: str,
         expires: int,
         signature: str,
+        expand: str = "",
     ) -> BinaryResponse:
         run = store.run(run_id)
         row = store.artifact(artifact_id)
@@ -1760,7 +1856,9 @@ def create_app(
             raise HTTPException(404, _detail("bridge_target_not_found", "unknown run or artifact"))
         runtime = runtime_or_404(run["runtime_id"])
         try:
-            bridge_for(runtime).verify_download(artifact_id, run_id, expires, signature)
+            bridge_for(runtime).verify_download(
+                artifact_id, run_id, expires, signature, expand=expand
+            )
         except BridgeError as exc:
             raise HTTPException(403, _detail("bridge_signature_invalid", str(exc))) from exc
         requested = json.loads(run.get("request") or "{}").get("inputs", {})
@@ -1777,11 +1875,49 @@ def create_app(
                 return {value}
             return set()
 
-        allowed = artifact_ids(requested)
+        top_level = artifact_ids(requested)
+        allowed = set(top_level)
+        for requested_id in top_level:
+            requested_row = store.artifact(requested_id)
+            if not requested_row or requested_row.get("kind") != "FrameSeq":
+                continue
+            try:
+                allowed.update(
+                    FrameSequenceManifest.model_validate_json(
+                        store.artifact_bytes(requested_id)
+                    ).frames
+                )
+            except ValueError:
+                continue
         if artifact_id not in allowed:
             raise HTTPException(
                 403,
                 _detail("bridge_scope_violation", "artifact is not an input of this run"),
+            )
+        if expand:
+            if expand != "frames":
+                raise HTTPException(422, _detail("bridge_expand_invalid", "unknown bridge expansion"))
+            if row.get("kind") != "FrameSeq":
+                return BinaryResponse(store.artifact_bytes(artifact_id), media_type=row["media_type"])
+            sequence = frame_sequence_view(artifact_id)
+            if len(sequence.frames) > 32:
+                raise HTTPException(
+                    422,
+                    _detail("sprite_chunk_too_large", "Sprite chunks may contain at most 32 frames"),
+                )
+            payload = {
+                "schema": "cooksprite.bridge-image-batch/v1",
+                "frames": [
+                    {
+                        "artifact": frame.id,
+                        "url": bridge_for(runtime).download_url(frame.id, run_id),
+                    }
+                    for frame in sequence.frames
+                ],
+            }
+            return BinaryResponse(
+                json.dumps(payload, separators=(",", ":")).encode(),
+                media_type="application/vnd.cooksprite.bridge-image-batch+json",
             )
         return BinaryResponse(store.artifact_bytes(artifact_id), media_type=row["media_type"])
 
@@ -1813,7 +1949,18 @@ def create_app(
             raise HTTPException(422, _detail("empty_artifact", "artifact request body is empty"))
         source_artifacts: list[str] = []
         if source_artifact:
-            source_artifacts = [source_artifact]
+            source_row = store.artifact(source_artifact)
+            if source_row and source_row.get("kind") == "FrameSeq" and output_index is not None:
+                try:
+                    frames = FrameSequenceManifest.model_validate_json(
+                        store.artifact_bytes(source_artifact)
+                    ).frames
+                    if 0 <= output_index < len(frames):
+                        source_artifacts = [frames[output_index]]
+                except ValueError:
+                    source_artifacts = []
+            if not source_artifacts:
+                source_artifacts = [source_artifact]
         else:
             run_request = json.loads(run.get("request") or "{}")
             for supplied in run_request.get("inputs", {}).values():
@@ -2924,6 +3071,16 @@ def create_app(
     def recovered_finalizer(row: dict[str, Any]) -> Callable[[], None] | None:
         action_id = row.get("action_id")
         request = json.loads(row.get("request") or "{}")
+        if action_id == "sprite.pixelize":
+            sources = (request.get("inputs") or {}).get("source") or []
+            source_ids = sources if isinstance(sources, list) else [sources]
+            expanded = source_frame_ids(source_ids, limit=32)
+            return lambda: finalize_sprite_pixelize(
+                row["id"],
+                source_ids[0],
+                expanded,
+                row.get("project_id") or request.get("project"),
+            )
         if action_id in SEQUENCE_ACTIONS:
             return lambda: finalize_frame_sequence(
                 row["id"],
@@ -2934,7 +3091,8 @@ def create_app(
         if action_id == "normal.generate":
             sources = (request.get("inputs") or {}).get("source") or []
             source_ids = sources if isinstance(sources, list) else [sources]
-            return lambda: order_normal_outputs(row["id"], source_ids)
+            expanded = source_frame_ids(source_ids, limit=32)
+            return lambda: order_normal_outputs(row["id"], expanded)
         return None
 
     for interrupted in store.runs(("queued", "running", "cancel_requested")):

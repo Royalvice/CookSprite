@@ -93,6 +93,26 @@ CORE_NODES = {
         },
         ["IMAGE", "MASK"],
     ),
+    "CS_PixelizePair": node(
+        {
+            "image": "IMAGE",
+            "normal": "IMAGE",
+            "mask": "MASK",
+            "normal_mask": "MASK",
+            "target_size": "INT",
+            "target_width": "INT",
+            "target_height": "INT",
+            "profile": "STRING",
+            "outline": "BOOLEAN",
+            "outline_color": "STRING",
+            "palette_budget": "INT",
+            "padding_x": "INT",
+            "padding_y": "INT",
+            "variants": "BOOLEAN",
+            "sequence_mode": "STRING",
+        },
+        ["IMAGE", "MASK", "IMAGE"],
+    ),
     "CS_RemoveBackground": node(
         {
             "image": "IMAGE",
@@ -230,6 +250,16 @@ class ProtocolComfy:
         def batch_count(node_id):
             node = self.graph[str(node_id)]
             inputs = node["inputs"]
+            if node["class_type"] == "CS_LoadArtifact":
+                parsed = urllib.parse.urlparse(inputs["artifact_url"])
+                query = urllib.parse.parse_qs(parsed.query)
+                if query.get("expand") == ["frames"]:
+                    artifact_id = parsed.path.split("/artifacts/", 1)[1].split("/", 1)[0]
+                    row = self.__class__.store.artifact(artifact_id)
+                    if row and row["kind"] == "FrameSeq":
+                        manifest = json.loads(self.__class__.store.artifact_bytes(artifact_id))
+                        return len(manifest["frames"])
+                return 1
             if node["class_type"] == "EmptyLatentImage":
                 return int(inputs.get("batch_size", 1))
             if node["class_type"] == "RepeatLatentBatch":
@@ -240,8 +270,11 @@ class ProtocolComfy:
                 return int(inputs.get("max_frames", 1))
             upstream = {
                 "CS_Pixelize": "image",
+                "CS_PixelizePair": "image",
                 "CS_RemoveBackground": "image",
                 "CS_IsolateOnGreen": "image",
+                "CS_LotusNormalPrepare": "image",
+                "CS_LotusNormalFinalize": "reference",
                 "VAEDecode": "samples",
                 "KSampler": "latent_image",
                 "VAEEncode": "pixels",
@@ -264,12 +297,17 @@ class ProtocolComfy:
             kind = query["kind"][0]
             source = query.get("source_artifact", [""])[0]
             count = batch_count(sink["inputs"]["value"][0])
+            sources = [source] * count
+            source_row = self.__class__.store.artifact(source) if source else None
+            if source_row and source_row["kind"] == "FrameSeq":
+                manifest = json.loads(self.__class__.store.artifact_bytes(source))
+                sources = manifest["frames"]
             for index in range(count):
                 artifact = self.__class__.store.put_artifact(
                     PNG + sink_index.to_bytes(2, "big") + index.to_bytes(2, "big"),
                     "image/png",
                     kind,
-                    {"source_artifacts": [source] if source else []},
+                    {"source_artifacts": [sources[index]] if sources[index] else []},
                 )
                 self.__class__.store.attach_run_artifact(
                     run_id,
@@ -1140,12 +1178,12 @@ def test_runtime_defaults_select_the_configured_recipe_when_model_is_omitted(tmp
             "actions": ["image.generate", "frame.redraw", "animation.generate"],
             "modes": ["t2i", "i2i", "i2i-sequence"],
         },
-        {
-            "id": "lotus-normal-d-v1-1.safetensors",
-            "label": "lotus-normal-d-v1-1.safetensors",
-            "actions": ["normal.generate"],
-            "modes": ["image-to-normal"],
-        },
+            {
+                "id": "lotus-normal-d-v1-1.safetensors",
+                "label": "lotus-normal-d-v1-1.safetensors",
+                "actions": ["normal.generate", "sprite.pixelize"],
+                "modes": ["image-to-normal", "image-to-sprite-pair"],
+            },
     ]
     updated = client.put(
         "/api/v1/runtimes/rt_test/defaults/image.generate",
@@ -1241,17 +1279,117 @@ def test_frame_sequence_normal_expands_and_preserves_pairing(tmp_path):
     )
     assert run.status_code == 202
     state = wait(client, run.json()["id"])
-    assert state["status"] == "succeeded"
+    assert state["status"] == "succeeded", (state.get("error"), state)
     assert len(state["artifacts"]) == 3
     assert [item["meta"]["source_artifacts"][0] for item in state["artifacts"]] == frame_ids
     graph = ProtocolComfy.submitted[-1]
     sinks = [item for item in graph.values() if item["class_type"] == "CS_StoreArtifact"]
-    assert [
-        urllib.parse.parse_qs(urllib.parse.urlparse(item["inputs"]["upload_url"]).query)[
-            "source_artifact"
-        ][0]
-        for item in sinks
-    ] == frame_ids
+    assert len(sinks) == 1
+    assert urllib.parse.parse_qs(
+        urllib.parse.urlparse(sinks[0]["inputs"]["upload_url"]).query
+    )["source_artifact"] == [sequence["id"]]
+    loaders = [item for item in graph.values() if item["class_type"] == "CS_LoadArtifact"]
+    assert len(loaders) == 1
+    assert urllib.parse.parse_qs(
+        urllib.parse.urlparse(loaders[0]["inputs"]["artifact_url"]).query
+    )["expand"] == ["frames"]
+
+
+def test_sprite_pixelize_compiles_one_batch_and_pairs_final_sequence(tmp_path):
+    client = ready_client(tmp_path)
+    project = client.post("/api/v1/projects", json={"type": "character"}).json()
+    frame_ids = [
+        client.post(
+            "/api/v1/artifacts",
+            params={"project_id": project["id"], "kind": "Image", "media_type": "image/png"},
+            content=PNG + bytes([index]),
+        ).json()["id"]
+        for index in range(3)
+    ]
+    sequence = client.post(
+        "/api/v1/artifacts",
+        params={
+            "project_id": project["id"],
+            "kind": "FrameSeq",
+            "media_type": "application/vnd.cooksprite.frame-sequence+json",
+        },
+        content=json.dumps(
+            {
+                "schema": "cooksprite.frame-sequence/v1",
+                "action": "walk",
+                "view": "level",
+                "direction": "s",
+                "frames": frame_ids,
+            }
+        ).encode(),
+    ).json()
+    response = client.post(
+        "/api/v1/actions/sprite.pixelize/runs",
+        json={
+            "project": project["id"],
+            "inputs": {"source": sequence["id"]},
+            "values": {
+                "target_size": "128",
+                "palette_budget": "32",
+                "outline": False,
+                "outline_color": "#000000",
+            },
+        },
+    )
+    assert response.status_code == 202
+    state = wait(client, response.json()["id"])
+    assert state["status"] == "succeeded", (state.get("error"), state)
+    assert [item["kind"] for item in state["artifacts"]] == [
+        "FrameSeq",
+        "NormalMap",
+        "NormalMap",
+        "NormalMap",
+    ]
+    output_sequence = client.get(
+        f"/api/v1/artifacts/{state['artifacts'][0]['id']}/sequence"
+    ).json()
+    output_frame_ids = [item["id"] for item in output_sequence["frames"]]
+    assert len(output_frame_ids) == 3
+    for index, normal in enumerate(state["artifacts"][1:]):
+        assert output_frame_ids[index] in normal["meta"]["source_artifacts"]
+        assert frame_ids[index] in normal["meta"]["source_artifacts"]
+    graph = ProtocolComfy.submitted[-1]
+    assert sum(node["class_type"] == "CS_LoadArtifact" for node in graph.values()) == 1
+    assert sum(node["class_type"] == "CS_LotusModelLoader" for node in graph.values()) == 1
+    assert sum(node["class_type"] == "CS_PixelizePair" for node in graph.values()) == 1
+
+
+def test_sprite_pixelize_rejects_more_than_32_frames(tmp_path):
+    client = ready_client(tmp_path)
+    project = client.post("/api/v1/projects", json={"type": "character"}).json()
+    frame = client.post(
+        "/api/v1/artifacts",
+        params={"project_id": project["id"], "kind": "Image", "media_type": "image/png"},
+        content=PNG,
+    ).json()
+    sequence = client.post(
+        "/api/v1/artifacts",
+        params={
+            "project_id": project["id"],
+            "kind": "FrameSeq",
+            "media_type": "application/vnd.cooksprite.frame-sequence+json",
+        },
+        content=json.dumps(
+            {
+                "schema": "cooksprite.frame-sequence/v1",
+                "action": "walk",
+                "view": "level",
+                "direction": "s",
+                "frames": [frame["id"]] * 33,
+            }
+        ).encode(),
+    ).json()
+    response = client.post(
+        "/api/v1/actions/sprite.pixelize/runs",
+        json={"project": project["id"], "inputs": {"source": sequence["id"]}, "values": {}},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "sprite_chunk_too_large"
 
 
 def test_schema_v2_image_sequences_migrate_to_typed_manifest(tmp_path):

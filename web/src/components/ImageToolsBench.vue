@@ -1,17 +1,16 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { useI18n } from "vue-i18n";
 import { PhArrowRight as ArrowRight, PhCheck as Check, PhCircleNotch as CircleNotch, PhMagicWand as MagicWand, PhSparkle as Sparkle } from "@phosphor-icons/vue";
 import ArtifactCard from "./ArtifactCard.vue";
 import ArtifactVisual from "./ArtifactVisual.vue";
 import DropTarget from "./DropTarget.vue";
-import { type ActionControl, type ActionDescriptor, type ActionOption, type ArtifactKind, type ArtifactRef, type Locale } from "../api/generated";
+import { type ArtifactKind, type ArtifactRef } from "../api/generated";
 import { useStudioStore } from "../stores/studio";
+import PixelizeControls from "./PixelizeControls.vue";
 
 type ToolMode = "cutout" | "pixelize";
 
 const store = useStudioStore();
-const { locale } = useI18n();
 const TOOL_STATE_KEY = "cooksprite.image-tools.state.v1";
 const DEFAULT_PIXEL_VALUES: Record<string, unknown> = {
   target_size: "128",
@@ -48,7 +47,6 @@ const accepts = computed<ArtifactKind[]>(() => {
   const declared = action.value?.accepts.source?.type;
   return declared ? (Array.isArray(declared) ? declared : [declared]) : ["Image"];
 });
-const pixelControls = computed(() => action.value?.controls.filter((control) => ["target_size", "palette_budget", "outline", "outline_color"].includes(control.id)) || []);
 // Keep mode-local state in the UI, but only send controls declared by the
 // active Action. This prevents pixelize values from leaking into cutout (and
 // keeps future Tool controls similarly isolated).
@@ -62,19 +60,6 @@ const modeName = computed(() => mode.value === "cutout" ? "studio.toolCutout" : 
 const modeCode = computed(() => mode.value === "cutout" ? "REMOVE BG" : "PIXEL SNAP");
 const actionText = computed(() => mode.value === "cutout" ? "studio.toolRunCutout" : "studio.toolRunPixelize");
 
-function copy(control: ActionControl) { return control.i18n[locale.value as Locale]; }
-
-function options(control: ActionControl): ActionOption[] {
-  if (control.options.length) return control.options;
-  const range = control.options_range;
-  if (!range) return [];
-  const [start, stop, step] = range;
-  return Array.from({ length: Math.floor((stop - start) / step) + 1 }, (_, index) => {
-    const value = start + index * step;
-    return { id: String(value), i18n: { "zh-CN": { name: String(value), description: "" }, en: { name: String(value), description: "" } } };
-  });
-}
-
 function fillDefaults(next = action.value) {
   if (!next) return;
   for (const control of next.controls) if (values.value[control.id] === undefined) values.value[control.id] = JSON.parse(JSON.stringify(control.default));
@@ -83,6 +68,10 @@ function fillDefaults(next = action.value) {
       if (values.value[id] === undefined) values.value[id] = defaultValue;
     }
   }
+}
+
+function setPixelValue(id: string, value: unknown) {
+  values.value[id] = value;
 }
 
 watch(action, fillDefaults, { immediate: true });
@@ -196,40 +185,12 @@ function useOutput() {
       </div>
     </div>
 
-    <div v-if="mode === 'pixelize'" class="tool-bench-controls">
-      <label v-for="control in pixelControls" :key="control.id" :class="['tool-size-field', { 'tool-toggle-field': control.type === 'toggle' }]">
-        <template v-if="control.type === 'toggle'">
-          <span>{{ copy(control).name }}</span>
-          <button
-            type="button"
-            class="tool-toggle-button"
-            :class="{ active: Boolean(values[control.id]) }"
-            role="switch"
-            :aria-checked="Boolean(values[control.id])"
-            :aria-label="copy(control).name"
-            @click="values[control.id] = !Boolean(values[control.id])"
-          >
-            {{ Boolean(values[control.id]) ? "ON" : "OFF" }}
-          </button>
-        </template>
-        <template v-else-if="control.type === 'color'">
-          <span>{{ copy(control).name }}</span>
-          <input
-            v-model="values[control.id]"
-            class="tool-color-input"
-            type="color"
-            :disabled="!Boolean(values.outline)"
-            :aria-label="copy(control).name"
-          />
-        </template>
-        <template v-else>
-          <span>{{ copy(control).name }}</span>
-          <select v-model="values[control.id]">
-            <option v-for="option in options(control)" :key="option.id" :value="option.id">{{ option.i18n[locale as Locale].name }}</option>
-          </select>
-        </template>
-      </label>
-    </div>
+    <PixelizeControls
+      v-if="mode === 'pixelize'"
+      :action="action"
+      :values="values"
+      @change="setPixelValue"
+    />
     <p v-if="error" class="tool-bench-error" role="alert">{{ error }}</p>
     <p v-else-if="!action?.available" class="tool-bench-hint">{{ action?.unavailable_reason || $t("studio.toolUnavailableHint") }}</p>
     <p v-else class="tool-bench-hint">{{ output ? $t("studio.toolResultHint") : $t("studio.toolDragHint") }}</p>

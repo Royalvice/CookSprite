@@ -6,6 +6,7 @@
     "sheet.slice",
     "video.sample",
     "normal.generate",
+    "sprite.pixelize",
     "image.views",
     "image.pixelize",
     "image.cutout"
@@ -2324,7 +2325,7 @@
     {
       "accepts": {
         "source": {
-          "max": 64,
+          "max": 1,
           "required": true,
           "type": [
             "Image",
@@ -2389,6 +2390,243 @@
       },
       "id": "normal.generate",
       "produces": [
+        "NormalMap"
+      ]
+    },
+    {
+      "accepts": {
+        "source": {
+          "max": 1,
+          "required": true,
+          "type": [
+            "Image",
+            "FrameSeq",
+            "SpriteSheet"
+          ]
+        }
+      },
+      "controls": [
+        {
+          "advanced": false,
+          "default": 1,
+          "i18n": {
+            "en": {
+              "description": "",
+              "name": "Normal strength"
+            },
+            "zh-CN": {
+              "description": "",
+              "name": "法线强度"
+            }
+          },
+          "id": "strength",
+          "max": 2.0,
+          "min": 0.0,
+          "options": [],
+          "options_range": null,
+          "step": 0.05,
+          "type": "range"
+        },
+        {
+          "advanced": false,
+          "default": false,
+          "i18n": {
+            "en": {
+              "description": "",
+              "name": "Flip Y"
+            },
+            "zh-CN": {
+              "description": "",
+              "name": "翻转 Y"
+            }
+          },
+          "id": "flip_y",
+          "max": null,
+          "min": null,
+          "options": [],
+          "options_range": null,
+          "step": null,
+          "type": "toggle"
+        },
+        {
+          "advanced": false,
+          "default": "128",
+          "i18n": {
+            "en": {
+              "description": "Output longest edge while preserving aspect ratio",
+              "name": "Pixel size"
+            },
+            "zh-CN": {
+              "description": "输出最长边，自动保持原图长宽比",
+              "name": "像素尺寸"
+            }
+          },
+          "id": "target_size",
+          "max": null,
+          "min": null,
+          "options": [],
+          "options_range": [
+            16,
+            512,
+            16
+          ],
+          "step": null,
+          "type": "select"
+        },
+        {
+          "advanced": false,
+          "default": "32",
+          "i18n": {
+            "en": {
+              "description": "Number of colors in the Oklab palette",
+              "name": "Palette"
+            },
+            "zh-CN": {
+              "description": "Oklab 调色板颜色数量",
+              "name": "调色板"
+            }
+          },
+          "id": "palette_budget",
+          "max": null,
+          "min": null,
+          "options": [
+            {
+              "categories": [],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "8 colors"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "8 色"
+                }
+              },
+              "id": "8"
+            },
+            {
+              "categories": [],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "16 colors"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "16 色"
+                }
+              },
+              "id": "16"
+            },
+            {
+              "categories": [],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "32 colors"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "32 色"
+                }
+              },
+              "id": "32"
+            },
+            {
+              "categories": [],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "64 colors"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "64 色"
+                }
+              },
+              "id": "64"
+            },
+            {
+              "categories": [],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "128 colors"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "128 色"
+                }
+              },
+              "id": "128"
+            }
+          ],
+          "options_range": null,
+          "step": null,
+          "type": "select"
+        },
+        {
+          "advanced": false,
+          "default": false,
+          "i18n": {
+            "en": {
+              "description": "Draw an outline with the selected color",
+              "name": "Outline"
+            },
+            "zh-CN": {
+              "description": "开启后使用所选颜色描边",
+              "name": "描边"
+            }
+          },
+          "id": "outline",
+          "max": null,
+          "min": null,
+          "options": [],
+          "options_range": null,
+          "step": null,
+          "type": "toggle"
+        },
+        {
+          "advanced": false,
+          "default": "#000000",
+          "i18n": {
+            "en": {
+              "description": "Color used when outline is enabled",
+              "name": "Outline color"
+            },
+            "zh-CN": {
+              "description": "描边开启时使用的颜色",
+              "name": "描边颜色"
+            }
+          },
+          "id": "outline_color",
+          "max": null,
+          "min": null,
+          "options": [],
+          "options_range": null,
+          "step": null,
+          "type": "color"
+        }
+      ],
+      "i18n": {
+        "en": {
+          "description": "Estimate normals and jointly pixelize diffuse and normal maps",
+          "name": "Build pixel-normal sprite"
+        },
+        "zh-CN": {
+          "description": "估计法线并联合像素化漫反射图与法线图",
+          "name": "生成像素法线 Sprite"
+        }
+      },
+      "id": "sprite.pixelize",
+      "produces": [
+        "Image",
+        "FrameSeq",
         "NormalMap"
       ]
     },
@@ -2797,14 +3035,17 @@
       "license": "MIT",
       "lowerings": {
         "cooksprite.pixel_snap": "CS_PixelSnap",
-        "cooksprite.pixelize": "CS_Pixelize"
+        "cooksprite.pixelize": "CS_Pixelize",
+        "cooksprite.pixelize_pair": "CS_PixelizePair"
       },
       "node_classes": [
         "CS_Pixelize",
-        "CS_PixelSnap"
+        "CS_PixelSnap",
+        "CS_PixelizePair"
       ],
       "recipes": [
-        "cooksprite.pixel"
+        "cooksprite.pixel",
+        "cooksprite.sprite"
       ],
       "requirements": [
         "numpy>=1.26,<3",
@@ -2816,7 +3057,8 @@
       ],
       "sealed_graphs": {},
       "tasks": [
-        "image.pixelize"
+        "image.pixelize",
+        "sprite.pixelize"
       ],
       "tools": [
         {
@@ -2985,11 +3227,129 @@
           "source": "cooksprite",
           "title": "Recover a native pseudo-pixel grid",
           "version": 1
+        },
+        {
+          "id": "cooksprite.pixelize_pair",
+          "inputs": [
+            {
+              "name": "image",
+              "persistable": false,
+              "required": true,
+              "type": "ImageBatch"
+            },
+            {
+              "name": "normal",
+              "persistable": false,
+              "required": true,
+              "type": "NormalMap"
+            },
+            {
+              "name": "mask",
+              "persistable": false,
+              "required": false,
+              "type": "Mask"
+            },
+            {
+              "name": "normal_mask",
+              "persistable": false,
+              "required": false,
+              "type": "Mask"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "image",
+              "persistable": true,
+              "required": true,
+              "type": "Image"
+            },
+            {
+              "name": "mask",
+              "persistable": false,
+              "required": true,
+              "type": "Mask"
+            },
+            {
+              "name": "normal",
+              "persistable": true,
+              "required": true,
+              "type": "NormalMap"
+            }
+          ],
+          "package_id": "pixel",
+          "params_schema": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "outline": {
+              "type": "boolean"
+            },
+            "outline_color": {
+              "pattern": "^#[0-9A-Fa-f]{6}$",
+              "type": "string"
+            },
+            "padding_x": {
+              "max": 256,
+              "min": -1,
+              "type": "integer"
+            },
+            "padding_y": {
+              "max": 256,
+              "min": -1,
+              "type": "integer"
+            },
+            "palette_budget": {
+              "max": 256,
+              "min": 0,
+              "type": "integer"
+            },
+            "profile": {
+              "enum": [
+                "production",
+                "fidelity",
+                "balanced",
+                "graphic"
+              ],
+              "type": "string"
+            },
+            "sequence_mode": {
+              "enum": [
+                "auto",
+                "independent",
+                "chunk",
+                "continuous"
+              ],
+              "type": "string"
+            },
+            "target_height": {
+              "max": 512,
+              "min": 16,
+              "type": "integer"
+            },
+            "target_size": {
+              "max": 512,
+              "min": 16,
+              "type": "integer"
+            },
+            "target_width": {
+              "max": 512,
+              "min": 16,
+              "type": "integer"
+            },
+            "variants": {
+              "type": "boolean"
+            }
+          },
+          "schema_hash": "29c3c0de6a0bdd8033c78379cd37488ddf7e5c6ac3ba32835259bc8be3d360db",
+          "source": "cooksprite",
+          "title": "Jointly pixelize diffuse art and a tangent-space normal map",
+          "version": 1
         }
       ],
-      "version": "1.0.0",
+      "version": "2.0.0",
       "workflows": [
-        "image.pixelize:image-to-image"
+        "image.pixelize:image-to-image",
+        "sprite.pixelize:image-to-sprite-pair"
       ]
     },
     {
@@ -3396,7 +3756,7 @@
               "name": "image",
               "persistable": false,
               "required": true,
-              "type": "Image"
+              "type": "ImageBatch"
             },
             {
               "name": "mask",
@@ -3428,7 +3788,7 @@
               "type": "number"
             }
           },
-          "schema_hash": "4f0e3a9ebc272195c8f8929d444accdba1f27314820d742f464189e3d0af47ee",
+          "schema_hash": "beda126ed58d4c7cbdf6497db89fb92b4e4861cc938f14a1fdd76ec975d4b7c7",
           "source": "cooksprite",
           "title": "Estimate normal map",
           "version": 1

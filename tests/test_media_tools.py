@@ -9,11 +9,20 @@ import pytest
 from PIL import Image
 
 from cooksprite.nodes.alpha import _session, remove_background_batch
-from cooksprite.nodes.cooksprite_nodes import CS_Pixelize, CS_PixelSnap, CS_RemoveBackground, _png
+from cooksprite.nodes.cooksprite_nodes import (
+    CS_Pixelize,
+    CS_PixelizePair,
+    CS_PixelSnap,
+    CS_RemoveBackground,
+    _png,
+)
 
 
 def test_new_node_contracts_expose_image_and_mask():
     assert CS_Pixelize.RETURN_TYPES == ("IMAGE", "MASK")
+    assert CS_PixelizePair.RETURN_TYPES == ("IMAGE", "MASK", "IMAGE")
+    assert CS_PixelizePair.RETURN_NAMES == ("image", "mask", "normal")
+    assert CS_PixelizePair.INPUT_TYPES()["optional"]["sequence_mode"][1]["default"] == "auto"
     assert CS_PixelSnap.RETURN_TYPES == ("IMAGE", "MASK")
     assert CS_RemoveBackground.RETURN_TYPES == ("IMAGE", "MASK")
     assert CS_RemoveBackground.INPUT_TYPES()["required"]["model"][1]["default"] == "u2net"

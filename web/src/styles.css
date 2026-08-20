@@ -560,6 +560,15 @@ h2 { font-size: 21px; }
 .normal-frame-strip > button.active { border-color: var(--aux); box-shadow: inset 0 -2px var(--aux); color: var(--text); }
 .normal-frame-strip > button.complete::after { position: absolute; right: 3px; top: 3px; content: "✓"; color: var(--confirm); font-weight: 900; }
 .normal-frame-strip .artifact-visual { min-height: 0; }
+.normal-pixelize-option { border: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 88%, transparent); }
+.normal-pixelize-option.active { border-color: var(--aux); box-shadow: inset 3px 0 var(--aux); }
+.normal-pixelize-switch { width: 100%; min-height: 66px; display: flex; align-items: center; justify-content: space-between; gap: 14px; border: 0; background: transparent; color: var(--text); padding: 12px 14px; text-align: left; }
+.normal-pixelize-switch > span { display: grid; gap: 4px; }
+.normal-pixelize-switch b { font-size: 13px; }
+.normal-pixelize-switch small { color: var(--muted); font-size: 9px; line-height: 1.5; }
+.normal-pixelize-switch i { min-width: 48px; border: 1px solid var(--line-strong); color: var(--muted); padding: 8px; font: normal 800 10px var(--font-mono); text-align: center; }
+.normal-pixelize-option.active .normal-pixelize-switch i { border-color: var(--confirm); color: var(--confirm); }
+.normal-pixelize-option .tool-bench-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); border-top-color: var(--line); padding: 12px; }
 .lighting-preview { min-width: 0; display: flex; flex-direction: column; gap: 7px; border: 1px solid var(--line); background: var(--surface); box-shadow: 5px 5px 0 var(--hard-shadow); padding: 10px; }
 .lighting-stage { position: relative; min-height: 320px; flex: 1; overflow: hidden; border: 1px solid var(--line); outline: 0; }
 .lighting-stage:focus-visible { border-color: var(--aux); box-shadow: 0 0 0 3px color-mix(in srgb, var(--aux) 34%, transparent); }

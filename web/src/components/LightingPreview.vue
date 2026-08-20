@@ -8,12 +8,12 @@ import ArtifactVisual from "./ArtifactVisual.vue";
 const props = defineProps<{ diffuse?: ArtifactRef; normal?: ArtifactRef }>();
 const mount = ref<HTMLElement | null>(null);
 const mode = ref<"lit" | "diffuse" | "normal">("lit");
-const lightHorizontal = ref(0.35);
-const lightVertical = ref(0.35);
+const lightHorizontal = ref(-0.5);
+const lightVertical = ref(0.62);
 const height = ref(0.3);
-const intensity = ref(2);
-const lightRange = ref(1.4);
-const environmentIntensity = ref(0);
+const intensity = ref(8);
+const lightRange = ref(4);
+const environmentIntensity = ref(0.45);
 const color = ref("#ffe7b0");
 const normalStrength = ref(1);
 const flipY = ref(false);
@@ -371,8 +371,8 @@ onBeforeUnmount(() => {
       <button v-for="preset in presets" :key="preset.id" :class="{ active: hdri === preset.id }" role="radio" :aria-checked="hdri === preset.id" @click="hdri = preset.id">{{ $t(preset.label) }}</button>
     </div>
     <div class="lighting-controls">
-      <label>{{ $t("lighting.horizontal") }} <input v-model.number="lightHorizontal" type="range" min="-1" max="1" step="0.05" /><b>{{ lightHorizontal.toFixed(2) }}</b></label>
-      <label>{{ $t("lighting.vertical") }} <input v-model.number="lightVertical" type="range" min="-1" max="1" step="0.05" /><b>{{ lightVertical.toFixed(2) }}</b></label>
+      <label>{{ $t("lighting.horizontal") }} <input v-model.number="lightHorizontal" type="range" min="-1" max="1" step="0.01" /><b>{{ lightHorizontal.toFixed(2) }}</b></label>
+      <label>{{ $t("lighting.vertical") }} <input v-model.number="lightVertical" type="range" min="-1" max="1" step="0.01" /><b>{{ lightVertical.toFixed(2) }}</b></label>
       <label>{{ $t("lighting.height") }} <input v-model.number="height" type="range" min="0.3" max="4" step="0.1" /><b>{{ height.toFixed(1) }}</b></label>
       <label>{{ $t("lighting.point") }} <input v-model.number="intensity" type="range" min="0" max="8" step="0.1" /><b>{{ intensity.toFixed(1) }}</b></label>
       <label>{{ $t("lighting.range") }} <input v-model.number="lightRange" type="range" min="0.6" max="4" step="0.1" /><b>{{ lightRange.toFixed(1) }}</b></label>

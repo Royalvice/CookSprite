@@ -13,7 +13,7 @@ MANIFEST = ToolPackageManifest(
             "normal",
             "normal_estimate",
             "Estimate normal map",
-            [("image", "Image"), ("mask", "Mask", False)],
+            [("image", "ImageBatch"), ("mask", "Mask", False)],
             [("normal", "NormalMap", True), ("mask", "Mask", False)],
             {"strength": {"type": "number"}, "flip_y": {"type": "boolean"}},
         ),

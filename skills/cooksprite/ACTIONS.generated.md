@@ -9,6 +9,7 @@
 | `sheet.slice` | `sheet:SpriteSheet` | `action`, `view`, `direction`, `columns`, `rows`, `frame_width`, `frame_height`, `margin`, `spacing`, `exclude_empty` | `FrameSeq` |
 | `video.sample` | `video:Video` | `action`, `view`, `direction`, `sample_fps`, `max_frames` | `FrameSeq` |
 | `normal.generate` | `source:['Image', 'FrameSeq', 'SpriteSheet']` | `strength`, `flip_y` | `NormalMap` |
+| `sprite.pixelize` | `source:['Image', 'FrameSeq', 'SpriteSheet']` | `strength`, `flip_y`, `target_size`, `palette_budget`, `outline`, `outline_color` | `Image`, `FrameSeq`, `NormalMap` |
 | `image.views` | `source:Image` | - | `ImageBatch` |
 | `image.pixelize` | `source:Image` | `target_size`, `palette_budget`, `outline`, `outline_color` | `Image` |
 | `image.cutout` | `source:Image` | - | `Image` |

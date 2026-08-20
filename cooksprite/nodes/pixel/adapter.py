@@ -66,6 +66,75 @@ def _outputs(rgba_frames: Iterable[np.ndarray]) -> tuple[np.ndarray, np.ndarray]
     return rgb, alpha
 
 
+def _normal_inputs(
+    normal: np.ndarray,
+    normal_mask: np.ndarray | None,
+    rgba_frames: list[np.ndarray],
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    value = np.asarray(normal, dtype=np.float32)
+    if value.ndim != 4 or value.shape[-1] < 3:
+        raise ValueError("NORMAL must have shape [batch,height,width,channels]")
+    if value.shape[0] != len(rgba_frames) or any(frame.shape[:2] != value.shape[1:3] for frame in rgba_frames):
+        raise ValueError("NORMAL batch and canvas must match IMAGE")
+    if normal_mask is None:
+        alpha = np.stack([frame[..., 3].astype(np.float32) / 255.0 for frame in rgba_frames])
+    else:
+        alpha = np.asarray(normal_mask, dtype=np.float32)
+        if alpha.ndim == 4 and alpha.shape[-1] == 1:
+            alpha = alpha[..., 0]
+        if alpha.ndim == 2:
+            alpha = alpha[None, ...]
+        if alpha.shape != value.shape[:3]:
+            raise ValueError("NORMAL mask batch and canvas must match NORMAL")
+    return [
+        (np.clip(frame[..., :3], 0.0, 1.0), np.clip(frame_alpha, 0.0, 1.0))
+        for frame, frame_alpha in zip(value, alpha, strict=True)
+    ]
+
+
+def _compile_frames(
+    frames: list[np.ndarray],
+    target: TargetGrid,
+    profile: str,
+    outline: bool,
+    outline_color: str,
+    sequence_mode: str,
+    normal_frames: list[tuple[np.ndarray, np.ndarray]] | None = None,
+):
+    if sequence_mode == "independent" and len(frames) > 1:
+        compiled = [
+            compile_continuous(
+                [frame],
+                [None],
+                target,
+                profile,
+                outline,
+                outline_color,
+                normal_frames=[normal_frames[index]] if normal_frames is not None else None,
+                sequence_mode="continuous",
+            )
+            for index, frame in enumerate(frames)
+        ]
+        output_frames = tuple(item.frames[0] for item in compiled)
+        output_normals = (
+            tuple(item.normals[0] for item in compiled if item.normals is not None)
+            if normal_frames is not None
+            else None
+        )
+        return output_frames, output_normals
+    result = compile_continuous(
+        frames,
+        [None] * len(frames),
+        target,
+        profile,
+        outline,
+        outline_color,
+        normal_frames=normal_frames,
+        sequence_mode=sequence_mode,
+    )
+    return result.frames, result.normals
+
+
 def pixelize_batch(
     image: np.ndarray,
     mask: np.ndarray | None,
@@ -79,6 +148,7 @@ def pixelize_batch(
     target_size: int | None = None,
     outline: bool = True,
     outline_color: str = "#000000",
+    sequence_mode: str = "auto",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compile one shared deterministic pixelization for a ComfyUI batch."""
 
@@ -99,15 +169,62 @@ def pixelize_batch(
     # the flag is accepted for graph compatibility without creating hidden
     # side effects or unreturned artifacts.
     del variants
-    result = compile_continuous(
+    if sequence_mode not in {"auto", "independent", "chunk", "continuous"}:
+        raise ValueError(f"unknown sequence mode: {sequence_mode}")
+    output_frames, _ = _compile_frames(
+        frames, target, profile, bool(outline), str(outline_color), str(sequence_mode)
+    )
+    return _outputs(output_frames)
+
+
+def pixelize_pair_batch(
+    image: np.ndarray,
+    normal: np.ndarray,
+    mask: np.ndarray | None,
+    normal_mask: np.ndarray | None,
+    target_width: int,
+    target_height: int,
+    profile: str = "production",
+    palette_budget: int = 0,
+    padding_x: int = -1,
+    padding_y: int = -1,
+    variants: bool = False,
+    target_size: int | None = None,
+    outline: bool = True,
+    outline_color: str = "#000000",
+    sequence_mode: str = "auto",
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    frames = _rgba_frames(image, mask)
+    if len(frames) > 32:
+        raise ValueError("sprite-pair pixelization accepts at most 32 frames")
+    normals = _normal_inputs(normal, normal_mask, frames)
+    if target_size is not None:
+        target_width, target_height = _target_dimensions(image, int(target_size))
+    target = TargetGrid(
+        int(target_width),
+        int(target_height),
+        None if int(padding_x) < 0 else int(padding_x),
+        None if int(padding_y) < 0 else int(padding_y),
+        None if int(palette_budget) <= 0 else int(palette_budget),
+    )
+    if profile not in {"production", "fidelity", "balanced", "graphic"}:
+        raise ValueError(f"unknown pixel profile: {profile}")
+    if sequence_mode not in {"auto", "independent", "chunk", "continuous"}:
+        raise ValueError(f"unknown sequence mode: {sequence_mode}")
+    del variants
+    output_frames, output_normals = _compile_frames(
         frames,
-        [None] * len(frames),
         target,
         profile,
         bool(outline),
         str(outline_color),
+        str(sequence_mode),
+        normals,
     )
-    return _outputs(result.frames)
+    if output_normals is None or len(output_normals) != len(output_frames):
+        raise RuntimeError("pixel compiler did not return one normal per diffuse frame")
+    output, output_mask = _outputs(output_frames)
+    return output, output_mask, np.stack(output_normals).astype(np.float32)
 
 
 def snap_batch(

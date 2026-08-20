@@ -219,7 +219,10 @@ export const useStudioStore = defineStore("studio", () => {
       if (next.status === "succeeded") {
         await refreshArtifacts();
         if (actionId && !integrated) lastOutputsByAction.value[actionId] = next.artifacts;
-        if (actionId && !integrated && SEQUENCE_ACTIONS.has(actionId) && next.artifacts[0]?.kind === "FrameSeq") {
+        if (actionId === "sprite.pixelize" && !integrated && next.artifacts.length) {
+          integrated = true;
+          await attachPixelizedSprite(source, next.artifacts);
+        } else if (actionId && !integrated && SEQUENCE_ACTIONS.has(actionId) && next.artifacts[0]?.kind === "FrameSeq") {
           integrated = true;
           await loadSequence(next.artifacts[0].id);
         }
@@ -391,6 +394,85 @@ export const useStudioStore = defineStore("studio", () => {
         }
       });
     }, "normal_attach");
+  }
+
+  async function attachPixelizedSprite(
+    source: string | string[] | undefined,
+    outputs: ArtifactRef[],
+  ) {
+    if (!documentView.value) return;
+    const requested = (Array.isArray(source) ? source : source ? [source] : []).map(String);
+    const metaSources = (artifact: ArtifactRef | undefined) => (
+      Array.isArray(artifact?.meta.source_artifacts)
+        ? artifact.meta.source_artifacts.map(String)
+        : []
+    );
+    const sequenceArtifact = outputs.find((item) => item.kind === "FrameSeq");
+    const normals = outputs.filter((item) => item.kind === "NormalMap");
+    if (sequenceArtifact) {
+      const outputSequence = await api.sequence(sequenceArtifact.id);
+      activeSequence.value = outputSequence;
+      const sourceSequenceId = requested[0]
+        || metaSources(sequenceArtifact)[0]
+        || "";
+      if (!sourceSequenceId) return;
+      const sourceSequence = await api.sequence(sourceSequenceId);
+      if (sourceSequence.frames.length !== outputSequence.frames.length) return;
+      const replacements = sourceSequence.frames.map((frame, index) => ({
+        source: frame.id,
+        image: outputSequence.frames[index].id,
+        normal: normals[index]?.id,
+      }));
+      mutateDocument((doc) => {
+        const queues = new Map<string, typeof replacements>();
+        replacements.forEach((replacement) => {
+          const queue = queues.get(replacement.source) || [];
+          queue.push(replacement);
+          queues.set(replacement.source, queue);
+        });
+        for (const clip of doc.character?.clips || []) {
+          for (const view of clip.views) {
+            for (const track of view.tracks) {
+              for (const frame of track.frames) {
+                const replacement = queues.get(frame.artifact)?.shift();
+                if (!replacement) continue;
+                frame.artifact = replacement.image;
+                frame.normal = replacement.normal;
+              }
+            }
+          }
+        }
+      }, "sprite_pixelize_attach");
+      return;
+    }
+
+    const image = outputs.find((item) => item.kind === "Image");
+    const normal = normals[0];
+    const sourceId = requested[0]
+      || metaSources(image).find((item) => item !== image?.id)
+      || "";
+    if (!image || !normal || !sourceId) return;
+    mutateDocument((doc) => {
+      if (doc.static?.primary === sourceId) {
+        doc.static.primary = image.id;
+        doc.static.normal = normal.id;
+      }
+      if (doc.tileset?.source === sourceId) {
+        doc.tileset.source = image.id;
+        doc.tileset.normal = normal.id;
+      }
+      for (const clip of doc.character?.clips || []) {
+        for (const view of clip.views) {
+          for (const track of view.tracks) {
+            for (const frame of track.frames) {
+              if (frame.artifact !== sourceId) continue;
+              frame.artifact = image.id;
+              frame.normal = normal.id;
+            }
+          }
+        }
+      }
+    }, "sprite_pixelize_attach");
   }
 
   function undo() {

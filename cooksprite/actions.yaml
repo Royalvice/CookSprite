@@ -246,11 +246,53 @@ actions:
       zh-CN: {name: 生成法线, description: 为图片或当前动画轨道生成同尺寸法线}
       en: {name: Generate normals, description: Generate same-size normals for an image or animation track}
     accepts:
-      source: {type: [Image, FrameSeq, SpriteSheet], required: true, max: 64}
+      source: {type: [Image, FrameSeq, SpriteSheet], required: true, max: 1}
     produces: [NormalMap]
     controls:
       - {id: strength, type: range, default: 1, min: 0, max: 2, step: 0.05, i18n: {zh-CN: {name: 法线强度}, en: {name: Normal strength}}}
       - {id: flip_y, type: toggle, default: false, i18n: {zh-CN: {name: 翻转 Y}, en: {name: Flip Y}}}
+
+  - id: sprite.pixelize
+    i18n:
+      zh-CN: {name: 生成像素法线 Sprite, description: 估计法线并联合像素化漫反射图与法线图}
+      en: {name: Build pixel-normal sprite, description: Estimate normals and jointly pixelize diffuse and normal maps}
+    accepts:
+      source: {type: [Image, FrameSeq, SpriteSheet], required: true, max: 1}
+    produces: [Image, FrameSeq, NormalMap]
+    controls:
+      - {id: strength, type: range, default: 1, min: 0, max: 2, step: 0.05, i18n: {zh-CN: {name: 法线强度}, en: {name: Normal strength}}}
+      - {id: flip_y, type: toggle, default: false, i18n: {zh-CN: {name: 翻转 Y}, en: {name: Flip Y}}}
+      - id: target_size
+        type: select
+        default: "128"
+        options_range: [16, 512, 16]
+        i18n:
+          zh-CN: {name: 像素尺寸, description: 输出最长边，自动保持原图长宽比}
+          en: {name: Pixel size, description: Output longest edge while preserving aspect ratio}
+      - id: palette_budget
+        type: select
+        default: "32"
+        i18n:
+          zh-CN: {name: 调色板, description: Oklab 调色板颜色数量}
+          en: {name: Palette, description: Number of colors in the Oklab palette}
+        options:
+          - {id: "8", i18n: {zh-CN: {name: 8 色}, en: {name: 8 colors}}}
+          - {id: "16", i18n: {zh-CN: {name: 16 色}, en: {name: 16 colors}}}
+          - {id: "32", i18n: {zh-CN: {name: 32 色}, en: {name: 32 colors}}}
+          - {id: "64", i18n: {zh-CN: {name: 64 色}, en: {name: 64 colors}}}
+          - {id: "128", i18n: {zh-CN: {name: 128 色}, en: {name: 128 colors}}}
+      - id: outline
+        type: toggle
+        default: false
+        i18n:
+          zh-CN: {name: 描边, description: 开启后使用所选颜色描边}
+          en: {name: Outline, description: Draw an outline with the selected color}
+      - id: outline_color
+        type: color
+        default: "#000000"
+        i18n:
+          zh-CN: {name: 描边颜色, description: 描边开启时使用的颜色}
+          en: {name: Outline color, description: Color used when outline is enabled}
 
   - id: image.views
     i18n:

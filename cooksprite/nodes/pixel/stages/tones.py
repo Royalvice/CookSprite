@@ -47,7 +47,24 @@ def _clean_highlights(candidate: np.ndarray, evidence: CellEvidence) -> np.ndarr
     return output
 
 
-def extract_tone_roles(evidence: CellEvidence, silhouette: np.ndarray, strokes: np.ndarray) -> ToneRoleMap:
+def _tone_thresholds(evidence: CellEvidence, silhouette: np.ndarray) -> dict[int, tuple[float, float, float, float]]:
+    thresholds: dict[int, tuple[float, float, float, float]] = {}
+    luminance = evidence.lab[..., 0]
+    for material in np.unique(evidence.material[silhouette]):
+        if material < 0:
+            continue
+        values = luminance[silhouette & (evidence.material == material)]
+        if values.size >= 3:
+            thresholds[int(material)] = tuple(float(item) for item in np.quantile(values, (0.18, 0.38, 0.70, 0.88)))
+    return thresholds
+
+
+def _extract_tone_roles(
+    evidence: CellEvidence,
+    silhouette: np.ndarray,
+    strokes: np.ndarray,
+    thresholds: dict[int, tuple[float, float, float, float]],
+) -> ToneRoleMap:
     roles = np.full(silhouette.shape, int(ToneRole.BACKGROUND), dtype=np.uint8)
     luminance = evidence.lab[..., 0]
     roles[silhouette] = int(ToneRole.MIDTONE)
@@ -55,10 +72,10 @@ def extract_tone_roles(evidence: CellEvidence, silhouette: np.ndarray, strokes: 
         if material < 0:
             continue
         mask = silhouette & (evidence.material == material)
-        values = luminance[mask]
-        if values.size < 3:
+        values = thresholds.get(int(material))
+        if values is None:
             continue
-        q18, q38, q70, q88 = np.quantile(values, (0.18, 0.38, 0.70, 0.88))
+        q18, q38, q70, q88 = values
         roles[mask & (luminance <= q18)] = int(ToneRole.DEEP_SHADOW)
         roles[mask & (luminance > q18) & (luminance <= q38)] = int(ToneRole.SHADOW)
         roles[mask & (luminance >= q70)] = int(ToneRole.LIGHT)
@@ -79,3 +96,26 @@ def extract_tone_roles(evidence: CellEvidence, silhouette: np.ndarray, strokes: 
     protect = evidence.protect | highlight | strokes
     counts = {role.name.lower(): int(np.count_nonzero(roles == int(role))) for role in ToneRole}
     return ToneRoleMap(roles, highlight, protect, counts)
+
+
+def extract_tone_roles(evidence: CellEvidence, silhouette: np.ndarray, strokes: np.ndarray) -> ToneRoleMap:
+    return _extract_tone_roles(evidence, silhouette, strokes, _tone_thresholds(evidence, silhouette))
+
+
+def extract_chunk_tone_roles(
+    evidences: list[CellEvidence],
+    silhouettes: list[np.ndarray],
+    strokes: list[np.ndarray],
+) -> list[ToneRoleMap]:
+    """Use one order-independent material-tone policy for a sprite chunk."""
+
+    per_frame = [_tone_thresholds(evidence, silhouette) for evidence, silhouette in zip(evidences, silhouettes, strict=True)]
+    shared: dict[int, tuple[float, float, float, float]] = {}
+    materials = sorted({material for thresholds in per_frame for material in thresholds})
+    for material in materials:
+        values = np.asarray([thresholds[material] for thresholds in per_frame if material in thresholds], dtype=np.float64)
+        shared[material] = tuple(float(item) for item in np.median(values, axis=0))
+    return [
+        _extract_tone_roles(evidence, silhouette, stroke, shared)
+        for evidence, silhouette, stroke in zip(evidences, silhouettes, strokes, strict=True)
+    ]

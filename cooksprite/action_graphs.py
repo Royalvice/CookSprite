@@ -220,7 +220,7 @@ def _normal_workflow(runtime_id: str, recipe: Recipe) -> WorkflowDefinition:
         id=f"{recipe.id}.normal.generate",
         title=f"{recipe.label} · normal.generate",
         runtime_id=runtime_id,
-        inputs={"source": "Image", "strength": "Number", "flip_y": "Boolean"},
+        inputs={"source": "ImageBatch", "strength": "Number", "flip_y": "Boolean"},
         nodes=[
             ToolNode(
                 id="normal",
@@ -231,6 +231,59 @@ def _normal_workflow(runtime_id: str, recipe: Recipe) -> WorkflowDefinition:
         ],
         outputs={"normal": output_ref("normal", "normal")},
         output_sources={"normal": input_ref("source")},
+    )
+
+
+def _sprite_pixel_workflow(runtime_id: str, recipe: Recipe) -> WorkflowDefinition:
+    return WorkflowDefinition(
+        id=f"{recipe.id}.sprite.pixelize",
+        title=f"{recipe.label} · sprite.pixelize",
+        runtime_id=runtime_id,
+        inputs={
+            "source": "ImageBatch",
+            "strength": "Number",
+            "flip_y": "Boolean",
+            "target_size": "Number",
+            "palette_budget": "Number",
+            "outline": "Boolean",
+            "outline_color": "Text",
+        },
+        nodes=[
+            ToolNode(
+                id="normal",
+                tool="cooksprite.normal_estimate",
+                inputs={"image": input_ref("source")},
+                params={"strength": input_ref("strength"), "flip_y": input_ref("flip_y")},
+            ),
+            ToolNode(
+                id="pixel",
+                tool="cooksprite.pixelize_pair",
+                inputs={
+                    "image": input_ref("source"),
+                    "normal": output_ref("normal", "normal"),
+                    "normal_mask": output_ref("normal", "mask"),
+                },
+                params={
+                    "target_size": input_ref("target_size"),
+                    "target_width": literal(128),
+                    "target_height": literal(128),
+                    "profile": literal("fidelity"),
+                    "palette_budget": input_ref("palette_budget"),
+                    "padding_x": literal(-1),
+                    "padding_y": literal(-1),
+                    "variants": literal(False),
+                    "enabled": literal(True),
+                    "outline": input_ref("outline"),
+                    "outline_color": input_ref("outline_color"),
+                    "sequence_mode": literal("auto"),
+                },
+            ),
+        ],
+        outputs={
+            "image": output_ref("pixel", "image"),
+            "normal": output_ref("pixel", "normal"),
+        },
+        output_sources={"image": input_ref("source"), "normal": input_ref("source")},
     )
 
 
@@ -384,6 +437,10 @@ def materialize_recipe_workflows(
         }
     elif recipe.family == "cooksprite.normal":
         definitions = {"normal.generate:image-to-normal": _normal_workflow(runtime_id, recipe)}
+    elif recipe.family == "cooksprite.sprite":
+        definitions = {
+            "sprite.pixelize:image-to-sprite-pair": _sprite_pixel_workflow(runtime_id, recipe)
+        }
     elif recipe.family == "cooksprite.sheet":
         definitions = {"sheet.slice:sheet-to-frames": _sheet_workflow(runtime_id, recipe)}
     elif recipe.family == "cooksprite.video":
@@ -561,8 +618,8 @@ def bind_action_task(
             "strength": max(
                 0.0,
                 min(
-                    float(values.get("strength", 1.0 if action_id == "normal.generate" else 0.65)),
-                    2.0 if action_id == "normal.generate" else 1.0,
+                    float(values.get("strength", 1.0 if action_id in {"normal.generate", "sprite.pixelize"} else 0.65)),
+                    2.0 if action_id in {"normal.generate", "sprite.pixelize"} else 1.0,
                 ),
             ),
             "pixel_enabled": action_id != "image.generate" and values.get("style") == "pixel",

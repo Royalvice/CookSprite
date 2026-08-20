@@ -50,6 +50,14 @@ class CellEvidence:
     signed_distance: np.ndarray
 
 
+@dataclass(frozen=True)
+class CellSamplingPlan:
+    """Compact source-sample weights shared by diffuse and normal reduction."""
+
+    weights: np.ndarray
+    active: np.ndarray
+
+
 def _normalise(values: np.ndarray, mask: np.ndarray, quantile: float = 0.985) -> np.ndarray:
     valid = values[mask]
     scale = float(np.quantile(valid, quantile)) if valid.size else 1.0
@@ -186,7 +194,13 @@ def analyse_frame(
     )
 
 
-def compile_cell_evidence(frame: FrameEvidence, width: int, height: int) -> CellEvidence:
+def compile_cell_evidence(
+    frame: FrameEvidence,
+    width: int,
+    height: int,
+    *,
+    include_sampling: bool = False,
+) -> CellEvidence | tuple[CellEvidence, CellSamplingPlan]:
     ss = frame.supersample
     if frame.alpha.shape != (height * ss, width * ss):
         raise ValueError("analysis dimensions do not match target grid")
@@ -274,7 +288,7 @@ def compile_cell_evidence(frame: FrameEvidence, width: int, height: int) -> Cell
     chroma_bin = np.clip(np.floor(np.hypot(cell_lab[..., 1], cell_lab[..., 2]) / 0.055), 0, 3).astype(np.int16)
     material = (hue_bin * 4 + chroma_bin).astype(np.int16)
     material[coverage <= 0.002] = -1
-    return CellEvidence(
+    evidence = CellEvidence(
         coverage,
         semantic_coverage,
         cell_lab,
@@ -290,3 +304,6 @@ def compile_cell_evidence(frame: FrameEvidence, width: int, height: int) -> Cell
         material,
         cell_sdf,
     )
+    if include_sampling:
+        return evidence, CellSamplingPlan(weights.astype(np.float32), has_active)
+    return evidence

@@ -39,10 +39,14 @@ class ArtifactBridge:
         payload = "\n".join(str(part) for part in parts).encode()
         return hmac.new(self.secret, payload, hashlib.sha256).hexdigest()
 
-    def download_url(self, artifact_id: str, run_id: str) -> str:
+    def download_url(self, artifact_id: str, run_id: str, *, expand: str = "") -> str:
         expires = int(time.time()) + self.ttl_seconds
-        signature = self._signature("download", artifact_id, run_id, expires)
-        query = urlencode({"run_id": run_id, "expires": expires, "signature": signature})
+        if expand:
+            signature = self._signature("download", artifact_id, run_id, expand, expires)
+            query = urlencode({"run_id": run_id, "expand": expand, "expires": expires, "signature": signature})
+        else:
+            signature = self._signature("download", artifact_id, run_id, expires)
+            query = urlencode({"run_id": run_id, "expires": expires, "signature": signature})
         return f"{self.base_url}/bridge/artifacts/{artifact_id}?{query}"
 
     def upload_url(self, run_id: str, kind: str, source_artifact: str = "") -> str:
@@ -58,8 +62,13 @@ class ArtifactBridge:
         )
         return f"{self.base_url}/bridge/runs/{run_id}/artifacts?{query}"
 
-    def verify_download(self, artifact_id: str, run_id: str, expires: int, signature: str) -> None:
-        self._verify(expires, signature, "download", artifact_id, run_id, expires)
+    def verify_download(
+        self, artifact_id: str, run_id: str, expires: int, signature: str, *, expand: str = ""
+    ) -> None:
+        if expand:
+            self._verify(expires, signature, "download", artifact_id, run_id, expand, expires)
+        else:
+            self._verify(expires, signature, "download", artifact_id, run_id, expires)
 
     def verify_upload(
         self, run_id: str, kind: str, source_artifact: str, expires: int, signature: str

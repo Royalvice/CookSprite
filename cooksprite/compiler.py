@@ -125,7 +125,7 @@ class Compiler(PlanBuilder):
         if port_type == "Video":
             return self.bridge.download_url(value.id, self.run_id)
         try:
-            image_ref = self.load_artifact(value.id)
+            image_ref = self.load_artifact(value.id, image_batch=port_type == "ImageBatch")
             if port_type == "Mask":
                 mask_ref = self.mask_for_image(image_ref)
                 if mask_ref is None:

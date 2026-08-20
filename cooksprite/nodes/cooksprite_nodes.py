@@ -109,8 +109,8 @@ class CS_LoadArtifact:
     FUNCTION = "load"
     CATEGORY = "CookSprite/Bridge"
 
-    def load(self, artifact_url):
-        data, _ = _read(artifact_url)
+    @staticmethod
+    def _decode(data: bytes) -> tuple[object, object]:
         image = Image.open(io.BytesIO(data))
         if image.mode in {"RGBA", "LA"} or "transparency" in image.info:
             rgba = image.convert("RGBA")
@@ -119,7 +119,32 @@ class CS_LoadArtifact:
         else:
             image = image.convert("RGB")
             alpha = np.ones((image.height, image.width), dtype=np.float32)
-        return (_tensor(image), torch.from_numpy(alpha).unsqueeze(0))
+        return _tensor(image), torch.from_numpy(alpha).unsqueeze(0)
+
+    def load(self, artifact_url):
+        data, media_type = _read(artifact_url)
+        if media_type != "application/vnd.cooksprite.bridge-image-batch+json":
+            return self._decode(data)
+        manifest = json.loads(data.decode("utf-8"))
+        if manifest.get("schema") != "cooksprite.bridge-image-batch/v1":
+            raise ValueError("unsupported CookSprite image batch manifest")
+        frames = manifest.get("frames") or []
+        if not 1 <= len(frames) <= 32:
+            raise ValueError("CookSprite image batch must contain 1 to 32 frames")
+        images = []
+        masks = []
+        canvas = None
+        for frame in frames:
+            frame_data, _ = _read(str(frame["url"]))
+            image, mask = self._decode(frame_data)
+            size = tuple(image.shape[1:3])
+            if canvas is None:
+                canvas = size
+            elif size != canvas:
+                raise ValueError("all Sprite chunk frames must use the same canvas")
+            images.append(image)
+            masks.append(mask)
+        return (torch.cat(images, dim=0), torch.cat(masks, dim=0))
 
 
 class CS_StoreArtifact:
@@ -308,6 +333,7 @@ class CS_Pixelize:
                 "target_size": ("INT", {"default": 0, "min": 0, "max": 512}),
                 "outline": ("BOOLEAN", {"default": True}),
                 "outline_color": ("STRING", {"default": "#000000"}),
+                "sequence_mode": ("STRING", {"default": "auto", "enum": ["auto", "independent", "chunk", "continuous"]}),
             },
         }
 
@@ -331,6 +357,7 @@ class CS_Pixelize:
         target_size=0,
         outline=True,
         outline_color="#000000",
+        sequence_mode="auto",
     ):
         if not enabled:
             passthrough_mask = mask
@@ -352,10 +379,94 @@ class CS_Pixelize:
             target_size=int(target_size) if int(target_size) > 0 else None,
             outline=bool(outline),
             outline_color=str(outline_color),
+            sequence_mode=str(sequence_mode),
         )
         return (
-            torch.from_numpy(output).to(device=image.device, dtype=image.dtype),
-            torch.from_numpy(output_mask).to(device=image.device, dtype=image.dtype),
+            torch.from_numpy(output).to(dtype=image.dtype),
+            torch.from_numpy(output_mask).to(dtype=image.dtype),
+        )
+
+
+class CS_PixelizePair:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "normal": ("IMAGE",),
+                "target_width": ("INT", {"default": 128, "min": 16, "max": 512}),
+                "target_height": ("INT", {"default": 128, "min": 16, "max": 512}),
+                "profile": ("STRING", {"default": "production", "enum": ["production", "fidelity", "balanced", "graphic"]}),
+                "palette_budget": ("INT", {"default": 0, "min": 0, "max": 256}),
+                "padding_x": ("INT", {"default": -1, "min": -1, "max": 256}),
+                "padding_y": ("INT", {"default": -1, "min": -1, "max": 256}),
+                "variants": ("BOOLEAN", {"default": False}),
+                "enabled": ("BOOLEAN", {"default": True}),
+            },
+            "optional": {
+                "mask": ("MASK",),
+                "normal_mask": ("MASK",),
+                "target_size": ("INT", {"default": 0, "min": 0, "max": 512}),
+                "outline": ("BOOLEAN", {"default": True}),
+                "outline_color": ("STRING", {"default": "#000000"}),
+                "sequence_mode": ("STRING", {"default": "auto", "enum": ["auto", "independent", "chunk", "continuous"]}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "MASK", "IMAGE")
+    RETURN_NAMES = ("image", "mask", "normal")
+    FUNCTION = "run"
+    CATEGORY = "CookSprite/Pixel"
+
+    def run(
+        self,
+        image,
+        normal,
+        target_width,
+        target_height,
+        profile="production",
+        palette_budget=0,
+        padding_x=-1,
+        padding_y=-1,
+        variants=False,
+        enabled=True,
+        mask=None,
+        normal_mask=None,
+        target_size=0,
+        outline=True,
+        outline_color="#000000",
+        sequence_mode="auto",
+    ):
+        if not enabled:
+            passthrough_mask = mask
+            if passthrough_mask is None:
+                passthrough_mask = torch.ones(
+                    image.shape[0], image.shape[1], image.shape[2], device=image.device, dtype=image.dtype
+                )
+            return (image, passthrough_mask, normal)
+        from .pixel.adapter import pixelize_pair_batch
+
+        output, output_mask, output_normal = pixelize_pair_batch(
+            image.detach().cpu().numpy(),
+            normal.detach().cpu().numpy(),
+            mask.detach().cpu().numpy() if mask is not None else None,
+            normal_mask.detach().cpu().numpy() if normal_mask is not None else None,
+            int(target_width),
+            int(target_height),
+            profile=str(profile),
+            palette_budget=int(palette_budget),
+            padding_x=int(padding_x),
+            padding_y=int(padding_y),
+            variants=bool(variants),
+            target_size=int(target_size) if int(target_size) > 0 else None,
+            outline=bool(outline),
+            outline_color=str(outline_color),
+            sequence_mode=str(sequence_mode),
+        )
+        return (
+            torch.from_numpy(output).to(dtype=image.dtype),
+            torch.from_numpy(output_mask).to(dtype=image.dtype),
+            torch.from_numpy(output_normal).to(dtype=normal.dtype),
         )
 
 
@@ -777,6 +888,7 @@ NODE_CLASSES = [
     CS_CompilePromptPacket,
     CS_IsolateOnGreen,
     CS_Pixelize,
+    CS_PixelizePair,
     CS_PixelSnap,
     CS_RemoveBackground,
     CS_LotusModelLoader,

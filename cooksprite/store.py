@@ -885,11 +885,22 @@ class Store:
             )
             self.db.commit()
 
-    def set_run_artifacts(self, run_id: str, artifact_ids: list[str]) -> None:
+    def set_run_artifacts(
+        self, run_id: str, artifact_ids: list[str], *, preserve_duplicates: bool = False
+    ) -> None:
         with self.lock:
+            values = list(artifact_ids) if preserve_duplicates else list(dict.fromkeys(artifact_ids))
             self.db.execute(
                 "UPDATE runs SET artifacts=?,updated_at=? WHERE id=?",
-                (json.dumps(list(dict.fromkeys(artifact_ids))), utcnow(), run_id),
+                (json.dumps(values), utcnow(), run_id),
+            )
+            self.db.commit()
+
+    def update_artifact_meta(self, artifact_id: str, meta: dict[str, Any]) -> None:
+        with self.lock:
+            self.db.execute(
+                "UPDATE artifacts SET meta=? WHERE id=?",
+                (json.dumps(meta), artifact_id),
             )
             self.db.commit()
 

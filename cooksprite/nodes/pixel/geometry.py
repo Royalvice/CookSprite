@@ -117,6 +117,55 @@ def transform_mask(mask: np.ndarray, transform: GeometryTransform, supersample: 
     ) > 0
 
 
+def render_normal_supersampled(
+    normal: np.ndarray,
+    alpha: np.ndarray,
+    transform: GeometryTransform,
+    supersample: int,
+) -> np.ndarray:
+    """Warp encoded tangent normals as alpha-weighted vectors."""
+
+    x0, y0, x1, y1 = transform.source_bbox_xyxy
+    vectors = np.clip(normal[y0:y1, x0:x1, :3], 0.0, 1.0).astype(np.float32) * 2.0 - 1.0
+    source_alpha = np.clip(alpha[y0:y1, x0:x1], 0.0, 1.0).astype(np.float32)
+    source_height, source_width = source_alpha.shape
+    output_width = transform.target_width * supersample
+    output_height = transform.target_height * supersample
+    matrix = np.array(
+        [
+            [transform.draw_size_wh[0] * supersample / source_width, 0.0, transform.offset_xy[0] * supersample],
+            [0.0, transform.draw_size_wh[1] * supersample / source_height, transform.offset_xy[1] * supersample],
+        ],
+        dtype=np.float32,
+    )
+    premultiplied = vectors * source_alpha[..., None]
+    warped_alpha = cv2.warpAffine(
+        source_alpha,
+        matrix,
+        (output_width, output_height),
+        flags=cv2.INTER_LANCZOS4,
+        borderMode=cv2.BORDER_CONSTANT,
+    )
+    warped_vectors = cv2.warpAffine(
+        premultiplied,
+        matrix,
+        (output_width, output_height),
+        flags=cv2.INTER_LANCZOS4,
+        borderMode=cv2.BORDER_CONSTANT,
+    )
+    warped_alpha = np.clip(warped_alpha, 0.0, 1.0)
+    vectors = np.divide(
+        warped_vectors,
+        np.maximum(warped_alpha[..., None], 1e-7),
+        out=np.zeros_like(warped_vectors),
+        where=warped_alpha[..., None] > 1e-7,
+    )
+    length = np.linalg.norm(vectors, axis=2, keepdims=True)
+    neutral = np.zeros_like(vectors)
+    neutral[..., 2] = 1.0
+    return np.where(length > 1e-7, vectors / np.maximum(length, 1e-7), neutral).astype(np.float32)
+
+
 def geometry_metrics(alpha: np.ndarray, target: TargetGrid) -> dict[str, float | int | list[int]]:
     x0, y0, x1, y1 = foreground_bbox(alpha)
     center_x = (x0 + x1 - 1) / 2.0

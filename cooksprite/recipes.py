@@ -66,6 +66,7 @@ CORE_IMAGE_NODES = {
 }
 
 CORE_PIXEL_NODES = {"CS_LoadArtifact", "CS_StoreArtifact", "CS_Pixelize"}
+CORE_PIXEL_PAIR_NODES = CORE_PIXEL_NODES | {"CS_PixelizePair"}
 CORE_ALPHA_NODES = {
     "CS_LoadArtifact",
     "CS_StoreArtifact",
@@ -580,6 +581,24 @@ def discover_recipes(report: dict[str, Any]) -> list[Recipe]:
                 provenance=dict(LOTUS_NORMAL_PROVENANCE),
             )
         )
+        if CORE_PIXEL_PAIR_NODES.issubset(nodes):
+            recipes.append(
+                Recipe(
+                    id="cooksprite-sprite-pixel-v2",
+                    label="Lotus Normal + CookSprite Pixelize",
+                    family="cooksprite.sprite",
+                    actions=["sprite.pixelize"],
+                    modes=["image-to-sprite-pair"],
+                    checkpoint=LOTUS_NORMAL_MODEL,
+                    source="discovered",
+                    model_bundle=LOTUS_NORMAL_BUNDLE_ID,
+                    model_files=list(lotus_bundle["files"]),
+                    provenance={
+                        "normal": dict(LOTUS_NORMAL_PROVENANCE),
+                        "pixel": {"package": "cooksprite.pixel", "version": "2.0.0"},
+                    },
+                )
+            )
     if CORE_PIXEL_NODES.issubset(nodes):
         recipes.append(
             Recipe(
@@ -795,6 +814,7 @@ def recipe_mode(action_id: str, inputs: dict[str, list[str]]) -> str:
         return "i2v" if inputs.get("character") else "t2v"
     return {
         "normal.generate": "image-to-normal",
+        "sprite.pixelize": "image-to-sprite-pair",
         "sheet.slice": "sheet-to-frames",
         "video.sample": "video-to-frames",
         "image.pixelize": "image-to-image",

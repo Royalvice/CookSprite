@@ -2,21 +2,30 @@
 
 from __future__ import annotations
 
+import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from typing import Any
 
 import cv2
 import numpy as np
 
-from ..geometry import GeometryTransform, build_transform, geometry_metrics, union_bbox
+from ..geometry import (
+    GeometryTransform,
+    build_transform,
+    geometry_metrics,
+    render_normal_supersampled,
+    union_bbox,
+)
 from ..stages.contour import (
     InternalStructureStroke,
     SilhouetteContour,
     compile_internal_strokes,
     compile_silhouette,
 )
-from ..stages.evidence import CellEvidence, FrameEvidence, analyse_frame, compile_cell_evidence
+from ..stages.evidence import CellEvidence, analyse_frame, compile_cell_evidence
+from ..stages.normals import normals_to_rgb, reduce_normal_cells
 from ..stages.palette import (
     PaletteBuildResult,
     build_palette,
@@ -24,7 +33,7 @@ from ..stages.palette import (
     labels_to_rgba,
     map_palette,
 )
-from ..stages.tones import ToneRole, ToneRoleMap, extract_tone_roles
+from ..stages.tones import ToneRole, ToneRoleMap, extract_chunk_tone_roles, extract_tone_roles
 from ..types import TargetGrid
 
 
@@ -49,6 +58,7 @@ class CompiledSequence:
     diagnostics: tuple[CompiledFrameDiagnostics, ...]
     metrics: dict[str, Any]
     profile: str
+    normals: tuple[np.ndarray, ...] | None = None
 
 
 def _semantic_mask(record_path: str | None, shape: tuple[int, int]) -> np.ndarray | None:
@@ -70,10 +80,15 @@ def _supersample(target: TargetGrid, frame_count: int) -> int:
     return max(1, min(quality_limit, 768 // max(target.width, target.height)))
 
 
-def _selective_outer_stroke(evidence: CellEvidence, silhouette: np.ndarray) -> np.ndarray:
+def _selective_outer_stroke(
+    evidence: CellEvidence,
+    silhouette: np.ndarray,
+    dark_limit: float | None = None,
+) -> np.ndarray:
     eroded = cv2.erode(silhouette.astype(np.uint8), np.ones((3, 3), np.uint8), iterations=1) > 0
     boundary = silhouette & ~eroded
-    dark_limit = float(np.quantile(evidence.lab[..., 0][silhouette], 0.42)) if np.any(silhouette) else 0.0
+    if dark_limit is None:
+        dark_limit = float(np.quantile(evidence.lab[..., 0][silhouette], 0.42)) if np.any(silhouette) else 0.0
     return boundary & (
         ((evidence.edge >= 0.43) & (evidence.source_dark >= 0.08))
         | ((evidence.feature >= 0.84) & (evidence.lab[..., 0] <= dark_limit))
@@ -155,37 +170,82 @@ def compile_continuous(
     profile: str = "production",
     outline: bool = True,
     outline_color: str = "#000000",
+    *,
+    normal_frames: list[tuple[np.ndarray, np.ndarray]] | None = None,
+    sequence_mode: str = "auto",
 ) -> CompiledSequence:
     started = time.perf_counter()
+    if sequence_mode not in {"auto", "chunk", "continuous"}:
+        raise ValueError(f"unsupported sequence mode: {sequence_mode}")
+    resolved_mode = "chunk" if sequence_mode == "auto" and len(rgba_frames) > 1 else (
+        "continuous" if sequence_mode == "auto" else sequence_mode
+    )
+    if resolved_mode == "chunk" and len(rgba_frames) > 32:
+        raise ValueError("chunk pixelization accepts at most 32 frames")
+    if normal_frames is not None and len(normal_frames) != len(rgba_frames):
+        raise ValueError("normal batch must match diffuse batch")
     alphas = [frame[..., 3].astype(np.float32) / 255.0 for frame in rgba_frames]
     bbox = union_bbox(alphas)
     transform = build_transform(bbox, target)
     supersample = _supersample(target, len(rgba_frames))
-    analyses: list[FrameEvidence] = []
-    cells: list[CellEvidence] = []
-    silhouettes: list[SilhouetteContour] = []
-    internal_strokes: list[InternalStructureStroke] = []
-    tone_maps: list[ToneRoleMap] = []
-    adjusted: list[CellEvidence] = []
-    stroke_masks: list[np.ndarray] = []
-    detail_masks: list[np.ndarray] = []
-    for rgba, semantic_path in zip(rgba_frames, semantic_mask_paths, strict=True):
+    def compile_frame(index: int) -> tuple[CellEvidence, SilhouetteContour, InternalStructureStroke, np.ndarray | None]:
+        rgba = rgba_frames[index]
+        semantic_path = semantic_mask_paths[index]
         semantic = _semantic_mask(semantic_path, rgba.shape[:2])
         analysis = analyse_frame(rgba, transform, semantic, supersample)
-        evidence = compile_cell_evidence(analysis, target.width, target.height)
+        if normal_frames is None:
+            evidence = compile_cell_evidence(analysis, target.width, target.height)
+            cell_normal = None
+        else:
+            evidence, sampling = compile_cell_evidence(
+                analysis,
+                target.width,
+                target.height,
+                include_sampling=True,
+            )
+            normal, normal_alpha = normal_frames[index]
+            rendered_normal = render_normal_supersampled(normal, normal_alpha, transform, supersample)
+            cell_normal = reduce_normal_cells(rendered_normal, sampling, target.width, target.height)
         silhouette = compile_silhouette(evidence)
         internal = compile_internal_strokes(evidence, silhouette.mask)
-        strokes = internal.mask | _selective_outer_stroke(evidence, silhouette.mask)
-        tones = extract_tone_roles(evidence, silhouette.mask, strokes)
-        detail = _micro_detail_mask(evidence, tones, silhouette.mask) if not outline else np.zeros_like(strokes)
-        analyses.append(analysis)
-        cells.append(evidence)
-        silhouettes.append(silhouette)
-        internal_strokes.append(internal)
-        tone_maps.append(tones)
-        adjusted.append(_role_adjusted_evidence(evidence, tones, preserve_highlights=not outline))
-        stroke_masks.append(strokes)
-        detail_masks.append(detail)
+        return evidence, silhouette, internal, cell_normal
+
+    workers = min(len(rgba_frames), 4, max(1, (os.cpu_count() or 2) // 2))
+    if workers > 1:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="cooksprite-pixel") as executor:
+            compiled = list(executor.map(compile_frame, range(len(rgba_frames))))
+    else:
+        compiled = [compile_frame(index) for index in range(len(rgba_frames))]
+    evidences = [item[0] for item in compiled]
+    silhouettes = [item[1] for item in compiled]
+    internal_strokes = [item[2] for item in compiled]
+    cell_normals = [item[3] for item in compiled] if normal_frames is not None else None
+    shared_dark_limit = None
+    if resolved_mode == "chunk":
+        dark_values = [evidence.lab[..., 0][silhouette.mask] for evidence, silhouette in zip(evidences, silhouettes, strict=True)]
+        populated = [value for value in dark_values if value.size]
+        if populated:
+            shared_dark_limit = float(np.quantile(np.concatenate(populated), 0.42))
+    stroke_masks = [
+        internal.mask | _selective_outer_stroke(evidence, silhouette.mask, shared_dark_limit)
+        for evidence, silhouette, internal in zip(evidences, silhouettes, internal_strokes, strict=True)
+    ]
+    tone_maps = (
+        extract_chunk_tone_roles(evidences, [item.mask for item in silhouettes], stroke_masks)
+        if resolved_mode == "chunk"
+        else [
+            extract_tone_roles(evidence, silhouette.mask, strokes)
+            for evidence, silhouette, strokes in zip(evidences, silhouettes, stroke_masks, strict=True)
+        ]
+    )
+    detail_masks = [
+        _micro_detail_mask(evidence, tones, silhouette.mask) if not outline else np.zeros_like(strokes)
+        for evidence, tones, silhouette, strokes in zip(evidences, tone_maps, silhouettes, stroke_masks, strict=True)
+    ]
+    adjusted = [
+        _role_adjusted_evidence(evidence, tones, preserve_highlights=not outline)
+        for evidence, tones in zip(evidences, tone_maps, strict=True)
+    ]
     budget = target.resolved_palette_budget
     if profile == "fidelity":
         budget = min(256, max(budget, round(budget * 1.20)))
@@ -198,6 +258,8 @@ def compile_continuous(
         budget,
         preserve_highlights=not outline,
         outline_color=outline_color if outline else None,
+        equal_frame_weight=resolved_mode == "chunk",
+        canonical_order=resolved_mode == "chunk",
     )
     labels: list[np.ndarray] = []
     alphas_out: list[np.ndarray] = []
@@ -212,8 +274,16 @@ def compile_continuous(
         labels.append(mapped)
         alphas_out.append(alpha)
         foregrounds.append(foreground)
-    labels = _stabilize_labels(labels, adjusted, foregrounds, palette)
+    if resolved_mode == "continuous":
+        labels = _stabilize_labels(labels, adjusted, foregrounds, palette)
     output_frames = tuple(labels_to_rgba(label, palette, alpha) for label, alpha in zip(labels, alphas_out, strict=True))
+    output_normals = None
+    if cell_normals is not None:
+        output_normals = tuple(
+            normals_to_rgb(normal, alpha)
+            for normal, alpha in zip(cell_normals, alphas_out, strict=True)
+            if normal is not None
+        )
     diagnostics = tuple(
         CompiledFrameDiagnostics(
             evidence.coverage,
@@ -234,6 +304,8 @@ def compile_continuous(
         "outline": outline,
         "outline_color": outline_color if outline else None,
         "frame_count": len(output_frames),
+        "sequence_mode": resolved_mode,
+        "workers": workers,
         "supersample": supersample,
         "palette_budget": target.resolved_palette_budget,
         "palette_actual": len(palette.srgb),
@@ -263,4 +335,4 @@ def compile_continuous(
         "tone_role_counts": [item.counts for item in tone_maps],
         "wall_seconds": time.perf_counter() - started,
     }
-    return CompiledSequence(output_frames, palette, transform, diagnostics, metrics, profile)
+    return CompiledSequence(output_frames, palette, transform, diagnostics, metrics, profile, output_normals)
