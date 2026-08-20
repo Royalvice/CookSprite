@@ -203,6 +203,11 @@ watch(() => store.lastOutputsByAction["sprite.pixelize"], async (outputs) => {
   const sequence = outputs.find((item) => item.kind === "FrameSeq");
   normalResultSequence.value = sequence ? await store.readSequence(sequence.id) : null;
   normalResultImage.value = outputs.find((item) => item.kind === "Image") || null;
+  const finalSource = sequence || normalResultImage.value;
+  if (finalSource) {
+    inputs.value.source = finalSource.id;
+    selectedArtifact.value = finalSource;
+  }
   normalFrameIndex.value = 0;
 });
 
