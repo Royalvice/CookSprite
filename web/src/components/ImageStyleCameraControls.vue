@@ -9,9 +9,10 @@ const props = defineProps<{
 }>();
 
 const { locale } = useI18n();
-const characterStyles = new Set(["ultra_realistic", "2d_action_game", "stylized_3d", "anime", "pixel_art"]);
-const isCharacter = computed(() => String(props.values.category || "") === "character");
-const styleOptions = computed(() => props.styleControl?.options.filter((option) => characterStyles.has(option.id)) || []);
+const category = computed(() => String(props.values.category || "character"));
+const styleOptions = computed(() => props.styleControl?.options.filter(
+  (option) => !option.categories?.length || option.categories.includes(category.value),
+) || []);
 
 function copy(control: ActionControl | undefined) {
   return control?.i18n[locale.value as Locale] || { name: "", description: "" };
@@ -21,22 +22,22 @@ function optionCopy(option: ActionControl["options"][number]) {
   return option.i18n[locale.value as Locale];
 }
 
-function syncCharacterDefaults() {
-  if (!isCharacter.value || !styleOptions.value.length) return;
-  if (!characterStyles.has(String(props.values.style || ""))) {
-    props.values.style = "2d_action_game";
+function syncStyleDefault() {
+  if (!styleOptions.value.length) return;
+  if (!styleOptions.value.some((option) => option.id === String(props.values.style || ""))) {
+    props.values.style = styleOptions.value[0].id;
   }
 }
 
-watch(() => props.values.category, syncCharacterDefaults, { immediate: true });
+watch(() => props.values.category, syncStyleDefault, { immediate: true });
 </script>
 
 <template>
-  <section v-if="isCharacter && styleControl" class="prompt-style" data-testid="character-prompt-options">
+  <section v-if="styleControl" class="prompt-style" data-testid="asset-style-options">
     <label class="prompt-select-field">
       <span>{{ copy(styleControl).name }}</span>
       <small>{{ copy(styleControl).description }}</small>
-      <select v-model="values.style" :disabled="values.prompt_compile !== true" data-testid="character-style-select">
+      <select v-model="values.style" :disabled="values.prompt_compile !== true" data-testid="asset-style-select">
         <option v-for="option in styleOptions" :key="option.id" :value="option.id">{{ optionCopy(option).name }}</option>
       </select>
     </label>

@@ -29,7 +29,7 @@ _PARAMS = {
 
 MANIFEST = ToolPackageManifest(
     id="prompt",
-    version="1.4.0",
+    version="1.5.0",
     license="Apache-2.0",
     tools=[
         tool(

@@ -878,7 +878,7 @@ def test_prompt_tool_is_model_neutral_and_deterministic():
     assert first.to_dict() == second.to_dict()
     assert first.task == "image"
     assert first.mode == "t2i"
-    assert first.metadata["compiler_version"] == "sprite_prompt_package_v1.4"
+    assert first.metadata["compiler_version"] == "sprite_prompt_package_v1.5"
     assert first.negative_prompt == ""
     assert "negative_prompt" not in first.to_dict()
     assert first.metadata["packet_type"] == "character_prompt_packet"
@@ -931,6 +931,64 @@ def test_character_i2i_uses_edit_template_instead_of_t2i_character_packet():
     assert result.reference_required is True
 
 
+def test_non_character_prompt_packets_use_category_specific_templates_and_styles():
+    compiler = SpritePromptCompiler()
+    cases = (
+        (
+            "weapon",
+            "weapon_scifi_hardsurface",
+            "A compact plasma rifle",
+            "blades and firearms run horizontally from left to right",
+        ),
+        (
+            "prop",
+            "prop_storybook",
+            "A copper cooking pot",
+            "Front three-quarter orthographic product view",
+        ),
+        (
+            "terrain",
+            "terrain_pixel_art",
+            "Frozen blue dungeon floor",
+            "Opposite left and right edges and opposite top and bottom edges continue",
+        ),
+        (
+            "scene",
+            "scene_stylized_low_poly",
+            "A cyan crystal outcrop",
+            "One complete modular environment asset only",
+        ),
+        (
+            "vfx",
+            "vfx_painterly_fantasy",
+            "A circular arcane portal",
+            "its light, bloom, haze, smoke and color spill must not alter the background",
+        ),
+    )
+    for category, style, caption, contract in cases:
+        result = compiler.compile_image(
+            ImagePromptRequest(caption=caption, category=category, style=style, mode="t2i")
+        )
+        assert result.prompt.startswith(f"{caption}.")
+        assert contract in result.prompt
+        assert result.negative_prompt == ""
+        assert result.metadata["packet_type"] == f"{category}_prompt_packet"
+        assert result.metadata["style"] == style
+        assert result.metadata["combination"]["total_variants"] == 5
+
+
+def test_non_character_legacy_styles_map_to_each_category_packet():
+    compiler = SpritePromptCompiler()
+    smooth = compiler.compile_image(
+        ImagePromptRequest(caption="A copper pot", category="prop", style="smooth")
+    )
+    pixel = compiler.compile_image(
+        ImagePromptRequest(caption="Frozen tiles", category="terrain", style="pixel")
+    )
+    assert smooth.metadata["style"] == "prop_realistic_game_ready"
+    assert pixel.metadata["style"] == "terrain_pixel_art"
+
+
 def test_prompt_node_keeps_an_empty_legacy_port_without_negative_metadata():
     node = CS_CompilePromptPacket()
     prompt, negative, metadata = node.compile(
@@ -948,7 +1006,7 @@ def test_prompt_node_keeps_an_empty_legacy_port_without_negative_metadata():
     assert "Pure simple solid background" in prompt
     assert "2D game illustration" not in prompt
     metadata_value = json.loads(metadata)
-    assert metadata_value["metadata"]["compiler_version"] == "sprite_prompt_package_v1.4"
+    assert metadata_value["metadata"]["compiler_version"] == "sprite_prompt_package_v1.5"
     assert "negative_prompt" not in metadata_value
     assert CS_CompilePromptPacket.RETURN_TYPES == ("STRING", "STRING", "STRING")
     assert CS_CompilePromptPacket.RETURN_NAMES == ("prompt", "negative_prompt", "metadata")

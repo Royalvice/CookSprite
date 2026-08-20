@@ -10,7 +10,7 @@ export type RuntimeNodeStatus = "queued" | "executing" | "cached" | "completed" 
 
 export interface LocalizedText { name: string; description: string }
 export interface ActionInput { type: ArtifactKind | ArtifactKind[]; required: boolean; max: number }
-export interface ActionOption { id: string; i18n: Record<Locale, LocalizedText>; example?: ArtifactRef }
+export interface ActionOption { id: string; i18n: Record<Locale, LocalizedText>; categories?: string[]; example?: ArtifactRef }
 export interface ActionControl {
   id: string;
   type: "select" | "multi-select" | "toggle" | "range" | "number" | "text" | "color" | "seed";

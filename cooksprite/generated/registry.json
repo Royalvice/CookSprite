@@ -38,6 +38,7 @@
           "min": null,
           "options": [
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -52,6 +53,7 @@
               "id": "character"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -66,6 +68,7 @@
               "id": "weapon"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -80,6 +83,7 @@
               "id": "prop"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -94,6 +98,7 @@
               "id": "terrain"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -108,6 +113,7 @@
               "id": "scene"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -144,6 +150,9 @@
           "min": null,
           "options": [
             {
+              "categories": [
+                "character"
+              ],
               "example": null,
               "i18n": {
                 "en": {
@@ -158,6 +167,9 @@
               "id": "ultra_realistic"
             },
             {
+              "categories": [
+                "character"
+              ],
               "example": null,
               "i18n": {
                 "en": {
@@ -172,6 +184,9 @@
               "id": "2d_action_game"
             },
             {
+              "categories": [
+                "character"
+              ],
               "example": null,
               "i18n": {
                 "en": {
@@ -186,6 +201,9 @@
               "id": "stylized_3d"
             },
             {
+              "categories": [
+                "character"
+              ],
               "example": null,
               "i18n": {
                 "en": {
@@ -200,6 +218,9 @@
               "id": "anime"
             },
             {
+              "categories": [
+                "character"
+              ],
               "example": null,
               "i18n": {
                 "en": {
@@ -214,29 +235,460 @@
               "id": "pixel_art"
             },
             {
+              "categories": [
+                "weapon"
+              ],
               "example": null,
               "i18n": {
                 "en": {
-                  "description": "Existing pixel style for non-character assets",
-                  "name": "Pixel"
+                  "description": "Tactical weapon with plausible materials and functional construction",
+                  "name": "Realistic tactical"
                 },
                 "zh-CN": {
-                  "description": "其他素材的原有像素风格选项",
-                  "name": "像素"
+                  "description": "材料可信、结构可用的战术武器",
+                  "name": "写实战术"
+                }
+              },
+              "id": "weapon_realistic_tactical"
+            },
+            {
+              "categories": [
+                "weapon"
+              ],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Modular mechanical construction with controlled emissive details",
+                  "name": "Sci-fi hard surface"
+                },
+                "zh-CN": {
+                  "description": "模块化机械结构和克制发光细节",
+                  "name": "科幻硬表面"
+                }
+              },
+              "id": "weapon_scifi_hardsurface"
+            },
+            {
+              "categories": [
+                "weapon"
+              ],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Forged materials",
+                  "name": "Hand-painted fantasy"
+                },
+                "zh-CN": {
+                  "description": "锻造材质、工艺装饰和英雄比例",
+                  "name": "手绘奇幻"
+                }
+              },
+              "id": "weapon_hand_painted_fantasy"
+            },
+            {
+              "categories": [
+                "weapon"
+              ],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Bold proportions",
+                  "name": "Stylized 3D"
+                },
+                "zh-CN": {
+                  "description": "强轮廓、简化材质面和清晰配色",
+                  "name": "风格化 3D"
+                }
+              },
+              "id": "weapon_stylized_3d"
+            },
+            {
+              "categories": [
+                "weapon"
+              ],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Deliberate pixel clusters",
+                  "name": "Pixel-art weapon"
+                },
+                "zh-CN": {
+                  "description": "有意组织像素簇、有限配色和清晰轮廓",
+                  "name": "像素武器"
+                }
+              },
+              "id": "weapon_pixel_art"
+            },
+            {
+              "categories": [
+                "prop"
+              ],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Physically based materials",
+                  "name": "Realistic game prop"
+                },
+                "zh-CN": {
+                  "description": "可信材质、磨损和实用结构",
+                  "name": "写实游戏道具"
+                }
+              },
+              "id": "prop_realistic_game_ready"
+            },
+            {
+              "categories": [
+                "prop"
+              ],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Expressive materials",
+                  "name": "Hand-painted RPG"
+                },
+                "zh-CN": {
+                  "description": "表现性材质、工艺细节和可控笔触",
+                  "name": "手绘 RPG"
+                }
+              },
+              "id": "prop_hand_painted_rpg"
+            },
+            {
+              "categories": [
+                "prop"
+              ],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Handcrafted shapes",
+                  "name": "Warm storybook"
+                },
+                "zh-CN": {
+                  "description": "手工形状、柔和配色和亲切装饰",
+                  "name": "温暖绘本"
+                }
+              },
+              "id": "prop_storybook"
+            },
+            {
+              "categories": [
+                "prop"
+              ],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Simplified geometry",
+                  "name": "Stylized 3D"
+                },
+                "zh-CN": {
+                  "description": "简化几何、宽材质面和清晰功能结构",
+                  "name": "风格化 3D"
+                }
+              },
+              "id": "prop_stylized_3d"
+            },
+            {
+              "categories": [
+                "prop"
+              ],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Compact pixel clusters",
+                  "name": "Pixel-art prop"
+                },
+                "zh-CN": {
+                  "description": "紧凑像素簇、有限配色和清晰图标轮廓",
+                  "name": "像素道具"
+                }
+              },
+              "id": "prop_pixel_art"
+            },
+            {
+              "categories": [
+                "terrain"
+              ],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Physically plausible material response and fine natural variation",
+                  "name": "Realistic PBR"
+                },
+                "zh-CN": {
+                  "description": "可信材质响应和自然微变化",
+                  "name": "写实 PBR"
+                }
+              },
+              "id": "terrain_realistic_pbr"
+            },
+            {
+              "categories": [
+                "terrain"
+              ],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Expressive brushwork",
+                  "name": "Hand-painted RPG"
+                },
+                "zh-CN": {
+                  "description": "表现性笔触、简化材质簇和清晰色差",
+                  "name": "手绘 RPG"
+                }
+              },
+              "id": "terrain_hand_painted_rpg"
+            },
+            {
+              "categories": [
+                "terrain"
+              ],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Broad material planes",
+                  "name": "Stylized low-poly"
+                },
+                "zh-CN": {
+                  "description": "宽材质面、简化细节和清晰色块",
+                  "name": "风格化低模"
+                }
+              },
+              "id": "terrain_stylized_low_poly"
+            },
+            {
+              "categories": [
+                "terrain"
+              ],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Deliberate pixel clusters",
+                  "name": "Pixel-art terrain"
+                },
+                "zh-CN": {
+                  "description": "有意组织像素簇、受控噪声和有限配色",
+                  "name": "像素地形"
+                }
+              },
+              "id": "terrain_pixel_art"
+            },
+            {
+              "categories": [
+                "terrain"
+              ],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Bold shapes",
+                  "name": "Cartoon terrain"
+                },
+                "zh-CN": {
+                  "description": "粗形状、紧凑材质细节和清晰配色",
+                  "name": "卡通地形"
+                }
+              },
+              "id": "terrain_cartoon"
+            },
+            {
+              "categories": [
+                "scene"
+              ],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Believable materials",
+                  "name": "Realistic game asset"
+                },
+                "zh-CN": {
+                  "description": "可信材质、自然变化和生产级结构",
+                  "name": "写实游戏资产"
+                }
+              },
+              "id": "scene_realistic_game_ready"
+            },
+            {
+              "categories": [
+                "scene"
+              ],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Expressive shapes",
+                  "name": "Hand-painted RPG"
+                },
+                "zh-CN": {
+                  "description": "表现性形状、手绘材质和强玩法可读性",
+                  "name": "手绘 RPG"
+                }
+              },
+              "id": "scene_hand_painted_rpg"
+            },
+            {
+              "categories": [
+                "scene"
+              ],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Simplified faceted geometry",
+                  "name": "Stylized low-poly"
+                },
+                "zh-CN": {
+                  "description": "简化切面、宽材质面和清晰配色",
+                  "name": "风格化低模"
+                }
+              },
+              "id": "scene_stylized_low_poly"
+            },
+            {
+              "categories": [
+                "scene"
+              ],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Charming forms",
+                  "name": "Storybook scene"
+                },
+                "zh-CN": {
+                  "description": "亲切形状、柔和材质和装饰性轮廓",
+                  "name": "绘本场景"
+                }
+              },
+              "id": "scene_storybook"
+            },
+            {
+              "categories": [
+                "scene"
+              ],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Crisp pixel silhouette",
+                  "name": "Pixel-art scene"
+                },
+                "zh-CN": {
+                  "description": "清晰像素轮廓、有限配色和模块化结构",
+                  "name": "像素场景"
+                }
+              },
+              "id": "scene_pixel_art"
+            },
+            {
+              "categories": [
+                "vfx"
+              ],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Bold graphic shapes",
+                  "name": "Stylized action"
+                },
+                "zh-CN": {
+                  "description": "粗图形、强冲击方向和玩法可读性",
+                  "name": "风格化动作"
+                }
+              },
+              "id": "vfx_stylized_action"
+            },
+            {
+              "categories": [
+                "vfx"
+              ],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Layered luminous forms",
+                  "name": "Painterly fantasy magic"
+                },
+                "zh-CN": {
+                  "description": "分层发光形态、流动粒子和装饰能量",
+                  "name": "手绘奇幻魔法"
+                }
+              },
+              "id": "vfx_painterly_fantasy"
+            },
+            {
+              "categories": [
+                "vfx"
+              ],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Sharp energy arcs",
+                  "name": "Anime combat"
+                },
+                "zh-CN": {
+                  "description": "锐利能量弧、赛璐璐辉光和速度线",
+                  "name": "动漫战斗"
+                }
+              },
+              "id": "vfx_anime_combat"
+            },
+            {
+              "categories": [
+                "vfx"
+              ],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Plausible energy",
+                  "name": "Realistic cinematic"
+                },
+                "zh-CN": {
+                  "description": "可信能量、体积细节和受控辉光",
+                  "name": "写实电影特效"
+                }
+              },
+              "id": "vfx_realistic_cinematic"
+            },
+            {
+              "categories": [
+                "vfx"
+              ],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Hard-edged pixel clusters",
+                  "name": "Pixel-art VFX"
+                },
+                "zh-CN": {
+                  "description": "硬边像素簇、有限辉光层级和清晰关键帧",
+                  "name": "像素特效"
+                }
+              },
+              "id": "vfx_pixel_art"
+            },
+            {
+              "categories": [
+                "legacy"
+              ],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Compatibility value for older clients",
+                  "name": "Pixel (legacy)"
+                },
+                "zh-CN": {
+                  "description": "旧客户端兼容值",
+                  "name": "像素（兼容）"
                 }
               },
               "id": "pixel"
             },
             {
+              "categories": [
+                "legacy"
+              ],
               "example": null,
               "i18n": {
                 "en": {
-                  "description": "Existing smooth style for non-character assets",
-                  "name": "Non-pixel"
+                  "description": "Compatibility value for older clients",
+                  "name": "Smooth (legacy)"
                 },
                 "zh-CN": {
-                  "description": "其他素材保留模型原始的平滑绘制结果",
-                  "name": "非像素"
+                  "description": "旧客户端兼容值",
+                  "name": "非像素（兼容）"
                 }
               },
               "id": "smooth"
@@ -306,6 +758,7 @@
           "min": null,
           "options": [
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -320,6 +773,7 @@
               "id": "64"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -334,6 +788,7 @@
               "id": "128"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -348,6 +803,7 @@
               "id": "256"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -362,6 +818,7 @@
               "id": "512"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -419,6 +876,7 @@
           "min": null,
           "options": [
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -433,6 +891,7 @@
               "id": "1"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -447,6 +906,7 @@
               "id": "2"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -461,6 +921,7 @@
               "id": "3"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -585,6 +1046,7 @@
           "min": null,
           "options": [
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -599,6 +1061,7 @@
               "id": "idle"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -613,6 +1076,7 @@
               "id": "walk"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -627,6 +1091,7 @@
               "id": "run"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -641,6 +1106,7 @@
               "id": "attack"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -655,6 +1121,7 @@
               "id": "cast"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -669,6 +1136,7 @@
               "id": "hit"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -683,6 +1151,7 @@
               "id": "jump"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -719,6 +1188,7 @@
           "min": null,
           "options": [
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -733,6 +1203,7 @@
               "id": "level"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -769,6 +1240,7 @@
           "min": null,
           "options": [
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -783,6 +1255,7 @@
               "id": "n"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -797,6 +1270,7 @@
               "id": "ne"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -811,6 +1285,7 @@
               "id": "e"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -825,6 +1300,7 @@
               "id": "se"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -839,6 +1315,7 @@
               "id": "s"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -853,6 +1330,7 @@
               "id": "sw"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -867,6 +1345,7 @@
               "id": "w"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1058,6 +1537,7 @@
           "min": null,
           "options": [
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1072,6 +1552,7 @@
               "id": "idle"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1086,6 +1567,7 @@
               "id": "walk"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1100,6 +1582,7 @@
               "id": "run"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1114,6 +1597,7 @@
               "id": "attack"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1128,6 +1612,7 @@
               "id": "cast"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1142,6 +1627,7 @@
               "id": "hit"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1156,6 +1642,7 @@
               "id": "jump"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1192,6 +1679,7 @@
           "min": null,
           "options": [
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1206,6 +1694,7 @@
               "id": "level"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1242,6 +1731,7 @@
           "min": null,
           "options": [
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1256,6 +1746,7 @@
               "id": "n"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1270,6 +1761,7 @@
               "id": "ne"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1284,6 +1776,7 @@
               "id": "e"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1298,6 +1791,7 @@
               "id": "se"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1312,6 +1806,7 @@
               "id": "s"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1326,6 +1821,7 @@
               "id": "sw"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1340,6 +1836,7 @@
               "id": "w"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1548,6 +2045,7 @@
           "min": null,
           "options": [
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1562,6 +2060,7 @@
               "id": "idle"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1576,6 +2075,7 @@
               "id": "walk"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1590,6 +2090,7 @@
               "id": "run"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1604,6 +2105,7 @@
               "id": "attack"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1618,6 +2120,7 @@
               "id": "cast"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1632,6 +2135,7 @@
               "id": "hit"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1646,6 +2150,7 @@
               "id": "jump"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1682,6 +2187,7 @@
           "min": null,
           "options": [
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1696,6 +2202,7 @@
               "id": "level"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1732,6 +2239,7 @@
           "min": null,
           "options": [
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1746,6 +2254,7 @@
               "id": "n"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1760,6 +2269,7 @@
               "id": "ne"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1774,6 +2284,7 @@
               "id": "e"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1788,6 +2299,7 @@
               "id": "se"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1802,6 +2314,7 @@
               "id": "s"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1816,6 +2329,7 @@
               "id": "sw"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -1830,6 +2344,7 @@
               "id": "w"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -2053,6 +2568,7 @@
           "min": null,
           "options": [
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -2067,6 +2583,7 @@
               "id": "8"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -2081,6 +2598,7 @@
               "id": "16"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -2095,6 +2613,7 @@
               "id": "32"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -2109,6 +2628,7 @@
               "id": "64"
             },
             {
+              "categories": [],
               "example": null,
               "i18n": {
                 "en": {
@@ -2419,7 +2939,7 @@
           "version": 1
         }
       ],
-      "version": "1.4.0",
+      "version": "1.5.0",
       "workflows": []
     },
     {

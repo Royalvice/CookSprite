@@ -238,6 +238,7 @@ class ActionInput(BaseModel):
 class ActionOption(BaseModel):
     id: str
     i18n: dict[str, LocalizedText]
+    categories: list[str] = Field(default_factory=list)
     example_key: str | None = Field(default=None, exclude=True)
     example: ArtifactRef | None = None
 

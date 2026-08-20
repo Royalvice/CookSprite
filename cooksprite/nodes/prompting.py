@@ -31,6 +31,31 @@ class RenderStyle(_ValueEnum):
     STYLIZED_3D = "stylized_3d"
     ANIME = "anime"
     PIXEL_ART = "pixel_art"
+    WEAPON_REALISTIC_TACTICAL = "weapon_realistic_tactical"
+    WEAPON_SCIFI_HARDSURFACE = "weapon_scifi_hardsurface"
+    WEAPON_HAND_PAINTED_FANTASY = "weapon_hand_painted_fantasy"
+    WEAPON_STYLIZED_3D = "weapon_stylized_3d"
+    WEAPON_PIXEL_ART = "weapon_pixel_art"
+    PROP_REALISTIC_GAME_READY = "prop_realistic_game_ready"
+    PROP_HAND_PAINTED_RPG = "prop_hand_painted_rpg"
+    PROP_STORYBOOK = "prop_storybook"
+    PROP_STYLIZED_3D = "prop_stylized_3d"
+    PROP_PIXEL_ART = "prop_pixel_art"
+    TERRAIN_REALISTIC_PBR = "terrain_realistic_pbr"
+    TERRAIN_HAND_PAINTED_RPG = "terrain_hand_painted_rpg"
+    TERRAIN_STYLIZED_LOW_POLY = "terrain_stylized_low_poly"
+    TERRAIN_PIXEL_ART = "terrain_pixel_art"
+    TERRAIN_CARTOON = "terrain_cartoon"
+    SCENE_REALISTIC_GAME_READY = "scene_realistic_game_ready"
+    SCENE_HAND_PAINTED_RPG = "scene_hand_painted_rpg"
+    SCENE_STYLIZED_LOW_POLY = "scene_stylized_low_poly"
+    SCENE_STORYBOOK = "scene_storybook"
+    SCENE_PIXEL_ART = "scene_pixel_art"
+    VFX_STYLIZED_ACTION = "vfx_stylized_action"
+    VFX_PAINTERLY_FANTASY = "vfx_painterly_fantasy"
+    VFX_ANIME_COMBAT = "vfx_anime_combat"
+    VFX_REALISTIC_CINEMATIC = "vfx_realistic_cinematic"
+    VFX_PIXEL_ART = "vfx_pixel_art"
 
 
 class CameraPreset(_ValueEnum):
@@ -286,7 +311,7 @@ class PromptSpec:
         return f"{self.style}-{self.camera_preset}-{self.orientation}-{self.mode}"
 
 
-COMPILER_VERSION = "sprite_prompt_package_v1.4"
+COMPILER_VERSION = "sprite_prompt_package_v1.5"
 
 # Image generation has one deliberate camera contract. Keep the old camera
 # enums and request fields for saved graphs and callers, but never let them
@@ -328,6 +353,110 @@ CHARACTER_STYLE_OPTIONS = {
     "stylized_3d": "Polished high-resolution stylized 3D character render",
     "anime": "Polished high-resolution anime character illustration with cel shading",
     "pixel_art": "Crisp pixel-art character sprite with deliberate pixel clusters and a limited color palette",
+}
+
+ASSET_STYLE_OPTIONS = {
+    "weapon": {
+        "weapon_realistic_tactical": "Realistic tactical weapon render with physically plausible materials and functional construction",
+        "weapon_scifi_hardsurface": "Polished sci-fi hard-surface weapon concept with modular mechanical parts and controlled emissive details",
+        "weapon_hand_painted_fantasy": "Hand-painted fantasy weapon illustration with forged metal, crafted ornament and heroic proportions",
+        "weapon_stylized_3d": "Stylized 3D game weapon render with bold proportions, simplified material planes and clean color grouping",
+        "weapon_pixel_art": "Crisp pixel-art weapon sprite with deliberate pixel clusters, a limited palette and readable silhouette",
+    },
+    "prop": {
+        "prop_realistic_game_ready": "Realistic game-ready prop render with physically based materials, believable wear and practical construction",
+        "prop_hand_painted_rpg": "Hand-painted RPG prop illustration with expressive materials, crafted details and controlled painterly shading",
+        "prop_storybook": "Warm storybook prop illustration with handcrafted shapes, soft color harmony and charming decorative details",
+        "prop_stylized_3d": "Stylized 3D game prop render with simplified geometry, broad material planes and clearly readable function",
+        "prop_pixel_art": "Crisp pixel-art prop sprite with compact pixel clusters, a limited palette and a clear icon silhouette",
+    },
+    "terrain": {
+        "terrain_realistic_pbr": "Realistic PBR terrain surface with physically plausible material response, fine natural variation and game-ready texture detail",
+        "terrain_hand_painted_rpg": "Hand-painted RPG terrain tile with expressive brushwork, simplified material clusters and readable color variation",
+        "terrain_stylized_low_poly": "Stylized low-poly terrain tile with broad material planes, simplified detail and clean color blocks",
+        "terrain_pixel_art": "Seamless pixel-art terrain tile with deliberate pixel clusters, controlled noise and a limited color palette",
+        "terrain_cartoon": "Clean cartoon game terrain tile with bold shapes, compact material detail and clear color grouping",
+    },
+    "scene": {
+        "scene_realistic_game_ready": "Realistic game-ready environment asset with believable materials, natural variation and production-quality construction",
+        "scene_hand_painted_rpg": "Hand-painted RPG environment element with expressive shapes, painterly materials and strong gameplay readability",
+        "scene_stylized_low_poly": "Stylized low-poly environment element with simplified faceted geometry, broad material planes and clean color grouping",
+        "scene_storybook": "Warm storybook environment element with charming forms, soft materials and a decorative silhouette",
+        "scene_pixel_art": "Crisp pixel-art environment element with a limited palette, modular construction and a readable silhouette",
+    },
+    "vfx": {
+        "vfx_stylized_action": "Stylized action-game visual effect with bold graphic shapes, strong impact direction and clear gameplay readability",
+        "vfx_painterly_fantasy": "Painterly fantasy magic effect with layered luminous forms, flowing particles and ornamental energy patterns",
+        "vfx_anime_combat": "Anime combat visual effect with sharp energy arcs, cel-shaded glow, speed accents and dramatic impact shapes",
+        "vfx_realistic_cinematic": "Realistic cinematic visual effect with plausible energy, volumetric detail, controlled glow and clean separation",
+        "vfx_pixel_art": "Crisp pixel-art visual effect with hard-edged pixel clusters, limited glow levels and a clear peak-impact keyframe",
+    },
+}
+
+ASSET_STYLE_DEFAULTS = {
+    "weapon": "weapon_realistic_tactical",
+    "prop": "prop_realistic_game_ready",
+    "terrain": "terrain_realistic_pbr",
+    "scene": "scene_realistic_game_ready",
+    "vfx": "vfx_stylized_action",
+}
+
+ASSET_PIXEL_STYLES = {
+    "weapon": "weapon_pixel_art",
+    "prop": "prop_pixel_art",
+    "terrain": "terrain_pixel_art",
+    "scene": "scene_pixel_art",
+    "vfx": "vfx_pixel_art",
+}
+
+ASSET_PROMPT_TEMPLATES = {
+    "weapon": (
+        "{USER_INPUT}. One complete standalone weapon asset only, centered with at least ten percent empty margin on every "
+        "side and fully visible from tip to pommel or stock to muzzle. Clean orthographic inventory presentation in the "
+        "canonical side profile: blades and firearms run horizontally from left to right, while hafted weapons may stand "
+        "upright. No foreshortening and no perspective convergence. {STYLE}, clean uninterrupted outer silhouette, "
+        "functional construction, clear separation of grip, guard, blade, barrel, stock and attachments as applicable, "
+        "and restrained highlights. Background is one perfectly uniform, unlit, flat solid color with identical color "
+        "and brightness from corner to corner. No hand, no character, no rack, no floor, no shadow, no reflection, no "
+        "surrounding objects, no gradient, no vignette, no text, no logo, no watermark."
+    ),
+    "prop": (
+        "{USER_INPUT}. One complete standalone game prop only, centered with at least ten percent empty margin on every side "
+        "and fully visible in its natural usable orientation. Front three-quarter orthographic product view, showing the "
+        "main form, depth and functional parts without wide-angle distortion. {STYLE}, clean silhouette, readable "
+        "construction, clear component and material boundaries, recognizable function, and restrained highlights. "
+        "Background is one perfectly uniform, unlit, flat solid color with identical color and brightness from corner to "
+        "corner. No hand, no character, no floor, no shadow, no reflection, no surrounding objects, no gradient, no "
+        "vignette, no text, no logo, no watermark."
+    ),
+    "terrain": (
+        "{USER_INPUT}. Seamless square base-color terrain texture tile, not a photographed floor and not a rendered scene. "
+        "The material fills the canvas edge to edge at one uniform texel scale. Perfect straight-down orthographic "
+        "surface sample with no perspective and no visible side faces. {STYLE}, uniform material statistics and pattern "
+        "density across the whole image. Opposite left and right edges and opposite top and bottom edges continue with "
+        "matching color, structure and pattern frequency. Flat shadowless albedo presentation with no baked lighting. "
+        "No center emphasis, no hotspot, no vignette, no gradient, no directional shadow, no border, no frame, no empty "
+        "margin, no unique landmark, no isolated object, no horizon, no text, no logo, no watermark."
+    ),
+    "scene": (
+        "{USER_INPUT}. One complete modular environment asset only, centered with at least ten percent empty margin on every "
+        "side, fully visible with its complete silhouette and its own compact structural base. Front three-quarter "
+        "orthographic game-asset view, clearly showing front and side without wide-angle distortion. {STYLE}, clean outer "
+        "contour, readable structural hierarchy, clear material boundaries, modular game-ready construction, and "
+        "restrained highlights. Background is one perfectly uniform, unlit, flat solid color with identical color and "
+        "brightness from corner to corner. No terrain patch, no pedestal, no additional props, no character, no floor "
+        "plane, no shadow, no scenery, no gradient, no vignette, no text, no logo, no watermark."
+    ),
+    "vfx": (
+        "{USER_INPUT}. One isolated visual-effect sprite only, centered with at least ten percent empty margin on every side, "
+        "fully contained in the frame at its clearest peak-impact keyframe. Straight-on flat 2D sprite presentation, "
+        "parallel to the image plane with no perspective. {STYLE}, readable effect core, secondary-shape and particle "
+        "hierarchy, controlled internal glow, clean silhouette, balanced energy distribution and restrained visual noise. "
+        "Background is one perfectly uniform, unlit, flat solid color with identical color and brightness from corner to "
+        "corner. The effect may glow internally, but its light, bloom, haze, smoke and color spill must not alter the "
+        "background. No emitter, no character, no weapon, no environment, no floor, no shadow, no background gradient, "
+        "no vignette, no readable text, no logo, no watermark."
+    ),
 }
 
 CHARACTER_I2I_PROMPT_TEMPLATE = (
@@ -452,6 +581,48 @@ class SpritePromptCompiler:
                     "combination": {
                         "style_count": len(CHARACTER_STYLE_OPTIONS),
                         "total_variants": len(CHARACTER_STYLE_OPTIONS),
+                        "rule": "style.options",
+                    },
+                },
+            )
+        if category_id in ASSET_PROMPT_TEMPLATES:
+            style_option = _asset_style_option(category_id, style)
+            if mode == PromptMode.I2I:
+                prompt = CHARACTER_I2I_PROMPT_TEMPLATE.format(USER_INPUT=caption)
+                prompt_template = CHARACTER_I2I_PROMPT_TEMPLATE
+            else:
+                prompt_template = ASSET_PROMPT_TEMPLATES[category_id]
+                prompt = prompt_template.format(
+                    USER_INPUT=caption,
+                    STYLE=ASSET_STYLE_OPTIONS[category_id][style_option],
+                )
+            request_id = f"image-{category_id}-{style_option}-{mode.value}-{width}x{height}"
+            return CompiledPrompt(
+                request_id=request_id,
+                task="image",
+                mode=mode.value,
+                prompt=prompt,
+                negative_prompt="",
+                reference_required=mode == PromptMode.I2I,
+                camera_contract=camera,
+                metadata={
+                    "compiler_version": self.version,
+                    "packet_type": f"{category_id}_prompt_packet",
+                    "packet_version": "1.0",
+                    "prompt_template": prompt_template,
+                    "task": "image",
+                    "mode": mode.value,
+                    "category": category_id,
+                    "style": style_option,
+                    "camera_preset": CameraPreset.EYE_LEVEL.value,
+                    "orientation": Orientation.FRONT.value,
+                    "screen_facing": None,
+                    "background": "pure_simple_solid",
+                    "resolution": [int(width), int(height)],
+                    "edit_instruction": caption if mode == PromptMode.I2I else request.edit_instruction,
+                    "combination": {
+                        "style_count": len(ASSET_STYLE_OPTIONS[category_id]),
+                        "total_variants": len(ASSET_STYLE_OPTIONS[category_id]),
                         "rule": "style.options",
                     },
                 },
@@ -701,6 +872,18 @@ def _character_style_option(value: RenderStyle | str) -> str:
     # names.  This is only a compatibility translation; it does not enable any
     # post-processing.
     return {"pixel": "pixel_art", "smooth": "2d_action_game"}.get(style, style)
+
+
+def _asset_style_option(category: str, value: RenderStyle | str) -> str:
+    style = coerce_enum(value, RenderStyle, "style").value
+    if style == "pixel":
+        style = ASSET_PIXEL_STYLES[category]
+    elif style in {"smooth", "2d_action_game"}:
+        style = ASSET_STYLE_DEFAULTS[category]
+    if style not in ASSET_STYLE_OPTIONS[category]:
+        choices = ", ".join(ASSET_STYLE_OPTIONS[category])
+        raise ValueError(f"style for {category} must be one of ({choices}), got {value!r}")
+    return style
 
 
 def _character_camera_contract(option: str) -> CameraContract:
