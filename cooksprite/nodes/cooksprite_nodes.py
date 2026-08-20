@@ -481,7 +481,7 @@ class CS_IsolateOnGreen:
 
 
 class CS_LotusModelLoader:
-    """Load official Lotus weights through ComfyUI with an explicit dtype."""
+    """Load the official Lotus model in its validated BF16 precision."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -493,11 +493,7 @@ class CS_LotusModelLoader:
                 "model_name": (
                     models,
                     {"default": "lotus-normal-d-v1-1.safetensors"},
-                ),
-                "precision": (
-                    ["bf16", "fp8_e4m3fn_fast"],
-                    {"default": "bf16", "advanced": True},
-                ),
+                )
             }
         }
 
@@ -505,22 +501,19 @@ class CS_LotusModelLoader:
     FUNCTION = "load"
     CATEGORY = "CookSprite/Normal"
 
-    def load(self, model_name, precision):
+    def load(self, model_name):
         if torch is None:
             raise RuntimeError("Lotus model loading requires ComfyUI's torch runtime")
         import comfy.sd
         import folder_paths
 
-        model_options = {}
-        if precision == "bf16":
-            model_options["dtype"] = torch.bfloat16
-        elif precision == "fp8_e4m3fn_fast":
-            model_options["dtype"] = torch.float8_e4m3fn
-            model_options["fp8_optimizations"] = True
-        else:
-            raise ValueError(f"unsupported Lotus precision: {precision}")
         path = folder_paths.get_full_path_or_raise("diffusion_models", model_name)
-        return (comfy.sd.load_diffusion_model(path, model_options=model_options),)
+        return (
+            comfy.sd.load_diffusion_model(
+                path,
+                model_options={"dtype": torch.bfloat16},
+            ),
+        )
 
 
 def _normal_mask(image, mask):

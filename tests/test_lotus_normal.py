@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import io
 
 import numpy as np
@@ -36,7 +37,7 @@ def _report(*, complete: bool = True) -> dict:
     nodes = {
         "CS_LoadArtifact": _node({"artifact_url": "STRING"}, ["IMAGE", "MASK"]),
         "CS_StoreArtifact": _node({"value": "IMAGE"}, ["STRING"]),
-        "CS_LotusModelLoader": _node({"model_name": "COMBO", "precision": "COMBO"}, ["MODEL"]),
+        "CS_LotusModelLoader": _node({"model_name": "COMBO"}, ["MODEL"]),
         "CS_LotusNormalPrepare": _node({"image": "IMAGE"}, ["IMAGE", "MASK", "IMAGE"]),
         "CS_LotusNormalFinalize": _node(
             {"prediction": "IMAGE", "reference": "IMAGE"}, ["IMAGE", "MASK"]
@@ -116,7 +117,10 @@ def test_lotus_preprocess_sizes_preserve_orientation_and_multiple_of_eight():
 def test_lotus_sealed_graph_retains_official_one_step_contract():
     spec = lotus_normal_tool_graph()
     graph = spec["workflow"]
-    assert graph["model"]["inputs"]["precision"] == "bf16"
+    assert graph["model"]["inputs"] == {"model_name": LOTUS_NORMAL_MODEL}
+    loader_source = inspect.getsource(CS_LotusModelLoader.load)
+    assert "torch.bfloat16" in loader_source
+    assert "float8" not in loader_source
     assert graph["scheduler"]["inputs"] == {
         "model": ["model", 0],
         "scheduler": "normal",

@@ -3310,8 +3310,7 @@
             "model": {
               "class_type": "CS_LotusModelLoader",
               "inputs": {
-                "model_name": "lotus-normal-d-v1-1.safetensors",
-                "precision": "bf16"
+                "model_name": "lotus-normal-d-v1-1.safetensors"
               }
             },
             "noise": {

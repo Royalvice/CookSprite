@@ -74,7 +74,7 @@ def lotus_normal_tool_graph() -> dict[str, Any]:
         },
         "model": {
             "class_type": "CS_LotusModelLoader",
-            "inputs": {"model_name": LOTUS_NORMAL_MODEL, "precision": "bf16"},
+            "inputs": {"model_name": LOTUS_NORMAL_MODEL},
         },
         "vae": {
             "class_type": "VAELoader",

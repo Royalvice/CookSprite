@@ -143,9 +143,7 @@ CORE_NODES = {
         },
         ["STRING", "STRING", "STRING"],
     ),
-    "CS_LotusModelLoader": node(
-        {"model_name": "COMBO", "precision": "COMBO"}, ["MODEL"]
-    ),
+    "CS_LotusModelLoader": node({"model_name": "COMBO"}, ["MODEL"]),
     "CS_LotusNormalPrepare": node(
         {"image": "IMAGE", "mask": "MASK"}, ["IMAGE", "MASK", "IMAGE"]
     ),
