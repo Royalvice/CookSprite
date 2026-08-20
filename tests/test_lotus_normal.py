@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import io
+
+import numpy as np
+from PIL import Image
+
 from cooksprite.catalog import builtin_tools
 from cooksprite.compiler import Compiler
 from cooksprite.domain import ToolNode, ValueRef, WorkflowRevision
@@ -8,6 +13,7 @@ from cooksprite.nodes.cooksprite_nodes import (
     CS_LotusNormalFinalize,
     CS_LotusNormalPrepare,
     _lotus_size,
+    _png,
 )
 from cooksprite.recipes import discover_recipes, model_bundle_status
 from cooksprite.workflows.lotus_normal import (
@@ -84,6 +90,17 @@ def test_lotus_node_contract_replaces_legacy_node_and_keeps_alpha():
     assert CS_LotusNormalFinalize.RETURN_TYPES == ("IMAGE", "MASK")
     tool = next(item for item in builtin_tools() if item.id == "cooksprite.normal_estimate")
     assert [port.type for port in tool.outputs] == ["NormalMap", "Mask"]
+
+
+def test_normal_map_png_preserves_neutral_rgb_under_transparency():
+    value = np.array([[[0.5, 0.5, 1.0]]], dtype=np.float32)
+    transparent = np.zeros((1, 1), dtype=np.float32)
+
+    normal = np.asarray(Image.open(io.BytesIO(_png(value, "NormalMap", transparent))))
+    image = np.asarray(Image.open(io.BytesIO(_png(value, "Image", transparent))))
+
+    assert normal[0, 0].tolist() == [128, 128, 255, 0]
+    assert image[0, 0].tolist() == [0, 0, 0, 0]
 
 
 def test_lotus_preprocess_sizes_preserve_orientation_and_multiple_of_eight():

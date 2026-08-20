@@ -45,7 +45,10 @@ def _array(value) -> np.ndarray:
 def _png(value, kind, mask=None):
     array = np.clip(_array(value), 0.0, 1.0)
     has_alpha = array.shape[-1] >= 4
-    rgb = (array[..., :3] * 255.0).astype("uint8")
+    if kind == "NormalMap":
+        rgb = np.rint(array[..., :3] * 255.0).astype("uint8")
+    else:
+        rgb = (array[..., :3] * 255.0).astype("uint8")
     if mask is not None:
         alpha = np.clip(_array(mask), 0.0, 1.0)
         if alpha.ndim == 3 and alpha.shape[-1] == 1:
@@ -53,11 +56,13 @@ def _png(value, kind, mask=None):
         if alpha.ndim != 2:
             raise ValueError("MASK frame must have shape [height,width]")
         rgba = np.concatenate((rgb, np.rint(alpha * 255.0).astype("uint8")[..., None]), axis=-1)
-        rgba[rgba[..., 3] == 0, :3] = 0
+        if kind != "NormalMap":
+            rgba[rgba[..., 3] == 0, :3] = 0
         image = Image.fromarray(rgba, "RGBA")
     elif has_alpha:
         rgba = (array[..., :4] * 255.0).astype("uint8")
-        rgba[rgba[..., 3] == 0, :3] = 0
+        if kind != "NormalMap":
+            rgba[rgba[..., 3] == 0, :3] = 0
         image = Image.fromarray(rgba, "RGBA")
     else:
         image = Image.fromarray(rgb, "RGB")
@@ -647,7 +652,7 @@ class CS_LotusNormalFinalize:
         neutral = torch.tensor(
             [0.5, 0.5, 1.0], device=encoded.device, dtype=encoded.dtype
         ).view(1, 1, 1, 3)
-        output = encoded * alpha.unsqueeze(-1) + neutral * (1.0 - alpha.unsqueeze(-1))
+        output = torch.where((alpha > 1e-4).unsqueeze(-1), encoded, neutral)
         return (output.clamp(0.0, 1.0), alpha)
 
 
