@@ -57,6 +57,12 @@ def _nearest(values: np.ndarray, centers: np.ndarray, block_size: int = 65_536) 
     return labels, minimum
 
 
+def _nearest_legacy(values: np.ndarray, centers: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    distance = np.sum((values[:, None, :] - centers[None, :, :]) ** 2, axis=2)
+    labels = np.argmin(distance, axis=1)
+    return labels, distance[np.arange(len(values)), labels]
+
+
 def _weighted_kmeans(values: np.ndarray, weights: np.ndarray, count: int, fixed: np.ndarray) -> tuple[np.ndarray, float]:
     centers = _initial_centers(values, weights, count, fixed)
     fixed_count = len(fixed)
@@ -226,10 +232,13 @@ def map_palette(
     palette: PaletteBuildResult,
     strokes: np.ndarray,
     detail_mask: np.ndarray | None = None,
+    *,
+    exact_legacy: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Map cells to the palette while protecting compact source details."""
     shape = cell_lab.shape[:2]
-    labels, minimum = _nearest(cell_lab.reshape(-1, 3), palette.lab)
+    nearest = _nearest_legacy if exact_legacy else _nearest
+    labels, minimum = nearest(cell_lab.reshape(-1, 3), palette.lab)
     labels = labels.reshape(shape).astype(np.int16)
     labels[alpha <= 0.0] = -1
     if detail_mask is None:

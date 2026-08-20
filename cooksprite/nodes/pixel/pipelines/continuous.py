@@ -278,7 +278,14 @@ def compile_continuous(
     ):
         alpha = _alpha_from_semantics(evidence, silhouette.mask)
         foreground = alpha > 0.0
-        mapped, _ = map_palette(evidence.lab, alpha, palette, strokes, detail if not outline else None)
+        mapped, _ = map_palette(
+            evidence.lab,
+            alpha,
+            palette,
+            strokes,
+            detail if not outline else None,
+            exact_legacy=resolved_mode == "continuous",
+        )
         mapped = clean_label_clusters(mapped, palette.lab, foreground, tones.protect)
         labels.append(mapped)
         alphas_out.append(alpha)
