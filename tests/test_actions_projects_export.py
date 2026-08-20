@@ -874,6 +874,28 @@ def test_prompt_tool_is_model_neutral_and_deterministic():
     assert len(compiler.video_actions("soup knight")) == 9
 
 
+def test_character_i2i_uses_edit_template_instead_of_t2i_character_packet():
+    result = SpritePromptCompiler().compile_image(
+        ImagePromptRequest(
+            caption="Replace the Gatling gun behind the character with a machine gun, keep everything else unchanged",
+            category="character",
+            style="2d_action_game",
+            mode="i2i",
+        )
+    )
+    assert result.prompt == (
+        "Use the reference image as the exact identity and appearance source.\n"
+        "Edit only this requested detail: Replace the Gatling gun behind the character with a machine gun, keep everything else unchanged.\n"
+        "Keep all other details unchanged, including character identity, pose, proportions, outfit, colors, materials and silhouette."
+    )
+    assert result.metadata["mode"] == "i2i"
+    assert result.metadata["edit_instruction"] == (
+        "Replace the Gatling gun behind the character with a machine gun, keep everything else unchanged"
+    )
+    assert "Single full-body character" not in result.prompt
+    assert result.reference_required is True
+
+
 def test_prompt_node_preserves_old_inputs_and_returns_three_generic_text_ports():
     node = CS_CompilePromptPacket()
     prompt, negative, metadata = node.compile(

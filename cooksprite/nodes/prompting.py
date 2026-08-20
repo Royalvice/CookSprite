@@ -335,6 +335,12 @@ CHARACTER_STYLE_OPTIONS = {
     "pixel_art": "Crisp pixel-art character sprite with deliberate pixel clusters and a limited color palette",
 }
 
+CHARACTER_I2I_PROMPT_TEMPLATE = (
+    "Use the reference image as the exact identity and appearance source.\n"
+    "Edit only this requested detail: {USER_INPUT}.\n"
+    "Keep all other details unchanged, including character identity, pose, proportions, outfit, colors, materials and silhouette."
+)
+
 HUMANOID_FIXED_COMPOSITION = (
     "Single full-body character, centered with generous margin, neutral standing pose"
 )
@@ -405,12 +411,23 @@ class SpritePromptCompiler:
         if humanoid:
             style_option = _character_style_option(style)
             camera_option = FIXED_IMAGE_CAMERA_OPTION
-            prompt = (
-                f"{caption}. {CHARACTER_COMPOSITION_CORE}, {CHARACTER_COMPOSITION_GENERAL}. "
-                f"{CHARACTER_CAMERA_OPTIONS[camera_option]}, {CHARACTER_CAMERA_GENERAL}. "
-                f"{CHARACTER_STYLE_OPTIONS[style_option]}, {CHARACTER_STYLE_GENERAL}. "
-                f"{CHARACTER_BACKGROUND_CORE}, {CHARACTER_BACKGROUND_GENERAL}."
-            )
+            if mode == PromptMode.I2I:
+                prompt = CHARACTER_I2I_PROMPT_TEMPLATE.format(USER_INPUT=caption)
+                prompt_template = CHARACTER_I2I_PROMPT_TEMPLATE
+                edit_instruction = caption
+            else:
+                prompt = (
+                    f"{caption}. {CHARACTER_COMPOSITION_CORE}, {CHARACTER_COMPOSITION_GENERAL}. "
+                    f"{CHARACTER_CAMERA_OPTIONS[camera_option]}, {CHARACTER_CAMERA_GENERAL}. "
+                    f"{CHARACTER_STYLE_OPTIONS[style_option]}, {CHARACTER_STYLE_GENERAL}. "
+                    f"{CHARACTER_BACKGROUND_CORE}, {CHARACTER_BACKGROUND_GENERAL}."
+                )
+                prompt_template = (
+                    "{USER_INPUT}. {COMPOSITION_CORE}, {COMPOSITION_GENERAL}. "
+                    "{CAMERA_CORE}, {CAMERA_GENERAL}. {STYLE_CORE}, {STYLE_GENERAL}. "
+                    "{BACKGROUND_CORE}, {BACKGROUND_GENERAL}."
+                )
+                edit_instruction = request.edit_instruction
             negative = _negative_prompt(request.negative_terms, DEFAULT_IMAGE_NEGATIVE)
             request_id = f"image-character-{style_option}-{camera_option}-{mode.value}-{width}x{height}"
             return CompiledPrompt(
@@ -425,11 +442,7 @@ class SpritePromptCompiler:
                     "compiler_version": self.version,
                     "packet_type": "character_prompt_packet",
                     "packet_version": "1.0",
-                    "prompt_template": (
-                        "{USER_INPUT}. {COMPOSITION_CORE}, {COMPOSITION_GENERAL}. "
-                        "{CAMERA_CORE}, {CAMERA_GENERAL}. {STYLE_CORE}, {STYLE_GENERAL}. "
-                        "{BACKGROUND_CORE}, {BACKGROUND_GENERAL}."
-                    ),
+                    "prompt_template": prompt_template,
                     "task": "image",
                     "mode": mode.value,
                     "category": category_id,
@@ -441,7 +454,7 @@ class SpritePromptCompiler:
                     "screen_facing": None,
                     "background": "pure_solid_green",
                     "resolution": [int(width), int(height)],
-                    "edit_instruction": request.edit_instruction,
+                    "edit_instruction": edit_instruction,
                     "combination": {
                         "style_count": len(CHARACTER_STYLE_OPTIONS),
                         "total_variants": len(CHARACTER_STYLE_OPTIONS),
