@@ -74,6 +74,7 @@ FLUX2_T2I_NODES = {
     "CLIPLoader",
     "VAELoader",
     "CLIPTextEncode",
+    "ConditioningZeroOut",
     "PrimitiveInt",
     "EmptyFlux2LatentImage",
     "RandomNoise",
@@ -88,6 +89,7 @@ FLUX2_I2I_NODES = FLUX2_T2I_NODES | {
     "VAEEncode",
     "ReferenceLatent",
 }
+FLUX2_I2I_COMPATIBLE_SCALE_NODES = ("ImageScaleToTotalPixels", "ImageScale")
 OFFICIAL_ALPHA_MODEL = "birefnet.safetensors"
 T2I_ONLY_CHECKPOINTS = frozenset(
     {
@@ -244,6 +246,8 @@ def _unet_recipe(
     clip_type: str,
     vae: str,
     shift: float | None,
+    sampler_name: str,
+    provenance: dict[str, Any],
     i2i: bool = False,
 ) -> Recipe | None:
     """Create a sealed adapter only when every selected loader input is real."""
@@ -254,6 +258,7 @@ def _unet_recipe(
         "CLIPLoader",
         "VAELoader",
         "CLIPTextEncode",
+        "ConditioningZeroOut",
         "KSampler",
         "VAEDecode",
     }
@@ -273,6 +278,9 @@ def _unet_recipe(
         return None
     if vae not in _choices(report, "VAELoader", "vae_name"):
         return None
+    sampler_choices = _choices(report, "KSampler", "sampler_name")
+    if sampler_choices and sampler_name not in sampler_choices:
+        return None
     workflow: dict[str, Any] = {
         "model": {
             "class_type": "UNETLoader",
@@ -287,8 +295,8 @@ def _unet_recipe(
             "inputs": {"clip": ["clip", 0], "text": ""},
         },
         "negative": {
-            "class_type": "CLIPTextEncode",
-            "inputs": {"clip": ["clip", 0], "text": ""},
+            "class_type": "ConditioningZeroOut",
+            "inputs": {"conditioning": ["positive", 0]},
         },
         "sample": {
             "class_type": "KSampler",
@@ -296,10 +304,8 @@ def _unet_recipe(
                 "model": ["model", 0],
                 "seed": 0,
                 "steps": 8,
-                "cfg": 5.0,
-                "sampler_name": "res_multistep"
-                if "res_multistep" in _choices(report, "KSampler", "sampler_name")
-                else "euler",
+                "cfg": 1.0,
+                "sampler_name": sampler_name,
                 "scheduler": "simple",
                 "positive": ["positive", 0],
                 "negative": ["negative", 0],
@@ -342,7 +348,6 @@ def _unet_recipe(
         workflow["sample"]["inputs"]["denoise"] = 0.65
         slots = {
             "text": "positive.text",
-            "negative": "negative.text",
             "seed": "sample.seed",
             "count": "latent.amount",
             "image": "source.image",
@@ -355,13 +360,11 @@ def _unet_recipe(
         }
         slots = {
             "text": "positive.text",
-            "negative": "negative.text",
             "seed": "sample.seed",
             "count": "latent.batch_size",
         }
     slot_types = {
         "text": "Text",
-        "negative": "Text",
         "seed": "Number",
         "count": "Number",
     }
@@ -379,6 +382,7 @@ def _unet_recipe(
         slot_types=slot_types,
         output=["decode", 0],
         source="discovered",
+        provenance=provenance,
     )
 
 
@@ -409,7 +413,11 @@ def _flux2_recipes(report: dict[str, Any]) -> list[Recipe]:
                 provenance=dict(FLUX2_TEMPLATE_PROVENANCE),
             )
         )
-        if not FLUX2_I2I_NODES.issubset(nodes):
+        scale_node = next(
+            (candidate for candidate in FLUX2_I2I_COMPATIBLE_SCALE_NODES if candidate in nodes),
+            None,
+        )
+        if not scale_node or not {"VAEEncode", "ReferenceLatent"}.issubset(nodes):
             continue
         variants: dict[str, dict[str, Any]] = {}
         first_graph: dict[str, Any] | None = None
@@ -417,7 +425,7 @@ def _flux2_recipes(report: dict[str, Any]) -> list[Recipe]:
         first_slot_types: dict[str, str] | None = None
         for count in range(1, 5):
             graph, slots, slot_types = flux2_klein_graph(
-                bundle_id, "i2i", reference_count=count
+                bundle_id, "i2i", reference_count=count, scale_node=scale_node
             )
             if count == 1:
                 first_graph, first_slots, first_slot_types = graph, slots, slot_types
@@ -485,7 +493,13 @@ def discover_recipes(report: dict[str, Any]) -> list[Recipe]:
                 "lumina2",
                 "ae.safetensors",
                 3.0,
+                "res_multistep",
                 "z-image-turbo-bf16",
+                {
+                    "repository": "https://github.com/Comfy-Org/workflow_templates",
+                    "template": "templates/image_z_image_turbo.json",
+                    "notes": "Official eight-step, CFG 1, zero-negative, res_multistep graph with AuraFlow shift 3.",
+                },
             ),
             (
                 "krea2_turbo_bf16.safetensors",
@@ -494,10 +508,16 @@ def discover_recipes(report: dict[str, Any]) -> list[Recipe]:
                 "krea2",
                 "qwen_image_vae.safetensors",
                 None,
+                "euler",
                 "krea2-turbo-bf16",
+                {
+                    "repository": "https://github.com/Comfy-Org/workflow_templates",
+                    "template": "templates/image_krea2_turbo_t2i.json",
+                    "notes": "Official eight-step, CFG 1, zero-negative, Euler graph.",
+                },
             ),
         )
-        for model, label, clip, clip_type, vae, shift, stem in profiles:
+        for model, label, clip, clip_type, vae, shift, sampler_name, stem, provenance in profiles:
             if model not in diffusion_models:
                 continue
             # These official model adapters are text-to-image only.  Do not
@@ -511,6 +531,8 @@ def discover_recipes(report: dict[str, Any]) -> list[Recipe]:
                 clip_type=clip_type,
                 vae=vae,
                 shift=shift,
+                sampler_name=sampler_name,
+                provenance=provenance,
                 i2i=False,
             )
             if recipe:
@@ -709,6 +731,29 @@ def recipes_from_runtime(runtime: dict[str, Any] | None) -> list[Recipe]:
 
 def recipe_for(runtime: dict[str, Any], recipe_id: str) -> Recipe | None:
     return next((item for item in recipes_from_runtime(runtime) if item.id == recipe_id), None)
+
+
+def recipe_for_model(
+    recipes: list[Recipe],
+    model_id: str,
+    action_id: str,
+    inputs: dict[str, list[str]],
+) -> Recipe | None:
+    """Resolve one model identity to the Recipe matching the current input mode."""
+
+    selected_model = model_id
+    legacy = next((recipe for recipe in recipes if recipe.id == model_id), None)
+    if legacy:
+        selected_model = str(legacy.checkpoint or legacy.id)
+    return next(
+        (
+            recipe
+            for recipe in recipes
+            if str(recipe.checkpoint or recipe.id) == selected_model
+            and supports(recipe, action_id, inputs)
+        ),
+        None,
+    )
 
 
 def recipe_mode(action_id: str, inputs: dict[str, list[str]]) -> str:

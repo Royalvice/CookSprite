@@ -155,7 +155,9 @@ def _bind_recipe_slots(
         if slot in {"text", "prompt"}:
             bindings[slot] = output_ref("packet", "prompt")
         elif slot in {"negative", "negative_prompt"}:
-            bindings[slot] = output_ref("packet", "negative_prompt")
+            # Some model workflows require a negative-text socket even though
+            # CookSprite no longer exposes or compiles negative prompts.
+            bindings[slot] = literal("")
         elif slot == "model":
             bindings[slot] = literal(recipe.checkpoint or "")
         elif slot in {"seed", "count", "strength"}:
@@ -201,7 +203,6 @@ def prompt_packet(action_id: str, mode: str) -> ToolNode:
             "height": input_ref("resolution"),
             "background": literal(DEFAULT_GREEN_SCREEN_BACKGROUND),
             "edit_instruction": literal(""),
-            "negative_terms": literal(""),
         },
     )
 

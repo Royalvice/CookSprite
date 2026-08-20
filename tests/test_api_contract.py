@@ -105,6 +105,32 @@ def test_runtime_id_is_generated_from_endpoint_when_user_omits_it(tmp_path):
     assert re.fullmatch(r"rt_fake_[0-9a-f]{8}", response.json()["id"])
 
 
+def test_runtime_registration_without_id_reuses_same_local_endpoint(tmp_path):
+    client = TestClient(create_app(tmp_path, FakeComfy, allow_test_runtime=True))
+
+    first = client.post(
+        "/api/v1/runtimes",
+        json={
+            "label": "Local ComfyUI",
+            "base_url": "http://127.0.0.1:8188",
+            "location": "local",
+        },
+    ).json()
+    second = client.post(
+        "/api/v1/runtimes",
+        json={
+            "label": "ComfyUI",
+            "base_url": "http://127.0.0.1:8188",
+            "location": "local",
+        },
+    ).json()
+
+    assert second["id"] == first["id"]
+    runtimes = client.get("/api/v1/runtimes").json()
+    assert len(runtimes) == 1
+    assert runtimes[0]["label"] == "ComfyUI"
+
+
 def test_comfy_probe_accepts_a_single_explicit_local_or_remote_url(tmp_path):
     client = TestClient(create_app(tmp_path, FakeComfy, allow_test_runtime=True))
 

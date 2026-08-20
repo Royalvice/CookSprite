@@ -6,7 +6,7 @@ from typing import ClassVar
 
 from fastapi.testclient import TestClient
 
-from cli.__main__ import parser
+from cli.__main__ import _runtime_registration_payload, parser
 from cooksprite.api.app import create_app
 from cooksprite.comfy.client import ComfyError
 from cooksprite.dev import check_generated, check_tool_packages
@@ -202,6 +202,24 @@ def test_cli_start_defaults_to_api_frontend_and_managed_comfy():
     assert start.no_frontend is False
     assert start.port == 8000
     assert start.frontend_port == 5173
+    assert start.runtime is None
+    payload = _runtime_registration_payload(
+        start,
+        comfy_url="http://127.0.0.1:8188",
+        runtime_location="local",
+        runtime_transport="http",
+        api_base="http://127.0.0.1:8000",
+    )
+    assert "id" not in payload
+    explicit = root.parse_args(["start", "--runtime", "rt_named"])
+    explicit_payload = _runtime_registration_payload(
+        explicit,
+        comfy_url="http://127.0.0.1:8188",
+        runtime_location="local",
+        runtime_transport="http",
+        api_base="http://127.0.0.1:8000",
+    )
+    assert explicit_payload["id"] == "rt_named"
     no_comfy = root.parse_args(["start", "--no-comfy", "--frontend-port", "5174"])
     assert no_comfy.no_comfy is True
     assert no_comfy.frontend_port == 5174

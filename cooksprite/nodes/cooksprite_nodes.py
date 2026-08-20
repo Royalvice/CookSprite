@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import io
 import json
-import re
 import tempfile
 import urllib.parse
 import urllib.request
@@ -186,7 +185,6 @@ class CS_CompilePromptPacket:
                 "height": ("INT", {"default": 512, "min": 1, "max": 8192}),
                 "background": ("STRING", {"default": DEFAULT_GREEN_SCREEN_BACKGROUND}),
                 "edit_instruction": ("STRING", {"default": "", "multiline": True}),
-                "negative_terms": ("STRING", {"default": "", "multiline": True}),
                 "compile_prompt": ("BOOLEAN", {"default": True}),
             },
         }
@@ -218,8 +216,8 @@ class CS_CompilePromptPacket:
         height=512,
         background=DEFAULT_GREEN_SCREEN_BACKGROUND,
         edit_instruction="",
-        negative_terms="",
         compile_prompt=True,
+        **_legacy,
     ):
         if not compile_prompt:
             raw_prompt = str(prompt if prompt is not None else caption or "")
@@ -238,11 +236,6 @@ class CS_CompilePromptPacket:
         task_value = str(task or "").strip().lower()
         action_value = str(action or animation or "idle").strip().lower()
         caption_value = str(caption or prompt or category or "game sprite asset").strip()
-        terms = tuple(
-            item.strip()
-            for item in re.split(r"[,\n]", str(negative_terms or ""))
-            if item.strip()
-        )
         if task_value == "video" or str(action_id).startswith("animation"):
             result = compiler.compile_video(
                 VideoPromptRequest(
@@ -259,7 +252,6 @@ class CS_CompilePromptPacket:
                     model=model or ModelFamily.GENERIC.value,
                     resolution=(int(width), int(height)),
                     background=background or DEFAULT_GREEN_SCREEN_BACKGROUND,
-                    negative_terms=terms,
                 )
             )
         else:
@@ -279,11 +271,10 @@ class CS_CompilePromptPacket:
                     resolution=(int(width), int(height)),
                     background=background or DEFAULT_GREEN_SCREEN_BACKGROUND,
                     edit_instruction=edit_instruction or None,
-                    negative_terms=terms,
                 )
             )
         metadata = json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True)
-        return (result.prompt, result.negative_prompt, metadata)
+        return (result.prompt, "", metadata)
 
 
 # Semantic development alias.  It is intentionally not a second Comfy node.

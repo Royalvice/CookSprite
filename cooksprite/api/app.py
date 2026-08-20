@@ -73,13 +73,14 @@ from ..recipes import (
     manifest_from_assets,
     model_bundles,
     recipe_contract_is_valid,
-    recipe_for,
+    recipe_for_model,
     recipe_variants,
     recipes_from_runtime,
     runtime_manifest,
     supports,
 )
 from ..registry import ACTION_IDS, CookSpriteRegistry, RegistryError
+from ..runtime_state import terminal_runtime_state
 from ..store import DocumentConflict, Store, utcnow
 from ..supervisor import RunSupervisor
 from ..tool_packages import tool_packages
@@ -128,7 +129,6 @@ class RecipeCreate(BaseModel):
 
 
 class RuntimeDefaultBinding(BaseModel):
-    workflow_id: str
     model_id: str
 
 
@@ -316,7 +316,7 @@ def create_app(
         *,
         prefer_flux9b: bool = False,
     ) -> dict[str, str] | None:
-        """Keep one compact, per-runtime default without guessing model ability."""
+        """Keep one model default; select the compatible Workflow at run time."""
 
         compatible = [recipe for recipe in recipes if supports(recipe, action_id)]
         if not compatible:
@@ -331,22 +331,23 @@ def create_app(
                 None,
             )
             if selected:
-                return {
-                    "workflow_id": selected.id,
-                    "model_id": selected.checkpoint or selected.id,
-                }
+                return {"model_id": selected.checkpoint or selected.id}
             return None
         if isinstance(current, dict):
             workflow_id = str(current.get("workflow_id") or "")
             model_id = str(current.get("model_id") or "")
-            selected = next((recipe for recipe in compatible if recipe.id == workflow_id), None)
-            if selected and (not selected.checkpoint or not model_id or selected.checkpoint == model_id):
-                return {
-                    "workflow_id": selected.id,
-                    "model_id": model_id or selected.checkpoint or selected.id,
-                }
+            if not model_id and workflow_id:
+                legacy = next((recipe for recipe in compatible if recipe.id == workflow_id), None)
+                model_id = str(legacy.checkpoint or legacy.id) if legacy else ""
+            if model_id and any(
+                str(recipe.checkpoint or recipe.id) == model_id for recipe in compatible
+            ):
+                return {"model_id": model_id}
+            # An explicit model that disappeared is not silently replaced by
+            # a different model. The user can choose another installed model.
+            return None
         selected = compatible[0]
-        return {"workflow_id": selected.id, "model_id": selected.checkpoint or selected.id}
+        return {"model_id": selected.checkpoint or selected.id}
 
     def runtime_defaults(
         runtime: dict[str, Any] | None, recipes: list[Recipe] | None = None
@@ -418,6 +419,22 @@ def create_app(
             runtime.get("transport", "http"),
             runtime.get("directory"),
         )
+
+    def runtime_model_options(recipes: list[Recipe]) -> list[dict[str, Any]]:
+        """Project mode-specific Recipes into one user-selectable model each."""
+
+        models: dict[str, dict[str, Any]] = {}
+        for recipe in recipes:
+            if not recipe.checkpoint:
+                continue
+            model_id = str(recipe.checkpoint)
+            model = models.setdefault(
+                model_id,
+                {"id": model_id, "label": model_id, "actions": [], "modes": []},
+            )
+            model["actions"] = list(dict.fromkeys([*model["actions"], *recipe.actions]))
+            model["modes"] = list(dict.fromkeys([*model["modes"], *recipe.modes]))
+        return list(models.values())
 
     def persist_runtime_report(
         runtime: dict[str, Any],
@@ -814,6 +831,25 @@ def create_app(
             runtime_state = RunRuntimeState.model_validate_json(row.get("runtime_state") or "{}")
         except (TypeError, ValueError):
             runtime_state = RunRuntimeState()
+        # API-only jobs (for example project.export) do not emit ComfyUI
+        # events. Their row still starts with the generic queued state, so
+        # expose the database terminal status instead of making a finished
+        # job look as if it is waiting for ComfyUI.
+        terminal_phase = {
+            "succeeded": "completed",
+            "failed": "failed",
+            "cancelled": "cancelled",
+        }.get(row["status"])
+        if terminal_phase and runtime_state.phase != terminal_phase:
+            stored_error = json.loads(row["error"]) if row.get("error") else None
+            runtime_state = RunRuntimeState.model_validate(
+                terminal_runtime_state(
+                    runtime_state.model_dump(mode="json"),
+                    phase=terminal_phase,
+                    message=row["message"],
+                    error=stored_error,
+                )
+            )
         return RunView(
             id=row["id"],
             status=row["status"],
@@ -1134,7 +1170,7 @@ def create_app(
                 ),
             )
         if not values.get("model") and descriptor.models:
-            binding = runtime_defaults(runtime).get(action_id)
+            binding = runtime_defaults(runtime, runtime_recipes).get(action_id)
             has_flux_recipe = any(
                 recipe.family == "comfy.flux2-klein" and action_id in recipe.actions
                 for recipe in runtime_recipes
@@ -1147,17 +1183,20 @@ def create_app(
                         "FLUX.2 Klein is installed but no default model is configured; select a model explicitly",
                     ),
                 )
-            preferred = (
-                f"{runtime['id']}:{binding['workflow_id']}"
-                if binding and binding.get("workflow_id")
-                else ""
+            preferred = next(
+                (
+                    item.id
+                    for item in descriptor.models
+                    if binding and item.model_id == binding.get("model_id")
+                ),
+                "",
             )
             values["model"] = next(
                 (item.id for item in descriptor.models if item.id == preferred),
                 descriptor.models[0].id,
             )
         selected_model = str(values.get("model") or "")
-        prefix, separator, recipe_id = selected_model.partition(":")
+        prefix, separator, model_id = selected_model.partition(":")
         if not separator or prefix != runtime["id"]:
             raise HTTPException(
                 422,
@@ -1166,27 +1205,17 @@ def create_app(
                     "the selected model does not belong to the selected runtime",
                 ),
             )
-        selected_recipe = recipe_for(runtime, recipe_id)
-        if not selected_recipe or not supports(selected_recipe, action_id, normalized_inputs):
-            if selected_recipe:
-                selected_recipe = next(
-                    (
-                        candidate
-                        for candidate in runtime_recipes
-                        if candidate.family == selected_recipe.family
-                        and candidate.checkpoint == selected_recipe.checkpoint
-                        and supports(candidate, action_id, normalized_inputs)
-                    ),
-                    None,
-                )
-            if not selected_recipe:
-                raise HTTPException(
-                    409,
-                    _detail(
-                        "recipe_incompatible",
-                        "the selected model/workflow does not support these text/image inputs",
-                    ),
-                )
+        selected_recipe = recipe_for_model(
+            runtime_recipes, model_id, action_id, normalized_inputs
+        )
+        if not selected_recipe:
+            raise HTTPException(
+                409,
+                _detail(
+                    "recipe_incompatible",
+                    "the selected model does not support these text/image inputs",
+                ),
+            )
         # Re-materialize the small built-in adapter on each run.  Existing
         # runtime manifests may point at an older revision; unchanged graphs
         # reuse their revision while code-level contract changes become
@@ -1555,12 +1584,25 @@ def create_app(
             provenance={"operation": "project.export", "packages": tool_packages.versions()},
         )
 
+        def package_runtime_state() -> dict[str, Any]:
+            raw = (store.run(run_id) or {}).get("runtime_state") or "{}"
+            try:
+                return RunRuntimeState.model_validate_json(raw).model_dump(mode="json")
+            except (TypeError, ValueError):
+                return RunRuntimeState().model_dump(mode="json")
+
         def package() -> None:
             store.update_run(
                 run_id,
                 status="running",
                 progress=0.2,
                 message="validating package",
+                runtime_state={
+                    **RunRuntimeState().model_dump(mode="json"),
+                    "event": "processing",
+                    "phase": "processing",
+                    "message": "validating package",
+                },
             )
             try:
                 result = build_package(
@@ -1577,18 +1619,33 @@ def create_app(
                     title=f"{project.name}.cooksprite",
                 )
                 store.attach_run_artifact(run_id, artifact.id)
-                store.update_run(run_id, status="succeeded", progress=1, message="package ready")
+                store.update_run(
+                    run_id,
+                    status="succeeded",
+                    progress=1,
+                    message="package ready",
+                    runtime_state=terminal_runtime_state(
+                        package_runtime_state(),
+                        phase="completed",
+                        message="package ready",
+                    ),
+                )
             except PackageError as exc:
+                error = _detail(
+                    "export_incomplete",
+                    "fix the listed issues or explicitly allow an incomplete package",
+                    issues=exc.issues,
+                )
                 store.update_run(
                     run_id,
                     status="failed",
                     message="package is incomplete",
-                    error=json.dumps(
-                        _detail(
-                            "export_incomplete",
-                            "fix the listed issues or explicitly allow an incomplete package",
-                            issues=exc.issues,
-                        )
+                    error=json.dumps(error),
+                    runtime_state=terminal_runtime_state(
+                        package_runtime_state(),
+                        phase="failed",
+                        message="package is incomplete",
+                        error=error,
                     ),
                 )
 
@@ -2268,6 +2325,7 @@ def create_app(
             "runtime_id": runtime_id,
             "defaults": runtime_defaults(runtime, recipes),
             "model_bundles": bundles,
+            "models": runtime_model_options(recipes),
             "recipes": [
                 {
                     "id": recipe.id,
@@ -2288,25 +2346,22 @@ def create_app(
         if action_id not in ACTION_IDS:
             raise HTTPException(404, _detail("action_not_found", "unknown Action"))
         recipes = recipes_from_runtime(runtime)
-        recipe = next((item for item in recipes if item.id == body.workflow_id), None)
-        if not recipe or not supports(recipe, action_id):
+        compatible = [
+            recipe
+            for recipe in recipes
+            if supports(recipe, action_id)
+            and str(recipe.checkpoint or recipe.id) == body.model_id
+        ]
+        if not compatible:
             raise HTTPException(
                 422,
                 _detail(
-                    "default_workflow_incompatible",
-                    "the selected Workflow does not support this Action",
+                    "default_model_incompatible",
+                    "the selected model does not support this Action on this runtime",
                 ),
             )
-        if recipe.checkpoint and body.model_id != recipe.checkpoint:
-            raise HTTPException(
-                422,
-                _detail("default_model_incompatible", "the selected model is not this Workflow's model"),
-            )
         defaults = runtime_defaults(runtime, recipes)
-        defaults[action_id] = {
-            "workflow_id": body.workflow_id,
-            "model_id": body.model_id or recipe.checkpoint or recipe.id,
-        }
+        defaults[action_id] = {"model_id": body.model_id}
         save_runtime_defaults(runtime, defaults, explicit_action=action_id)
         invalidate_runtime(runtime_id)
         return {"runtime_id": runtime_id, "action_id": action_id, "default": defaults[action_id]}

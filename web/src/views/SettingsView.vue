@@ -16,7 +16,6 @@ const nodeInstallCommand = ref("");
 const capabilities = ref<RuntimeCapabilities | null>(null);
 const defaults = ref<RuntimeDefaultsView | null>(null);
 const defaultAction = ref("image.generate");
-const defaultWorkflow = ref("");
 const defaultModel = ref("");
 const defaultBusy = ref(false);
 const modelDownload = ref<ModelDownloadView | null>(null);
@@ -50,7 +49,6 @@ async function refreshRuntimes() {
 async function refreshDefaults(id: string) {
   defaults.value = await api.runtimeDefaults(id).catch(() => null);
   const binding = defaults.value?.defaults[defaultAction.value];
-  defaultWorkflow.value = binding?.workflow_id || "";
   defaultModel.value = binding?.model_id || "";
 }
 const modelBundles = computed<ModelBundleView[]>(() => defaults.value?.model_bundles || []);
@@ -108,18 +106,17 @@ watch(() => store.currentProject?.id, (id) => { selectedProjectId.value = id || 
 watch(() => store.activeRuntimeId, (id) => { if (id) { void api.runtimeCapabilities(id).then((value) => { capabilities.value = value; }).catch(() => { capabilities.value = null; }); void refreshDefaults(id); } });
 watch(defaultAction, () => {
   const binding = defaults.value?.defaults[defaultAction.value];
-  defaultWorkflow.value = binding?.workflow_id || "";
   defaultModel.value = binding?.model_id || "";
 });
-const defaultRecipes = computed(() => (defaults.value?.recipes || []).filter((recipe) => recipe.actions.includes(defaultAction.value)));
-watch(defaultWorkflow, (workflowId) => {
-  const recipe = defaultRecipes.value.find((item) => item.id === workflowId);
-  if (recipe) defaultModel.value = recipe.model_id;
+const defaultModels = computed(() => (defaults.value?.models || []).filter((model) => model.actions.includes(defaultAction.value)));
+const defaultActions = computed(() => Array.from(new Set((defaults.value?.models || []).flatMap((model) => model.actions))));
+watch(defaultActions, (actions) => {
+  if (actions.length && !actions.includes(defaultAction.value)) defaultAction.value = actions[0];
 });
 async function saveDefault() {
-  if (!store.activeRuntimeId || !defaultWorkflow.value || !defaultModel.value) return;
+  if (!store.activeRuntimeId || !defaultModel.value) return;
   defaultBusy.value = true;
-  try { await api.setRuntimeDefault(store.activeRuntimeId, defaultAction.value, { workflow_id: defaultWorkflow.value, model_id: defaultModel.value }); await refreshDefaults(store.activeRuntimeId); runtimeMessage.value = t("settings.defaultSaved"); }
+  try { await api.setRuntimeDefault(store.activeRuntimeId, defaultAction.value, { model_id: defaultModel.value }); await refreshDefaults(store.activeRuntimeId); runtimeMessage.value = t("settings.defaultSaved"); }
   catch (error) { runtimeMessage.value = error instanceof Error ? error.message : String(error); }
   finally { defaultBusy.value = false; }
 }
@@ -310,10 +307,9 @@ async function installLocal() {
       <div v-if="activeRuntime && defaults" class="runtime-defaults">
         <h3>{{ $t("settings.defaults") }}</h3>
         <div class="runtime-default-form">
-          <label><span>{{ $t("settings.defaultAction") }}</span><select v-model="defaultAction"><option value="image.generate">image.generate</option><option value="animation.generate">animation.generate</option><option value="frame.redraw">frame.redraw</option><option value="normal.generate">normal.generate</option></select></label>
-          <label><span>{{ $t("settings.defaultWorkflow") }}</span><select v-model="defaultWorkflow"><option value="" disabled>{{ $t("settings.noCompatibleWorkflow") }}</option><option v-for="recipe in defaultRecipes" :key="recipe.id" :value="recipe.id">{{ recipe.label }}</option></select></label>
-          <label><span>{{ $t("settings.defaultModel") }}</span><select v-model="defaultModel"><option v-if="defaultModel" :value="defaultModel">{{ defaultModel }}</option><option v-for="recipe in defaultRecipes.filter((item) => item.id === defaultWorkflow)" :key="`model-${recipe.id}`" :value="recipe.model_id">{{ recipe.model_id }}</option></select></label>
-          <button class="arcade-button primary" :disabled="defaultBusy || !defaultWorkflow || !defaultModel" @click="saveDefault">{{ $t("settings.saveDefault") }}</button>
+          <label><span>{{ $t("settings.defaultAction") }}</span><select v-model="defaultAction"><option v-for="actionId in defaultActions" :key="actionId" :value="actionId">{{ actionId }}</option></select></label>
+          <label><span>{{ $t("settings.defaultModel") }}</span><select v-model="defaultModel" :disabled="!defaultModels.length"><option value="" disabled>{{ $t("settings.noCompatibleModel") }}</option><option v-for="model in defaultModels" :key="model.id" :value="model.id">{{ model.label }}</option></select></label>
+          <button class="arcade-button primary" :disabled="defaultBusy || !defaultModel" @click="saveDefault">{{ $t("settings.saveDefault") }}</button>
         </div>
       </div>
       <div v-if="activeRuntime && defaults && modelBundles.length" class="runtime-model-bundles">

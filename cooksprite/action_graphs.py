@@ -96,7 +96,9 @@ def _core_image_workflow(
             id="negative",
             tool="comfy.CLIPTextEncode",
             inputs={
-                "text": output_ref("packet", "negative_prompt"),
+                # KSampler still requires a conditioning input. Encode an
+                # empty string; CookSprite has no negative-prompt product API.
+                "text": literal(""),
                 "clip": output_ref("model", "output_1"),
             },
         ),

@@ -25,12 +25,11 @@ _PARAMS = {
     "height": {"type": "integer"},
     "background": {"type": "string"},
     "edit_instruction": {"type": "string"},
-    "negative_terms": {"type": "string"},
 }
 
 MANIFEST = ToolPackageManifest(
     id="prompt",
-    version="1.3.0",
+    version="1.4.0",
     license="Apache-2.0",
     tools=[
         tool(
@@ -40,6 +39,8 @@ MANIFEST = ToolPackageManifest(
             [],
             [
                 ("prompt", "Text", False),
+                # Output index 1 is retained as an always-empty compatibility
+                # port so existing ComfyUI graphs do not lose their wiring.
                 ("negative_prompt", "Text", False),
                 ("metadata", "Text", False),
             ],

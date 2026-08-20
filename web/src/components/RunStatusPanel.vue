@@ -9,20 +9,25 @@ const { t } = useI18n();
 
 const terminal = computed(() => ["succeeded", "failed", "cancelled"].includes(props.run.status));
 const state = computed(() => props.run.runtime_state);
-const error = computed(() => state.value.error || props.run.error);
+const error = computed(() => props.run.error || state.value.error);
 const progress = computed(() => Math.max(0, Math.min(1, props.run.progress || 0)));
 const modelLabel = computed(() => t(`runtime.model.${state.value.model_status}`));
-const phaseLabel = computed(() => t(`runtime.phase.${state.value.phase}`));
+const displayPhase = computed(() => terminal.value
+  ? props.run.status === "succeeded" ? "completed" : props.run.status
+  : state.value.phase);
+const displayMessage = computed(() => terminal.value ? props.run.message : state.value.message || props.run.message);
+const phaseLabel = computed(() => t(`runtime.phase.${displayPhase.value}`));
 const statusLabel = computed(() => t(`runtime.status.${props.run.status}`));
+const providerLabel = computed(() => props.run.runtime_id ? t("runtime.live") : t("runtime.apiLive"));
 </script>
 
 <template>
   <section class="run-status-panel panel" :class="{ terminal, failed: Boolean(error) }" role="status" aria-live="polite">
     <header>
       <div class="run-status-heading">
-        <span class="eyebrow"><Cpu :size="14" />{{ $t("runtime.live") }}</span>
+        <span class="eyebrow"><Cpu :size="14" />{{ providerLabel }}</span>
         <strong>{{ phaseLabel }}</strong>
-        <small>{{ state.message || run.message }}</small>
+        <small>{{ displayMessage }}</small>
       </div>
       <span class="run-status-badge" :class="run.status">
         <SpinnerGap v-if="!terminal" class="spin" :size="14" />
@@ -34,7 +39,7 @@ const statusLabel = computed(() => t(`runtime.status.${props.run.status}`));
     <div class="run-progress" :aria-label="$t('runtime.progress')" role="progressbar" :aria-valuenow="Math.round(progress * 100)" aria-valuemin="0" aria-valuemax="100">
       <i :style="{ width: `${progress * 100}%` }"></i>
     </div>
-    <div class="run-status-facts">
+    <div v-if="!terminal" class="run-status-facts">
       <span><b>{{ $t("runtime.modelLabel") }}</b><em :class="`is-${state.model_status}`">{{ modelLabel }}</em></span>
       <span v-if="state.current"><b>{{ $t("runtime.nodeLabel") }}</b><em>{{ state.current.label }}</em></span>
       <span v-if="state.current?.total"><b>{{ $t("runtime.stepLabel") }}</b><em>{{ state.current.step || 0 }} / {{ state.current.total }}</em></span>

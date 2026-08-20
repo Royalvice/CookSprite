@@ -339,7 +339,14 @@ export const useStudioStore = defineStore("studio", () => {
   }
 
   async function refreshQueue() {
-    try { queue.value = await api.queue(); } catch { /* non-blocking queue */ }
+    try {
+      const next = await api.queue();
+      queue.value = next;
+      if (activeRun.value) {
+        const fresh = [...next.running, ...next.pending, ...next.history].find((item) => item.id === activeRun.value?.id);
+        if (fresh) activeRun.value = fresh;
+      }
+    } catch { /* non-blocking queue */ }
   }
 
   function replaceQueueRun(run: RunView) {

@@ -127,7 +127,9 @@ For the generic Prompt Tool specifically:
 - keep `CS_CompilePromptPacket` as the compatibility node ID;
 - port the full image/video `sprite_prompt_package` behavior clean-room;
 - treat it as model-independent T2T;
-- output `prompt`, `negative_prompt`, and JSON `metadata` as Text ports;
+- output `prompt` and JSON `metadata`; output index 1 remains an always-empty
+  compatibility Text port for existing ComfyUI graphs;
+- do not expose, compile, template, or persist negative prompts;
 - never assume the downstream model uses CLIP;
 - use model-specific Workflow adapters downstream.
 

@@ -139,7 +139,6 @@ CORE_NODES = {
             "height": "INT",
             "background": "STRING",
             "edit_instruction": "STRING",
-            "negative_terms": "STRING",
             "compile_prompt": "BOOLEAN",
         },
         ["STRING", "STRING", "STRING"],
@@ -354,7 +353,15 @@ def test_official_z_image_and_krea_adapters_are_text_to_image_only():
                 }
             },
             **{
-                node_id: {"input": {"required": {}}}
+                node_id: {
+                    "input": {
+                        "required": {
+                            "sampler_name": [["euler", "res_multistep"]]
+                            if node_id == "KSampler"
+                            else {}
+                        }
+                    }
+                }
                 for node_id in (
                     "CLIPTextEncode",
                     "ConditioningZeroOut",
@@ -381,12 +388,20 @@ def test_official_z_image_and_krea_adapters_are_text_to_image_only():
     }
     assert all(recipe.modes == ["t2i"] for recipe in recipes)
     for recipe in recipes:
-        assert recipe.workflow["negative"]["class_type"] == "CLIPTextEncode"
-        assert recipe.workflow["negative"]["inputs"] == {"clip": ["clip", 0], "text": ""}
+        assert recipe.workflow["negative"]["class_type"] == "ConditioningZeroOut"
+        assert recipe.workflow["negative"]["inputs"] == {"conditioning": ["positive", 0]}
         assert recipe.workflow["sample"]["inputs"]["negative"] == ["negative", 0]
-        assert recipe.workflow["sample"]["inputs"]["cfg"] == 5.0
-        assert recipe.slots["negative"] == "negative.text"
-        assert recipe.slot_types["negative"] == "Text"
+        assert recipe.workflow["sample"]["inputs"]["cfg"] == 1.0
+        assert "negative" not in recipe.slots
+        assert "negative" not in recipe.slot_types
+    z_image = next(recipe for recipe in recipes if recipe.id == "z-image-turbo-bf16-t2i")
+    assert z_image.workflow["sample"]["inputs"]["steps"] == 8
+    assert z_image.workflow["sample"]["inputs"]["sampler_name"] == "res_multistep"
+    assert z_image.workflow["shift"]["inputs"]["shift"] == 3.0
+    krea = next(recipe for recipe in recipes if recipe.id == "krea2-turbo-bf16-t2i")
+    assert krea.workflow["sample"]["inputs"]["steps"] == 8
+    assert krea.workflow["sample"]["inputs"]["sampler_name"] == "euler"
+    assert "shift" not in krea.workflow
 
 
 def test_stale_i2i_recipes_for_t2i_only_models_are_not_loaded():
@@ -569,8 +584,13 @@ def test_imported_image_recipe_requires_bridge_pixel_policy_and_receives_it(tmp_
         family="custom.image",
         actions=["image.generate"],
         modes=["t2i"],
-        workflow={"10": {"class_type": "ImportedSampler", "inputs": {"prompt": ""}}},
-        slots={"text": "10.prompt"},
+        workflow={
+            "10": {
+                "class_type": "ImportedSampler",
+                "inputs": {"prompt": "", "negative_text": "legacy"},
+            }
+        },
+        slots={"text": "10.prompt", "negative_prompt": "10.negative_text"},
         output=["10", 0],
         source="imported",
     )
@@ -616,11 +636,15 @@ def test_imported_image_recipe_requires_bridge_pixel_policy_and_receives_it(tmp_
     assert run.status_code == 202
     assert wait(client, run.json()["id"])["status"] == "succeeded"
     graph = ProtocolComfy.submitted[-1]
-    assert any(node["class_type"] == "ImportedSampler" for node in graph.values())
+    imported_sampler = next(
+        node for node in graph.values() if node["class_type"] == "ImportedSampler"
+    )
+    assert imported_sampler["inputs"]["negative_text"] == ""
     assert not any(node["class_type"] == "CS_Pixelize" for node in graph.values())
     packet = next(node for node in graph.values() if node["class_type"] == "CS_CompilePromptPacket")
     assert packet["inputs"]["prompt"] == "raw imported prompt"
     assert packet["inputs"]["compile_prompt"] is False
+    assert "negative_terms" not in packet["inputs"]
 
 
 def test_imported_recipe_params_flow_through_generic_assembler(tmp_path):
@@ -688,6 +712,7 @@ def test_action_request_compiles_to_real_comfy_graph_and_artifact_store(tmp_path
     assert action["models"] == [
         {
             "id": action["models"][0]["id"],
+            "model_id": "test-model.safetensors",
             "label": "Protocol Test · test-model.safetensors",
             "runtime_id": "rt_test",
             "family": "comfy.core-checkpoint",
@@ -718,8 +743,15 @@ def test_action_request_compiles_to_real_comfy_graph_and_artifact_store(tmp_path
     assert packet["inputs"]["prompt"] == "a soup knight"
     assert packet["inputs"]["category"] == "character"
     assert packet["inputs"]["style"] == "pixel"
+    assert "negative_terms" not in packet["inputs"]
     assert packet["inputs"]["width"] == 256
     assert packet["inputs"]["height"] == 256
+    empty_negative = next(
+        node
+        for node in graph.values()
+        if node["class_type"] == "CLIPTextEncode" and node["inputs"]["text"] == ""
+    )
+    assert empty_negative["inputs"]["text"] == ""
     latent = next(node for node in graph.values() if node["class_type"] == "EmptyLatentImage")
     assert latent["inputs"]["width"] == 256
     assert latent["inputs"]["height"] == 256
@@ -846,7 +878,9 @@ def test_prompt_tool_is_model_neutral_and_deterministic():
     assert first.to_dict() == second.to_dict()
     assert first.task == "image"
     assert first.mode == "t2i"
-    assert first.metadata["compiler_version"] == "sprite_prompt_package_v1.3"
+    assert first.metadata["compiler_version"] == "sprite_prompt_package_v1.4"
+    assert first.negative_prompt == ""
+    assert "negative_prompt" not in first.to_dict()
     assert first.metadata["packet_type"] == "character_prompt_packet"
     assert first.metadata["combination"]["total_variants"] == 5
     assert first.camera_contract.pitch_deg == 0
@@ -858,14 +892,15 @@ def test_prompt_tool_is_model_neutral_and_deterministic():
         "Straight-on front view at eye level, the character faces directly toward the viewer, flat orthographic "
         "character presentation, full figure clearly visible, clean framing, no perspective distortion. "
         "Crisp pixel-art character sprite with deliberate pixel clusters and a limited color palette, clean contours, "
-        "clear component boundaries, readable face, and restrained highlights. Pure solid green background, uniform "
+        "clear component boundaries, readable face, and restrained highlights. Pure simple solid background, uniform "
         "color, flat color field, seamless backdrop, featureless background, clean subject separation, no floor, "
         "no cast shadow, no reflection, no gradient, no texture, no pattern, no scenery, no horizon, no background "
         "objects, no environmental details, no text, no logo, no watermark."
     )
     assert "clip" not in first.prompt.lower()
     assert "2D game illustration" not in first.prompt
-    assert "Pure solid green background" in first.prompt
+    assert "Pure simple solid background" in first.prompt
+    assert "green background" not in first.prompt.lower()
     video = compiler.compile_video(VideoPromptRequest(caption="soup knight", action="walk"))
     assert video.task == "video"
     assert video.metadata["action"] == "walk"
@@ -896,16 +931,25 @@ def test_character_i2i_uses_edit_template_instead_of_t2i_character_packet():
     assert result.reference_required is True
 
 
-def test_prompt_node_preserves_old_inputs_and_returns_three_generic_text_ports():
+def test_prompt_node_keeps_an_empty_legacy_port_without_negative_metadata():
     node = CS_CompilePromptPacket()
     prompt, negative, metadata = node.compile(
-        "image.generate", "a soup knight", "character", "pixel", "idle", "level", "s"
+        "image.generate",
+        "a soup knight",
+        "character",
+        "pixel",
+        "idle",
+        "level",
+        "s",
+        negative_terms="must be ignored for legacy callers",
     )
     assert prompt.startswith("a soup knight. Single full-body character")
-    assert "extra characters" in negative
-    assert "Pure solid green background" in prompt
+    assert negative == ""
+    assert "Pure simple solid background" in prompt
     assert "2D game illustration" not in prompt
-    assert '"compiler_version": "sprite_prompt_package_v1.3"' in metadata
+    metadata_value = json.loads(metadata)
+    assert metadata_value["metadata"]["compiler_version"] == "sprite_prompt_package_v1.4"
+    assert "negative_prompt" not in metadata_value
     assert CS_CompilePromptPacket.RETURN_TYPES == ("STRING", "STRING", "STRING")
     assert CS_CompilePromptPacket.RETURN_NAMES == ("prompt", "negative_prompt", "metadata")
 
@@ -963,14 +1007,20 @@ def test_runtime_defaults_select_the_configured_recipe_when_model_is_omitted(tmp
     client = ready_client(tmp_path)
     defaults = client.get("/api/v1/runtimes/rt_test/defaults")
     assert defaults.status_code == 200
-    binding = defaults.json()["defaults"]["image.generate"]
-    assert binding["workflow_id"].startswith("core-image-")
+    payload = defaults.json()
+    binding = payload["defaults"]["image.generate"]
+    assert binding == {"model_id": "test-model.safetensors"}
+    assert payload["models"] == [
+        {
+            "id": "test-model.safetensors",
+            "label": "test-model.safetensors",
+            "actions": ["image.generate", "frame.redraw", "animation.generate"],
+            "modes": ["t2i", "i2i", "i2i-sequence"],
+        }
+    ]
     updated = client.put(
         "/api/v1/runtimes/rt_test/defaults/image.generate",
-        json={
-            "workflow_id": binding["workflow_id"],
-            "model_id": "test-model.safetensors",
-        },
+        json={"model_id": "test-model.safetensors"},
     )
     assert updated.status_code == 200
     project = client.post("/api/v1/projects", json={"type": "static"}).json()
@@ -983,7 +1033,7 @@ def test_runtime_defaults_select_the_configured_recipe_when_model_is_omitted(tmp
         },
     )
     assert run.status_code == 202
-    assert wait(client, run.json()["id"])["provenance"]["recipe"] == binding["workflow_id"]
+    assert wait(client, run.json()["id"])["provenance"]["recipe"].startswith("core-image-")
 
 
 def test_animation_run_returns_one_typed_frame_sequence(tmp_path):
@@ -1294,6 +1344,8 @@ def test_static_package_is_unique_format_and_marks_integrity(tmp_path):
     run = client.post(f"/api/v1/projects/{project['id']}/exports", json={}).json()
     state = wait(client, run["id"])
     assert state["status"] == "succeeded"
+    assert state["runtime_state"]["phase"] == "completed"
+    assert state["runtime_state"]["message"] == "package ready"
     package = state["artifacts"][0]
     assert package["kind"] == "CookSpritePack"
     with zipfile.ZipFile(io.BytesIO(client.get(package["url"]).content)) as archive:

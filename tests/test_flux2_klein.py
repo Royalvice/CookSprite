@@ -10,6 +10,7 @@ from cooksprite.recipes import (
     discover_recipes,
     model_bundle_status,
     recipe_contract_is_valid,
+    recipe_for_model,
     recipe_variants,
     supports,
 )
@@ -23,7 +24,9 @@ def _node(required: dict[str, str], output: list[str]) -> dict:
     }
 
 
-def _report(*, include_9b: bool = True) -> dict:
+def _report(
+    *, include_9b: bool = True, scale_node: str = "ImageScaleToTotalPixels"
+) -> dict:
     diffusion = ["flux-2-klein-4b-fp8.safetensors"]
     encoders = ["qwen_3_4b.safetensors"]
     vaes = ["flux2-vae.safetensors"]
@@ -36,6 +39,9 @@ def _report(*, include_9b: bool = True) -> dict:
         "CLIPLoader": _node({"clip_name": "COMBO", "type": "COMBO"}, ["CLIP"]),
         "VAELoader": _node({"vae_name": "COMBO"}, ["VAE"]),
         "CLIPTextEncode": _node({"clip": "CLIP", "text": "STRING"}, ["CONDITIONING"]),
+        "ConditioningZeroOut": _node(
+            {"conditioning": "CONDITIONING"}, ["CONDITIONING"]
+        ),
         "PrimitiveInt": _node({"value": "INT"}, ["INT"]),
         "EmptyFlux2LatentImage": _node(
             {"batch_size": "INT", "height": "INT", "width": "INT"}, ["LATENT"]
@@ -65,7 +71,7 @@ def _report(*, include_9b: bool = True) -> dict:
             ["LATENT", "LATENT"],
         ),
         "VAEDecode": _node({"samples": "LATENT", "vae": "VAE"}, ["IMAGE"]),
-        "ImageScaleToTotalPixels": _node(
+        scale_node: _node(
             {
                 "image": "IMAGE",
                 "megapixels": "FLOAT",
@@ -93,6 +99,23 @@ def _report(*, include_9b: bool = True) -> dict:
     }
 
 
+def test_flux2_klein_uses_builtin_image_scale_when_total_pixel_node_is_unavailable():
+    recipes = [
+        item
+        for item in discover_recipes(_report(scale_node="ImageScale"))
+        if item.family == "comfy.flux2-klein"
+    ]
+    assert {item.id for item in recipes} == {
+        "flux2-klein-4b-turbo-t2i",
+        "flux2-klein-4b-turbo-i2i",
+        "flux2-klein-9b-turbo-t2i",
+        "flux2-klein-9b-turbo-i2i",
+    }
+    edit = next(item for item in recipes if item.id == "flux2-klein-9b-turbo-i2i")
+    assert edit.workflow["scale_ref_1"]["class_type"] == "ImageScale"
+    assert edit.workflow["scale_ref_1"]["inputs"]["width"] == 1024
+
+
 def test_flux2_klein_discovers_complete_turbo_bundles_and_official_sampler_contract():
     recipes = [item for item in discover_recipes(_report()) if item.family == "comfy.flux2-klein"]
     assert {item.id for item in recipes} == {
@@ -104,11 +127,11 @@ def test_flux2_klein_discovers_complete_turbo_bundles_and_official_sampler_contr
     for recipe in recipes:
         assert recipe_contract_is_valid(recipe)
         assert recipe.workflow["schedule"]["inputs"]["steps"] == 4
-        assert recipe.workflow["guider"]["inputs"]["cfg"] == 5.0
-        assert recipe.workflow["negative"]["class_type"] == "CLIPTextEncode"
-        assert recipe.workflow["negative"]["inputs"] == {"clip": ["clip", 0], "text": ""}
-        assert recipe.slots["negative"] == "negative.text"
-        assert recipe.slot_types["negative"] == "Text"
+        assert recipe.workflow["guider"]["inputs"]["cfg"] == 1.0
+        assert recipe.workflow["negative"]["class_type"] == "ConditioningZeroOut"
+        assert recipe.workflow["negative"]["inputs"] == {"conditioning": ["positive", 0]}
+        assert "negative" not in recipe.slots
+        assert "negative" not in recipe.slot_types
     edit = next(item for item in recipes if item.id == "flux2-klein-9b-turbo-i2i")
     four = next(item for item in recipe_variants(edit) if item.workflow_variant == "i2i-4")
     assert {name for name in four.slots if name.startswith("reference_")} == {
@@ -143,6 +166,17 @@ def test_flux2_i2i_workflow_variants_bind_one_to_four_artifacts():
             assert len(task.nodes[0].inputs) >= count
 
 
+def test_model_identity_selects_t2i_or_i2i_recipe_from_inputs():
+    recipes = [
+        item for item in discover_recipes(_report()) if item.family == "comfy.flux2-klein"
+    ]
+    model_id = "flux-2-klein-9b-fp8.safetensors"
+    assert recipe_for_model(recipes, model_id, "image.generate", {}).id.endswith("-t2i")
+    assert recipe_for_model(
+        recipes, model_id, "image.generate", {"reference": ["art_reference"]}
+    ).id.endswith("-i2i")
+
+
 def test_flux2_bundle_is_incomplete_when_one_loader_file_is_missing():
     report = _report()
     report["models"]["vae"].remove("full_encoder_small_decoder.safetensors")
@@ -169,7 +203,15 @@ def test_complete_9b_is_the_runtime_default_without_silent_4b_fallback(tmp_path)
     assert client.post("/api/v1/runtimes", json={"id": "rt_flux", "base_url": "http://flux"}).status_code == 200
     assert client.post("/api/v1/runtimes/rt_flux/doctor").status_code == 200
     defaults = client.get("/api/v1/runtimes/rt_flux/defaults").json()
-    assert defaults["defaults"]["image.generate"]["workflow_id"] == "flux2-klein-9b-turbo-t2i"
+    assert defaults["defaults"]["image.generate"] == {
+        "model_id": "flux-2-klein-9b-fp8.safetensors"
+    }
+    models = {item["id"]: item for item in defaults["models"]}
+    assert models["flux-2-klein-9b-fp8.safetensors"]["modes"] == ["t2i", "i2i"]
+    assert all(
+        "T2I" not in item["label"] and "I2I" not in item["label"]
+        for item in models.values()
+    )
 
     FluxComfy.include_9b = False
     assert client.post("/api/v1/runtimes/rt_flux/doctor").status_code == 200

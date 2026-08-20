@@ -268,6 +268,7 @@ class ActionControl(BaseModel):
 
 class ModelOption(BaseModel):
     id: str
+    model_id: str
     label: str
     runtime_id: str
     family: str

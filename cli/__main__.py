@@ -451,6 +451,35 @@ def _stop_frontend(process: subprocess.Popen[bytes] | None) -> None:
         process.kill()
 
 
+def _runtime_registration_payload(
+    args: argparse.Namespace,
+    *,
+    comfy_url: str,
+    runtime_location: str,
+    runtime_transport: str,
+    api_base: str,
+) -> dict[str, Any]:
+    """Build the startup registration without inventing a duplicate runtime ID.
+
+    The API already derives and reuses an ID for an endpoint when ``id`` is
+    omitted.  ``cspr start`` must keep that behavior; a fixed default ID would
+    turn a runtime previously added from Settings into a second connection.
+    Explicit ``--runtime`` remains an escape hatch for callers that want a
+    separate, intentionally named registration.
+    """
+
+    payload: dict[str, Any] = {
+        "label": args.label,
+        "base_url": comfy_url,
+        "location": runtime_location,
+        "transport": runtime_transport,
+        "callback_url": f"{api_base}/api/v1",
+    }
+    if args.runtime:
+        payload["id"] = args.runtime
+    return payload
+
+
 def cmd_start(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -486,17 +515,19 @@ def cmd_start(args: argparse.Namespace) -> int:
                 with CookSpriteClient(api_base) as http:
                     created = http.post(
                         "/api/v1/runtimes",
-                        json={
-                            "id": args.runtime,
-                            "label": args.label,
-                            "base_url": comfy_url,
-                            "location": runtime_location,
-                            "transport": runtime_transport,
-                            "callback_url": f"{api_base}/api/v1",
-                        },
+                        json=_runtime_registration_payload(
+                            args,
+                            comfy_url=comfy_url,
+                            runtime_location=runtime_location,
+                            runtime_transport=runtime_transport,
+                            api_base=api_base,
+                        ),
                     )
                     if created.status_code < 400:
-                        http.post(f"/api/v1/runtimes/{args.runtime}/doctor").raise_for_status()
+                        runtime_id = created.json().get("id") or args.runtime
+                        if not runtime_id:
+                            raise RuntimeError("runtime registration returned no runtime id")
+                        http.post(f"/api/v1/runtimes/{runtime_id}/doctor").raise_for_status()
                         return
             except (httpx.HTTPError, OSError):
                 time.sleep(0.25)
@@ -621,7 +652,7 @@ def cmd_comfy(args: argparse.Namespace) -> int:
             return show(
                 http.put(
                     f"/api/v1/runtimes/{args.runtime}/defaults/{args.action_id}",
-                    json={"workflow_id": args.workflow, "model_id": args.model},
+                    json={"model_id": args.model},
                 )
             )
     if args.action == "defaults":
@@ -869,13 +900,11 @@ def parser() -> argparse.ArgumentParser:
     comfy_defaults = comfy_commands.add_parser("defaults", help="show or set per-runtime Action defaults")
     comfy_defaults.add_argument("--runtime")
     comfy_defaults.add_argument("--action", dest="action_id")
-    comfy_defaults.add_argument("--workflow")
     comfy_defaults.add_argument("--model")
     defaults_commands = comfy_defaults.add_subparsers(dest="defaults_command")
     defaults_set = defaults_commands.add_parser("set", help="set one Action default")
     defaults_set.add_argument("--runtime", required=True)
     defaults_set.add_argument("--action", dest="action_id", required=True)
-    defaults_set.add_argument("--workflow", required=True)
     defaults_set.add_argument("--model", required=True)
     defaults_set.set_defaults(func=cmd_comfy)
     comfy_defaults.set_defaults(func=cmd_comfy)
@@ -952,7 +981,10 @@ def parser() -> argparse.ArgumentParser:
     start.add_argument("--comfy-host", default="127.0.0.1")
     start.add_argument("--comfy-port", type=int, default=8188)
     start.add_argument("--cuda-device", type=int)
-    start.add_argument("--runtime", default="rt_default")
+    start.add_argument(
+        "--runtime",
+        help="optional saved runtime ID; omit to reuse the ComfyUI endpoint",
+    )
     start.add_argument("--label", default="ComfyUI")
     start.add_argument("--timeout", type=float, default=180)
     start.set_defaults(func=cmd_start)

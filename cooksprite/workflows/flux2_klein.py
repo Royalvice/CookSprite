@@ -1,14 +1,9 @@
-"""Pure API-format lowerings derived from the official FLUX.2 Klein templates.
+"""Pure API-format lowerings derived from official FLUX.2 Klein templates.
 
-The source templates are UI-format ComfyUI subgraphs.  CookSprite stores the
-small, API-format graph needed by its sealed-tool compiler so the API never
-imports ComfyUI or fetches a workflow at startup.  The node topology follows
-the official FLUX.2 loader, sampler, guider, and reference-latent layout. The
-official distilled templates zero the negative conditioning and use CFG=1,
-which makes a CookSprite negative prompt inert. CookSprite keeps the
-distilled loader/sampler topology but uses the official base-workflow
-negative path (CLIPTextEncode -> CFGGuider) and CFG=5 so the compiled
-negative prompt is an actual sampler input.
+The bundled 4B and 9B weights are distilled models.  Their official ComfyUI
+graphs use four steps, CFG 1, Euler sampling, and zeroed negative
+conditioning.  Keep that sampling contract intact: forcing a text negative
+path or higher CFG changes the distilled model's output distribution.
 """
 
 from __future__ import annotations
@@ -26,7 +21,7 @@ FLUX2_TEMPLATE_PROVENANCE = {
         "i2i_9b": "templates/image_flux2_klein_image_edit_9b_distilled.json",
     },
     "comfyui": "v0.33.2",
-    "notes": "Normalized API graphs retain official Flux2Scheduler, CFGGuider, ReferenceLatent, and sampler topology.",
+    "notes": "Normalized API graphs retain the official distilled four-step, CFG 1, zero-negative, Euler, and ReferenceLatent topology.",
 }
 
 FLUX2_BUNDLES: dict[str, dict[str, Any]] = {
@@ -81,7 +76,7 @@ _COMMON_NODES = {
     "clip": {"class_type": "CLIPLoader", "inputs": {}},
     "vae": {"class_type": "VAELoader", "inputs": {}},
     "positive": {"class_type": "CLIPTextEncode", "inputs": {}},
-    "negative": {"class_type": "CLIPTextEncode", "inputs": {}},
+    "negative": {"class_type": "ConditioningZeroOut", "inputs": {}},
     "width": {"class_type": "PrimitiveInt", "inputs": {"value": 1024}},
     "height": {"class_type": "PrimitiveInt", "inputs": {"value": 1024}},
     "latent": {"class_type": "EmptyFlux2LatentImage", "inputs": {}},
@@ -98,7 +93,7 @@ def _link(node: dict[str, Any], name: str, source: str, output: int = 0) -> None
     node["inputs"][name] = [source, output]
 
 
-def _graph_base(bundle_id: str, *, cfg: float = 5.0) -> dict[str, Any]:
+def _graph_base(bundle_id: str) -> dict[str, Any]:
     bundle = FLUX2_BUNDLES[bundle_id]
     files = {item["folder"]: item["name"] for item in bundle["files"]}
     nodes = deepcopy(_COMMON_NODES)
@@ -113,7 +108,7 @@ def _graph_base(bundle_id: str, *, cfg: float = 5.0) -> dict[str, Any]:
     }
     nodes["vae"]["inputs"] = {"vae_name": files["vae"]}
     nodes["positive"]["inputs"] = {"clip": ["clip", 0], "text": ""}
-    nodes["negative"]["inputs"] = {"clip": ["clip", 0], "text": ""}
+    nodes["negative"]["inputs"] = {"conditioning": ["positive", 0]}
     nodes["latent"]["inputs"] = {
         "width": ["width", 0],
         "height": ["height", 0],
@@ -128,7 +123,7 @@ def _graph_base(bundle_id: str, *, cfg: float = 5.0) -> dict[str, Any]:
         "model": ["model", 0],
         "positive": ["positive", 0],
         "negative": ["negative", 0],
-        "cfg": cfg,
+        "cfg": 1.0,
     }
     nodes["sample"]["inputs"] = {
         "noise": ["noise", 0],
@@ -145,9 +140,16 @@ def _t2i_graph(bundle_id: str) -> dict[str, Any]:
     return _graph_base(bundle_id)
 
 
-def _i2i_graph(bundle_id: str, reference_count: int) -> dict[str, Any]:
+def _i2i_graph(
+    bundle_id: str,
+    reference_count: int,
+    *,
+    scale_node: str = "ImageScaleToTotalPixels",
+) -> dict[str, Any]:
     if not 1 <= reference_count <= 4:
         raise ValueError("FLUX.2 Klein supports one to four reference images")
+    if scale_node not in {"ImageScaleToTotalPixels", "ImageScale"}:
+        raise ValueError(f"unsupported FLUX.2 reference scale node: {scale_node}")
     nodes = _graph_base(bundle_id)
     nodes["latent"]["inputs"]["batch_size"] = 1
     previous_positive = "positive"
@@ -157,15 +159,26 @@ def _i2i_graph(bundle_id: str, reference_count: int) -> dict[str, Any]:
         encode_id = f"encode_ref_{index}"
         positive_id = f"positive_ref_{index}"
         negative_id = f"negative_ref_{index}"
-        nodes[scale_id] = {
-            "class_type": "ImageScaleToTotalPixels",
-            "inputs": {
+        if scale_node == "ImageScaleToTotalPixels":
+            scale_inputs = {
                 "image": "",
                 "upscale_method": "nearest-exact",
                 "megapixels": 1.0,
                 "resolution_steps": 1,
-            },
-        }
+            }
+        else:
+            # ImageScale is the built-in compatibility path on ComfyUI
+            # versions that predate ImageScaleToTotalPixels.  The product
+            # output is square, so matching the requested canvas keeps the
+            # reference latent shape aligned with the sampling latent.
+            scale_inputs = {
+                "image": "",
+                "upscale_method": "nearest-exact",
+                "width": 1024,
+                "height": 1024,
+                "crop": "disabled",
+            }
+        nodes[scale_id] = {"class_type": scale_node, "inputs": scale_inputs}
         nodes[encode_id] = {
             "class_type": "VAEEncode",
             "inputs": {"pixels": [scale_id, 0], "vae": ["vae", 0]},
@@ -190,6 +203,7 @@ def flux2_klein_graph(
     mode: str,
     *,
     reference_count: int = 0,
+    scale_node: str = "ImageScaleToTotalPixels",
 ) -> tuple[dict[str, Any], dict[str, str], dict[str, str]]:
     """Return graph, semantic slots, and slot types for one Recipe variant."""
 
@@ -199,7 +213,7 @@ def flux2_klein_graph(
         graph = _t2i_graph(bundle_id)
         references: dict[str, str] = {}
     elif mode == "i2i":
-        graph = _i2i_graph(bundle_id, reference_count)
+        graph = _i2i_graph(bundle_id, reference_count, scale_node=scale_node)
         references = {
             f"reference_{index}": f"scale_ref_{index}.image"
             for index in range(1, reference_count + 1)
@@ -208,7 +222,6 @@ def flux2_klein_graph(
         raise ValueError(f"unsupported FLUX.2 Klein mode: {mode}")
     slots = {
         "prompt": "positive.text",
-        "negative": "negative.text",
         "seed": "noise.noise_seed",
         "count": "latent.batch_size",
         "width": "width.value",
@@ -217,7 +230,6 @@ def flux2_klein_graph(
     }
     slot_types = {
         "prompt": "Text",
-        "negative": "Text",
         "seed": "Number",
         "count": "Number",
         "width": "Number",

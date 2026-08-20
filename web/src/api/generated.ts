@@ -23,7 +23,7 @@ export interface ActionControl {
   step?: number;
   i18n: Record<Locale, LocalizedText>;
 }
-export interface ModelOption { id: string; label: string; runtime_id: string; family: string; modes: string[] }
+export interface ModelOption { id: string; model_id: string; label: string; runtime_id: string; family: string; modes: string[] }
 export interface ActionDescriptor {
   id: string;
   i18n: Record<Locale, LocalizedText>;
@@ -216,7 +216,7 @@ export interface RuntimeCapabilities {
   workflow_templates: unknown;
   categories: Record<string, { models: Record<string, unknown>[]; workflows: Record<string, unknown>[]; tools: Record<string, unknown>[] }>;
 }
-export interface RuntimeDefaultBinding { workflow_id: string; model_id: string }
+export interface RuntimeDefaultBinding { model_id: string }
 export interface ModelBundleFile {
   folder: string;
   name: string;
@@ -249,6 +249,7 @@ export interface RuntimeDefaultsView {
   runtime_id: string;
   defaults: Record<string, RuntimeDefaultBinding>;
   model_bundles: ModelBundleView[];
+  models: Array<{ id: string; label: string; actions: string[]; modes: string[] }>;
   recipes: Array<{ id: string; label: string; actions: string[]; modes: string[]; model_id: string }>;
 }
 export interface LocalSetupView {

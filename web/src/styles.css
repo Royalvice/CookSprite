@@ -698,7 +698,7 @@ h2 { font-size: 21px; }
 .runtime-form .arcade-button { align-self: end; min-height: 42px; }
 .runtime-defaults { margin-top: 18px; border: 1px solid var(--line); background: var(--bg); padding: 12px; }
 .runtime-defaults h3 { margin: 0 0 10px; }
-.runtime-default-form { display: grid; grid-template-columns: minmax(150px, .7fr) minmax(220px, 1fr) minmax(180px, 1fr) auto; gap: 8px; align-items: end; }
+.runtime-default-form { display: grid; grid-template-columns: minmax(150px, .7fr) minmax(240px, 1.3fr) auto; gap: 8px; align-items: end; }
 .runtime-default-form label { display: grid; gap: 4px; color: var(--muted); font-size: 9px; font-weight: 800; }
 .runtime-default-form select { width: 100%; min-height: 42px; border: 1px solid var(--line); background: var(--bg); color: var(--text); padding: 8px; }
 .runtime-default-form .arcade-button { min-height: 42px; }
@@ -791,6 +791,11 @@ h2 { font-size: 21px; }
   .hdri-strip { grid-template-columns: repeat(3, 1fr); }
   .lighting-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .direction-row { overflow-x: auto; }
+  .runtime-list article { display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: center; }
+  .runtime-list article > svg:first-child { grid-row: 1 / -1; }
+  .runtime-list article > div:not(.runtime-actions), .runtime-list article .runtime-status { grid-column: 2; }
+  .runtime-list article .runtime-status { margin-left: 0; justify-self: start; }
+  .runtime-list article > .runtime-actions { grid-column: 2; margin-left: 0; flex-wrap: wrap; justify-content: flex-start; }
 }
 
 @media (max-width: 767px) {

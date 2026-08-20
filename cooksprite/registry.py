@@ -126,22 +126,16 @@ class CookSpriteRegistry:
             reason = None
         models = []
         if available and runtime:
-            groups: dict[tuple[str, str, str], list[Recipe]] = {}
+            groups: dict[str, list[Recipe]] = {}
             for recipe in compatible:
-                identity = (
-                    str(recipe.checkpoint or recipe.id),
-                    str(recipe.family),
-                    _model_identity_label(recipe.label),
-                )
+                identity = str(recipe.checkpoint or recipe.id)
                 groups.setdefault(identity, []).append(recipe)
-            for group in groups.values():
+            for model_id, group in groups.items():
                 representative = group[0]
                 models.append(
                     ModelOption(
-                        # Keep a recipe-backed id for compatibility.  The API
-                        # resolves another recipe in this identity group when
-                        # the input mode requires it.
-                        id=f"{runtime['id']}:{representative.id}",
+                        id=f"{runtime['id']}:{model_id}",
+                        model_id=model_id,
                         label=f"{runtime['label']} · {_model_identity_label(representative.label)}",
                         runtime_id=runtime["id"],
                         family=representative.family,

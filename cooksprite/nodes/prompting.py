@@ -158,8 +158,6 @@ class CameraContract:
         }
 
 
-DEFAULT_IMAGE_NEGATIVE = "extra characters, unrelated objects, cast shadow, floor, text, logo, watermark"
-DEFAULT_VIDEO_NEGATIVE = "camera movement, scene change, extra characters, text, watermark"
 DEFAULT_GREEN_SCREEN_BACKGROUND = "pure green-screen background (#00FF00)"
 
 CATEGORY_TEXT = {
@@ -185,7 +183,6 @@ class ImagePromptRequest:
     resolution: tuple[int, int] = (512, 512)
     background: str = DEFAULT_GREEN_SCREEN_BACKGROUND
     edit_instruction: str | None = None
-    negative_terms: tuple[str, ...] = field(default_factory=tuple)
     camera: CameraContract | None = None
 
     def validate(self) -> None:
@@ -223,7 +220,6 @@ class VideoPromptRequest:
     duration_seconds: float | None = 5.0
     background: str = DEFAULT_GREEN_SCREEN_BACKGROUND
     action_detail: str | None = None
-    negative_terms: tuple[str, ...] = field(default_factory=tuple)
     camera: CameraContract | None = None
 
     def validate(self) -> None:
@@ -268,7 +264,6 @@ class CompiledPrompt:
             "task": self.task,
             "mode": self.mode,
             "prompt": self.prompt,
-            "negative_prompt": self.negative_prompt,
             "reference_required": self.reference_required,
             "camera_contract": self.camera_contract.to_dict(),
             "metadata": dict(self.metadata),
@@ -291,7 +286,7 @@ class PromptSpec:
         return f"{self.style}-{self.camera_preset}-{self.orientation}-{self.mode}"
 
 
-COMPILER_VERSION = "sprite_prompt_package_v1.3"
+COMPILER_VERSION = "sprite_prompt_package_v1.4"
 
 # Image generation has one deliberate camera contract. Keep the old camera
 # enums and request fields for saved graphs and callers, but never let them
@@ -304,7 +299,7 @@ CHARACTER_CAMERA_GENERAL = (
     "flat orthographic character presentation, full figure clearly visible, clean framing, no perspective distortion"
 )
 CHARACTER_STYLE_GENERAL = "clean contours, clear component boundaries, readable face, and restrained highlights"
-CHARACTER_BACKGROUND_CORE = "Pure solid green background"
+CHARACTER_BACKGROUND_CORE = "Pure simple solid background"
 CHARACTER_BACKGROUND_GENERAL = (
     "uniform color, flat color field, seamless backdrop, featureless background, clean subject separation, "
     "no floor, no cast shadow, no reflection, no gradient, no texture, no pattern, no scenery, no horizon, "
@@ -354,7 +349,7 @@ HUMANOID_FIXED_STYLE = (
     "clear component boundaries, readable face, and restrained highlights"
 )
 HUMANOID_FIXED_BACKGROUND = (
-    "Pure solid green background, no floor, no cast shadow, no reflection, no text, no watermark"
+    "Pure simple solid background, no floor, no cast shadow, no reflection, no text, no watermark"
 )
 
 IMAGE_STYLE_TEXT = {
@@ -428,14 +423,13 @@ class SpritePromptCompiler:
                     "{BACKGROUND_CORE}, {BACKGROUND_GENERAL}."
                 )
                 edit_instruction = request.edit_instruction
-            negative = _negative_prompt(request.negative_terms, DEFAULT_IMAGE_NEGATIVE)
             request_id = f"image-character-{style_option}-{camera_option}-{mode.value}-{width}x{height}"
             return CompiledPrompt(
                 request_id=request_id,
                 task="image",
                 mode=mode.value,
                 prompt=prompt,
-                negative_prompt=negative,
+                negative_prompt="",
                 reference_required=mode == PromptMode.I2I,
                 camera_contract=camera,
                 metadata={
@@ -452,7 +446,7 @@ class SpritePromptCompiler:
                     "camera_preset": CameraPreset.EYE_LEVEL.value,
                     "orientation": Orientation.FRONT.value,
                     "screen_facing": None,
-                    "background": "pure_solid_green",
+                    "background": "pure_simple_solid",
                     "resolution": [int(width), int(height)],
                     "edit_instruction": edit_instruction,
                     "combination": {
@@ -487,14 +481,13 @@ class SpritePromptCompiler:
         prompt_parts.append(
             f"Composition: one complete subject centered on a {request.background}; no floor, scene, or background detail."
         )
-        negative = _negative_prompt(request.negative_terms, DEFAULT_IMAGE_NEGATIVE)
         request_id = f"image-{style.value}-eye_level-front-{mode.value}-{width}x{height}"
         return CompiledPrompt(
             request_id=request_id,
             task="image",
             mode=mode.value,
             prompt="\n\n".join(prompt_parts),
-            negative_prompt=negative,
+            negative_prompt="",
             reference_required=mode == PromptMode.I2I,
             camera_contract=camera,
             metadata={
@@ -545,7 +538,7 @@ class SpritePromptCompiler:
             task="video",
             mode=mode.value,
             prompt=prompt,
-            negative_prompt=_negative_prompt(request.negative_terms, DEFAULT_VIDEO_NEGATIVE),
+            negative_prompt="",
             reference_required=mode == PromptMode.I2V,
             camera_contract=camera,
             metadata={
@@ -751,15 +744,6 @@ def _video_view_line(orientation: Orientation, facing: str) -> str:
 
 def _clean_caption(caption: str | None) -> str:
     return re.sub(r"\s+", " ", str(caption or "").strip()).rstrip(".")
-
-
-def _negative_prompt(extra: Iterable[str], base: str) -> str:
-    terms: list[str] = []
-    for value in (*base.split(", "), *extra):
-        clean = re.sub(r"\s+", " ", str(value).strip()).strip(" ,")
-        if clean and clean.lower() not in {item.lower() for item in terms}:
-            terms.append(clean)
-    return ", ".join(terms)
 
 
 __all__ = [

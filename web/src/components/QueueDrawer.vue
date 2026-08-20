@@ -16,6 +16,8 @@ const groups = computed(() => [
   { id: "history", label: t("queue.history"), items: store.queue.history.slice(0, 20) },
 ]);
 const terminal = (run: RunView) => ["succeeded", "failed", "cancelled"].includes(run.status);
+const message = (run: RunView) => terminal(run) ? run.message : run.runtime_state.message || run.message;
+const error = (run: RunView) => run.error || run.runtime_state.error;
 </script>
 
 <template>
@@ -42,9 +44,9 @@ const terminal = (run: RunView) => ["succeeded", "failed", "cancelled"].includes
               <Prohibit v-else :size="18" />
               <div>
                 <strong>{{ run.action_id || "contributor.run" }}</strong>
-                <span>{{ run.runtime_state.message || run.message }}</span>
-                <small v-if="run.runtime_state.current">{{ run.runtime_state.current.label }}<template v-if="run.runtime_state.current.total"> · {{ run.runtime_state.current.step || 0 }}/{{ run.runtime_state.current.total }}</template></small>
-                <small v-if="run.runtime_state.error" class="run-row-error">{{ run.runtime_state.error.code }} · {{ run.runtime_state.error.message }}</small>
+                <span>{{ message(run) }}</span>
+                <small v-if="!terminal(run) && run.runtime_state.current">{{ run.runtime_state.current.label }}<template v-if="run.runtime_state.current.total"> · {{ run.runtime_state.current.step || 0 }}/{{ run.runtime_state.current.total }}</template></small>
+                <small v-if="error(run)" class="run-row-error">{{ error(run)?.code }} · {{ error(run)?.message }}</small>
                 <div v-if="!terminal(run)" class="micro-progress"><i :style="{ width: `${run.progress * 100}%` }"></i></div>
               </div>
               <button v-if="!terminal(run)" class="icon-button compact" :aria-label="$t('common.cancel')" @click="store.cancel(run.id)"><X :size="15" /></button>

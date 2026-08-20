@@ -135,7 +135,9 @@ async function applyImageRuntimeDefault() {
   if (imageValues.value.model && valid) return;
   const defaults = await api.runtimeDefaults(runtimeId).catch(() => null);
   const binding = defaults?.defaults["image.generate"];
-  const preferred = binding ? `${runtimeId}:${binding.workflow_id}` : "";
+  const preferred = binding
+    ? action.models.find((item) => item.model_id === binding.model_id)?.id || ""
+    : "";
   imageValues.value.model = action.models.some((item) => item.id === preferred)
     ? preferred
     : action.models.length && !action.models.some((item) => item.family === "comfy.flux2-klein")
