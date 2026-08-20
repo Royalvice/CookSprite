@@ -84,6 +84,49 @@ def _weighted_kmeans(values: np.ndarray, weights: np.ndarray, count: int, fixed:
     return centers, inertia
 
 
+def _weighted_kmeans_legacy(
+    values: np.ndarray,
+    weights: np.ndarray,
+    count: int,
+    fixed: np.ndarray,
+) -> tuple[np.ndarray, float]:
+    """Retain the original numerical path for explicit continuous mode."""
+
+    centers = [item.copy() for item in fixed]
+    if not centers:
+        centers.append(values[int(np.argmax(weights))].copy())
+    while len(centers) < count:
+        existing = np.stack(centers)
+        distance = np.min(
+            np.sum((values[:, None, :] - existing[None, :, :]) ** 2, axis=2), axis=1
+        )
+        centers.append(values[int(np.argmax(distance * weights))].copy())
+    centers_array = np.stack(centers[:count]).astype(np.float32)
+    fixed_count = len(fixed)
+    positive_weights = np.maximum(weights, 1e-9)
+    for _ in range(32):
+        distance = np.sum((values[:, None, :] - centers_array[None, :, :]) ** 2, axis=2)
+        labels = np.argmin(distance, axis=1)
+        updated = centers_array.copy()
+        totals = np.bincount(labels, weights=positive_weights, minlength=count)
+        channels = values.shape[1]
+        offsets = np.arange(channels, dtype=labels.dtype)[None, :] * count
+        weighted_values = np.bincount(
+            (labels[:, None] + offsets).ravel(),
+            weights=(values * positive_weights[:, None]).ravel(),
+            minlength=count * channels,
+        ).reshape(channels, count).T
+        movable = totals[fixed_count:] > 0.0
+        movable_indices = np.flatnonzero(movable) + fixed_count
+        updated[movable_indices] = weighted_values[movable_indices] / totals[movable_indices, None]
+        if float(np.max(np.abs(updated - centers_array))) < 1e-6:
+            centers_array = updated
+            break
+        centers_array = updated
+    distance = np.sum((values - centers_array[labels]) ** 2, axis=1)
+    return centers_array, float(np.average(distance, weights=positive_weights))
+
+
 def build_palette(
     evidences: list[CellEvidence],
     tone_maps: list[ToneRoleMap],
@@ -94,6 +137,7 @@ def build_palette(
     outline_color: str | None = None,
     equal_frame_weight: bool = False,
     canonical_order: bool = False,
+    exact_legacy: bool = False,
 ) -> PaletteBuildResult:
     values: list[np.ndarray] = []
     weights: list[np.ndarray] = []
@@ -142,7 +186,8 @@ def build_palette(
     if preserve_highlights and highlights and len(fixed_values) < min(5, budget):
         fixed_values.append(_medoid(np.concatenate(highlights), np.concatenate(highlight_weights)))
     fixed = np.stack(fixed_values).astype(np.float32)
-    centers, inertia = _weighted_kmeans(all_values, all_weights, budget, fixed)
+    cluster = _weighted_kmeans_legacy if exact_legacy else _weighted_kmeans
+    centers, inertia = cluster(all_values, all_weights, budget, fixed)
     srgb = oklab_to_srgb(centers)
     srgb_u8 = np.rint(np.clip(srgb, 0.0, 1.0) * 255.0).astype(np.uint8)
     if outline_color is not None:

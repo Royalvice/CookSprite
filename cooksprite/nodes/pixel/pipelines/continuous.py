@@ -268,6 +268,7 @@ def compile_continuous(
         outline_color=outline_color if outline else None,
         equal_frame_weight=resolved_mode == "chunk",
         canonical_order=resolved_mode == "chunk",
+        exact_legacy=resolved_mode == "continuous",
     )
     labels: list[np.ndarray] = []
     alphas_out: list[np.ndarray] = []
