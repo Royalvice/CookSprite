@@ -184,15 +184,20 @@ def compile_continuous(
         raise ValueError("chunk pixelization accepts at most 32 frames")
     if normal_frames is not None and len(normal_frames) != len(rgba_frames):
         raise ValueError("normal batch must match diffuse batch")
-    alphas = [frame[..., 3].astype(np.float32) / 255.0 for frame in rgba_frames]
-    bbox = union_bbox(alphas)
+    bbox = union_bbox([frame[..., 3] for frame in rgba_frames], threshold=1.0)
     transform = build_transform(bbox, target)
     supersample = _supersample(target, len(rgba_frames))
     def compile_frame(index: int) -> tuple[CellEvidence, SilhouetteContour, InternalStructureStroke, np.ndarray | None]:
         rgba = rgba_frames[index]
         semantic_path = semantic_mask_paths[index]
         semantic = _semantic_mask(semantic_path, rgba.shape[:2])
-        analysis = analyse_frame(rgba, transform, semantic, supersample)
+        analysis = analyse_frame(
+            rgba,
+            transform,
+            semantic,
+            supersample,
+            fast_regions=resolved_mode == "chunk",
+        )
         if normal_frames is None:
             evidence = compile_cell_evidence(analysis, target.width, target.height)
             cell_normal = None
@@ -210,7 +215,8 @@ def compile_continuous(
         internal = compile_internal_strokes(evidence, silhouette.mask)
         return evidence, silhouette, internal, cell_normal
 
-    workers = min(len(rgba_frames), 4, max(1, (os.cpu_count() or 2) // 2))
+    worker_limit = 2 if resolved_mode == "chunk" and len(rgba_frames) > 8 else 4
+    workers = min(len(rgba_frames), worker_limit, max(1, (os.cpu_count() or 2) // 2))
     if workers > 1:
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="cooksprite-pixel") as executor:
             compiled = list(executor.map(compile_frame, range(len(rgba_frames))))

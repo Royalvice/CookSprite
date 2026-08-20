@@ -127,7 +127,10 @@ def render_normal_supersampled(
 
     x0, y0, x1, y1 = transform.source_bbox_xyxy
     vectors = np.clip(normal[y0:y1, x0:x1, :3], 0.0, 1.0).astype(np.float32) * 2.0 - 1.0
-    source_alpha = np.clip(alpha[y0:y1, x0:x1], 0.0, 1.0).astype(np.float32)
+    source_alpha = alpha[y0:y1, x0:x1].astype(np.float32)
+    if np.issubdtype(alpha.dtype, np.integer):
+        source_alpha /= float(np.iinfo(alpha.dtype).max)
+    source_alpha = np.clip(source_alpha, 0.0, 1.0)
     source_height, source_width = source_alpha.shape
     output_width = transform.target_width * supersample
     output_height = transform.target_height * supersample

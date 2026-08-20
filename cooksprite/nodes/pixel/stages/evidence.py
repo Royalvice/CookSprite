@@ -128,6 +128,8 @@ def analyse_frame(
     transform: GeometryTransform,
     semantic_mask: np.ndarray | None,
     supersample: int,
+    *,
+    fast_regions: bool = False,
 ) -> FrameEvidence:
     rendered = render_supersampled(rgba_u8, transform, supersample)
     alpha = rendered[..., 3]
@@ -146,13 +148,24 @@ def analyse_frame(
     foreground_area = int(mask.sum())
     if foreground_area >= 32:
         segments = int(np.clip(foreground_area / max((supersample * 2.2) ** 2, 4.0), 24, 1400))
+        slic_mask = mask
+        if fast_regions:
+            # Masked skimage SLIC initializes centres by running scipy kmeans2
+            # over every foreground pixel. For a sequence that repeats this
+            # expensive high-resolution initialization per frame. A regular
+            # whole-canvas SLIC grid with density compensated by foreground
+            # occupancy yields the same local region scale without that K-means
+            # or its large temporary arrays; background labels are discarded.
+            occupancy = foreground_area / mask.size
+            segments = int(np.clip(round(segments / max(occupancy, 1e-4)), 24, 4096))
+            slic_mask = None
         regions = slic(
             lab,
             n_segments=segments,
             compactness=0.16,
             sigma=0.0,
             start_label=0,
-            mask=mask,
+            mask=slic_mask,
             channel_axis=-1,
             convert2lab=False,
             enforce_connectivity=True,

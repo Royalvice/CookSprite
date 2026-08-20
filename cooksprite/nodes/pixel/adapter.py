@@ -15,9 +15,8 @@ def _rgba_frames(image: np.ndarray, mask: np.ndarray | None) -> list[np.ndarray]
     value = np.asarray(image, dtype=np.float32)
     if value.ndim != 4 or value.shape[-1] < 3:
         raise ValueError("IMAGE must have shape [batch,height,width,channels]")
-    rgb = np.clip(value[..., :3], 0.0, 1.0).copy()
     if mask is None:
-        alpha = np.ones(value.shape[:3], dtype=np.float32)
+        alpha = None
     else:
         alpha = np.asarray(mask, dtype=np.float32)
         if alpha.ndim == 4 and alpha.shape[-1] == 1:
@@ -26,24 +25,33 @@ def _rgba_frames(image: np.ndarray, mask: np.ndarray | None) -> list[np.ndarray]
             alpha = alpha[None, ...]
         if alpha.ndim != 3:
             raise ValueError("MASK must have shape [batch,height,width]")
-        if alpha.shape[0] == 1 and value.shape[0] > 1:
-            alpha = np.repeat(alpha, value.shape[0], axis=0)
-    if alpha.shape != value.shape[:3]:
-        raise ValueError("MASK batch and canvas must match IMAGE")
-    alpha = np.clip(alpha, 0.0, 1.0)
-    # Chroma-key removal often leaves green in semi-transparent edge pixels.
-    # Correct only that narrow case; fully opaque source colors are untouched.
-    edge = (alpha > 0.0) & (alpha < 0.999)
-    green_spill = (
-        edge
-        & (rgb[..., 1] > 0.55)
-        & (rgb[..., 1] - np.maximum(rgb[..., 0], rgb[..., 2]) > 0.12)
-    )
-    rgb[..., 1] = np.where(green_spill, np.maximum(rgb[..., 0], rgb[..., 2]), rgb[..., 1])
-    rgb[alpha <= 0.0] = 0.0
-    rgba = np.concatenate((rgb, alpha[..., None]), axis=-1)
-    quantized = np.rint(rgba * 255.0).astype(np.uint8)
-    return [frame for frame in quantized]
+        if alpha.shape[1:] != value.shape[1:3] or alpha.shape[0] not in {1, value.shape[0]}:
+            raise ValueError("MASK batch and canvas must match IMAGE")
+
+    frames: list[np.ndarray] = []
+    for index in range(value.shape[0]):
+        rgb = np.clip(value[index, ..., :3], 0.0, 1.0).copy()
+        frame_alpha = (
+            np.ones(value.shape[1:3], dtype=np.float32)
+            if alpha is None
+            else np.clip(alpha[0 if alpha.shape[0] == 1 else index], 0.0, 1.0)
+        )
+        # Chroma-key removal often leaves green in semi-transparent edge
+        # pixels. Processing one frame at a time keeps the exact operation
+        # order while avoiding several full-batch temporary arrays.
+        edge = (frame_alpha > 0.0) & (frame_alpha < 0.999)
+        green_spill = (
+            edge
+            & (rgb[..., 1] > 0.55)
+            & (rgb[..., 1] - np.maximum(rgb[..., 0], rgb[..., 2]) > 0.12)
+        )
+        rgb[..., 1] = np.where(green_spill, np.maximum(rgb[..., 0], rgb[..., 2]), rgb[..., 1])
+        rgb[frame_alpha <= 0.0] = 0.0
+        rgba = np.empty((*value.shape[1:3], 4), dtype=np.uint8)
+        rgba[..., :3] = np.rint(rgb * 255.0).astype(np.uint8)
+        rgba[..., 3] = np.rint(frame_alpha * 255.0).astype(np.uint8)
+        frames.append(rgba)
+    return frames
 
 
 def _target_dimensions(image: np.ndarray, target_size: int) -> tuple[int, int]:
@@ -77,7 +85,7 @@ def _normal_inputs(
     if value.shape[0] != len(rgba_frames) or any(frame.shape[:2] != value.shape[1:3] for frame in rgba_frames):
         raise ValueError("NORMAL batch and canvas must match IMAGE")
     if normal_mask is None:
-        alpha = np.stack([frame[..., 3].astype(np.float32) / 255.0 for frame in rgba_frames])
+        return [(frame[..., :3], rgba[..., 3]) for frame, rgba in zip(value, rgba_frames, strict=True)]
     else:
         alpha = np.asarray(normal_mask, dtype=np.float32)
         if alpha.ndim == 4 and alpha.shape[-1] == 1:
@@ -86,10 +94,9 @@ def _normal_inputs(
             alpha = alpha[None, ...]
         if alpha.shape != value.shape[:3]:
             raise ValueError("NORMAL mask batch and canvas must match NORMAL")
-    return [
-        (np.clip(frame[..., :3], 0.0, 1.0), np.clip(frame_alpha, 0.0, 1.0))
-        for frame, frame_alpha in zip(value, alpha, strict=True)
-    ]
+    # Geometry sampling clips values at the point of use. Keep views here so a
+    # 32-frame normal batch is not duplicated before compilation starts.
+    return [(frame[..., :3], frame_alpha) for frame, frame_alpha in zip(value, alpha, strict=True)]
 
 
 def _compile_frames(
