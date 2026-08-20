@@ -215,7 +215,9 @@ def compile_continuous(
         internal = compile_internal_strokes(evidence, silhouette.mask)
         return evidence, silhouette, internal, cell_normal
 
-    worker_limit = 2 if resolved_mode == "chunk" and len(rgba_frames) > 8 else 4
+    worker_limit = (
+        1 if resolved_mode == "continuous" else 2 if len(rgba_frames) > 8 else 4
+    )
     workers = min(len(rgba_frames), worker_limit, max(1, (os.cpu_count() or 2) // 2))
     if workers > 1:
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="cooksprite-pixel") as executor:
