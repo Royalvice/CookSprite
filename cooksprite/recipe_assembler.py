@@ -12,7 +12,6 @@ from dataclasses import replace
 from typing import Any
 
 from .domain import PortDescriptor, ToolDescriptor, ToolNode, ValueRef, WorkflowDefinition
-from .prompting import DEFAULT_GREEN_SCREEN_BACKGROUND
 from .recipes import Recipe
 
 SEMANTIC_SLOT_TYPES = {
@@ -85,12 +84,6 @@ def _task_inputs(recipe: Recipe, action_id: str, mode: str) -> dict[str, str]:
 
     inputs = {
         "prompt": "Text",
-        "category": "Text",
-        "style": "Text",
-        "animation": "Text",
-        "view": "Text",
-        "direction": "Text",
-        "prompt_compile": "Boolean",
         "count": "Number",
         "seed": "Number",
         "strength": "Number",
@@ -153,7 +146,7 @@ def _bind_recipe_slots(
     bindings: dict[str, ValueRef] = {}
     for slot in recipe.slots:
         if slot in {"text", "prompt"}:
-            bindings[slot] = output_ref("packet", "prompt")
+            bindings[slot] = input_ref("prompt")
         elif slot in {"negative", "negative_prompt"}:
             # Some model workflows require a negative-text socket even though
             # CookSprite no longer exposes or compiles negative prompts.
@@ -176,37 +169,6 @@ def _bind_recipe_slots(
     return {name: value for name, value in bindings.items() if name in declared}
 
 
-def prompt_packet(action_id: str, mode: str) -> ToolNode:
-    task = "video" if action_id.startswith("animation.") or mode in {"i2v", "t2v"} else "image"
-    return ToolNode(
-        id="packet",
-        tool="cooksprite.compile_prompt_packet",
-        params={
-            "action_id": literal(action_id),
-            "prompt": input_ref("prompt"),
-            "category": input_ref("category"),
-            "style": input_ref("style"),
-            "animation": input_ref("animation"),
-            "view": input_ref("view"),
-            "direction": input_ref("direction"),
-            "task": literal(task),
-            "mode": literal(mode),
-            "caption": input_ref("prompt"),
-            "compile_prompt": input_ref("prompt_compile"),
-            "action": input_ref("animation"),
-            "camera_option": literal("front_eye_level"),
-            "camera_preset": input_ref("view") if task == "video" else literal("eye_level"),
-            "orientation": literal("front"),
-            "facing": literal("right"),
-            "model": literal("generic"),
-            "width": input_ref("resolution"),
-            "height": input_ref("resolution"),
-            "background": literal(DEFAULT_GREEN_SCREEN_BACKGROUND),
-            "edit_instruction": literal(""),
-        },
-    )
-
-
 def assemble_recipe_workflow(
     runtime_id: str,
     recipe: Recipe,
@@ -226,14 +188,13 @@ def assemble_recipe_workflow(
         raise ValueError("Recipe has no compatible raw workflow contract")
     source_slot = _source_slot(action_id, mode)
     inputs = _task_inputs(recipe, action_id, mode)
-    nodes = [prompt_packet(action_id, mode)]
-    nodes.append(
+    nodes = [
         ToolNode(
             id="sealed",
             tool=descriptor.id,
             inputs=_bind_recipe_slots(recipe, action_id, mode, descriptor),
         )
-    )
+    ]
 
     output_name = descriptor.outputs[0].name
     final_ref = output_ref("sealed", output_name)
@@ -284,7 +245,6 @@ __all__ = [
     "input_ref",
     "literal",
     "output_ref",
-    "prompt_packet",
     "sealed_tool_descriptor",
     "with_dimension_slots",
 ]

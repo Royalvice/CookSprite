@@ -529,7 +529,7 @@ def test_sheet_and_video_candidate_counts_are_compiled_inside_comfy(tmp_path):
     assert loader["inputs"]["max_frames"] == 48
 
 
-def test_asset_type_and_style_are_compiled_as_comfy_prompt_packet_without_implicit_postprocessing(tmp_path):
+def test_asset_type_and_style_are_compiled_by_api_without_implicit_postprocessing(tmp_path):
     client = ready_client(tmp_path)
     project = client.post("/api/v1/projects", json={"type": "static"}).json()
     action = client.get("/api/v1/actions/image.generate").json()
@@ -554,17 +554,22 @@ def test_asset_type_and_style_are_compiled_as_comfy_prompt_packet_without_implic
 
     pixel_graph = run("weapon", "pixel")
     smooth_graph = run("terrain", "smooth")
-    pixel_packet = next(
-        node for node in pixel_graph.values() if node["class_type"] == "CS_CompilePromptPacket"
+    pixel_prompt = next(
+        node["inputs"]["text"]
+        for node in pixel_graph.values()
+        if node["class_type"] == "CLIPTextEncode" and node["inputs"]["text"]
     )
-    smooth_packet = next(
-        node for node in smooth_graph.values() if node["class_type"] == "CS_CompilePromptPacket"
+    smooth_prompt = next(
+        node["inputs"]["text"]
+        for node in smooth_graph.values()
+        if node["class_type"] == "CLIPTextEncode" and node["inputs"]["text"]
     )
-    assert pixel_packet["inputs"]["category"] == "weapon"
-    assert pixel_packet["inputs"]["style"] == "pixel"
-    assert pixel_packet["inputs"]["compile_prompt"] is True
-    assert smooth_packet["inputs"]["category"] == "terrain"
-    assert smooth_packet["inputs"]["style"] == "smooth"
+    assert "Crisp pixel-art weapon sprite" in pixel_prompt
+    assert "Show the complete weapon horizontally" in pixel_prompt
+    assert "Realistic PBR terrain surface" in smooth_prompt
+    assert "seamless square top-down tile" in smooth_prompt
+    assert not any(node["class_type"] == "CS_CompilePromptPacket" for node in pixel_graph.values())
+    assert not any(node["class_type"] == "CS_CompilePromptPacket" for node in smooth_graph.values())
     assert not any(node["class_type"] == "CS_Pixelize" for node in pixel_graph.values())
     assert not any(node["class_type"] == "CS_IsolateOnGreen" for node in pixel_graph.values())
     assert not any(node["class_type"] == "CS_Pixelize" for node in smooth_graph.values())
@@ -683,10 +688,8 @@ def test_imported_image_recipe_requires_bridge_pixel_policy_and_receives_it(tmp_
     )
     assert imported_sampler["inputs"]["negative_text"] == ""
     assert not any(node["class_type"] == "CS_Pixelize" for node in graph.values())
-    packet = next(node for node in graph.values() if node["class_type"] == "CS_CompilePromptPacket")
-    assert packet["inputs"]["prompt"] == "raw imported prompt"
-    assert packet["inputs"]["compile_prompt"] is False
-    assert "negative_terms" not in packet["inputs"]
+    assert imported_sampler["inputs"]["prompt"] == "raw imported prompt"
+    assert not any(node["class_type"] == "CS_CompilePromptPacket" for node in graph.values())
 
 
 def test_imported_recipe_params_flow_through_generic_assembler(tmp_path):
@@ -781,13 +784,14 @@ def test_action_request_compiles_to_real_comfy_graph_and_artifact_store(tmp_path
     graph = ProtocolComfy.submitted[-1]
     assert any(node["class_type"] == "KSampler" for node in graph.values())
     assert any(node["class_type"] == "CS_StoreArtifact" for node in graph.values())
-    packet = next(node for node in graph.values() if node["class_type"] == "CS_CompilePromptPacket")
-    assert packet["inputs"]["prompt"] == "a soup knight"
-    assert packet["inputs"]["category"] == "character"
-    assert packet["inputs"]["style"] == "pixel"
-    assert "negative_terms" not in packet["inputs"]
-    assert packet["inputs"]["width"] == 256
-    assert packet["inputs"]["height"] == 256
+    positive_prompt = next(
+        node["inputs"]["text"]
+        for node in graph.values()
+        if node["class_type"] == "CLIPTextEncode" and node["inputs"]["text"]
+    )
+    assert positive_prompt.startswith("a soup knight. Crisp pixel-art character sprite")
+    assert "simple solid background" in positive_prompt
+    assert not any(node["class_type"] == "CS_CompilePromptPacket" for node in graph.values())
     empty_negative = next(
         node
         for node in graph.values()
@@ -920,7 +924,7 @@ def test_prompt_tool_is_model_neutral_and_deterministic():
     assert first.to_dict() == second.to_dict()
     assert first.task == "image"
     assert first.mode == "t2i"
-    assert first.metadata["compiler_version"] == "sprite_prompt_package_v1.5"
+    assert first.metadata["compiler_version"] == "sprite_prompt_package_v1.6"
     assert first.negative_prompt == ""
     assert "negative_prompt" not in first.to_dict()
     assert first.metadata["packet_type"] == "character_prompt_packet"
@@ -930,18 +934,14 @@ def test_prompt_tool_is_model_neutral_and_deterministic():
     assert first.metadata["camera"] == "front_eye_level"
     assert first.metadata["orientation"] == "front"
     assert first.prompt == (
-        "a soup knight. Single full-body character, centered with generous margin, neutral standing pose. "
-        "Straight-on front view at eye level, the character faces directly toward the viewer, flat orthographic "
-        "character presentation, full figure clearly visible, clean framing, no perspective distortion. "
-        "Crisp pixel-art character sprite with deliberate pixel clusters and a limited color palette, clean contours, "
-        "clear component boundaries, readable face, and restrained highlights. Pure simple solid background, uniform "
-        "color, flat color field, seamless backdrop, featureless background, clean subject separation, no floor, "
-        "no cast shadow, no reflection, no gradient, no texture, no pattern, no scenery, no horizon, no background "
-        "objects, no environmental details, no text, no logo, no watermark."
+        "a soup knight. Crisp pixel-art character sprite with deliberate pixel clusters and a limited color palette. "
+        "High-quality, high-fidelity game-ready character asset with clean, readable details. Show one complete "
+        "full-body character in a neutral standing pose, facing directly forward in a straight-on eye-level "
+        "orthographic view, centered and fully visible, on a simple solid background."
     )
     assert "clip" not in first.prompt.lower()
     assert "2D game illustration" not in first.prompt
-    assert "Pure simple solid background" in first.prompt
+    assert "simple solid background" in first.prompt
     assert "green background" not in first.prompt.lower()
     video = compiler.compile_video(VideoPromptRequest(caption="soup knight", action="walk"))
     assert video.task == "video"
@@ -980,31 +980,25 @@ def test_non_character_prompt_packets_use_category_specific_templates_and_styles
             "weapon",
             "weapon_scifi_hardsurface",
             "A compact plasma rifle",
-            "blades and firearms run horizontally from left to right",
+            "Show the complete weapon horizontally, centered and fully visible",
         ),
         (
             "prop",
             "prop_storybook",
             "A copper cooking pot",
-            "Front three-quarter orthographic product view",
+            "Show one complete standalone object",
         ),
         (
             "terrain",
             "terrain_pixel_art",
             "Frozen blue dungeon floor",
-            "Opposite left and right edges and opposite top and bottom edges continue",
-        ),
-        (
-            "scene",
-            "scene_stylized_low_poly",
-            "A cyan crystal outcrop",
-            "One complete modular environment asset only",
+            "Show a seamless square top-down tile",
         ),
         (
             "vfx",
             "vfx_painterly_fantasy",
             "A circular arcane portal",
-            "its light, bloom, haze, smoke and color spill must not alter the background",
+            "Show one complete isolated effect at its clearest peak moment",
         ),
     )
     for category, style, caption, contract in cases:
@@ -1017,6 +1011,36 @@ def test_non_character_prompt_packets_use_category_specific_templates_and_styles
         assert result.metadata["packet_type"] == f"{category}_prompt_packet"
         assert result.metadata["style"] == style
         assert result.metadata["combination"]["total_variants"] == 5
+
+
+def test_weapon_prompt_keeps_user_instruction_primary():
+    result = SpritePromptCompiler().compile_image(
+        ImagePromptRequest(
+            caption="A folding energy bow that opens into two blades",
+            category="weapon",
+            style="weapon_scifi_hardsurface",
+            mode="t2i",
+        )
+    )
+    assert result.prompt == (
+        "A folding energy bow that opens into two blades. "
+        "Polished sci-fi hard-surface weapon concept with modular mechanical parts and controlled emissive details. "
+        "High-quality, high-fidelity game-ready asset with clean, readable details. "
+        "Show the complete weapon horizontally, centered and fully visible, on a simple solid background."
+    )
+
+
+def test_legacy_scene_packet_uses_the_merged_prop_template():
+    result = SpritePromptCompiler().compile_image(
+        ImagePromptRequest(
+            caption="A cyan crystal outcrop",
+            category="scene",
+            style="scene_stylized_low_poly",
+            mode="t2i",
+        )
+    )
+    assert result.metadata["style"] == "prop_stylized_3d"
+    assert "Show one complete standalone object" in result.prompt
 
 
 def test_non_character_legacy_styles_map_to_each_category_packet():
@@ -1043,12 +1067,12 @@ def test_prompt_node_keeps_an_empty_legacy_port_without_negative_metadata():
         "s",
         negative_terms="must be ignored for legacy callers",
     )
-    assert prompt.startswith("a soup knight. Single full-body character")
+    assert prompt.startswith("a soup knight. Crisp pixel-art character sprite")
     assert negative == ""
-    assert "Pure simple solid background" in prompt
+    assert "simple solid background" in prompt
     assert "2D game illustration" not in prompt
     metadata_value = json.loads(metadata)
-    assert metadata_value["metadata"]["compiler_version"] == "sprite_prompt_package_v1.5"
+    assert metadata_value["metadata"]["compiler_version"] == "sprite_prompt_package_v1.6"
     assert "negative_prompt" not in metadata_value
     assert CS_CompilePromptPacket.RETURN_TYPES == ("STRING", "STRING", "STRING")
     assert CS_CompilePromptPacket.RETURN_NAMES == ("prompt", "negative_prompt", "metadata")
@@ -1076,7 +1100,7 @@ def test_prompt_compiler_can_be_disabled_without_changing_user_text():
     }
 
 
-def test_action_prompt_compiler_toggle_reaches_comfy_graph(tmp_path):
+def test_action_prompt_compiler_toggle_is_applied_before_comfy_graph(tmp_path):
     client = ready_client(tmp_path)
     project = client.post("/api/v1/projects", json={"type": "static"}).json()
     action = client.get("/api/v1/actions/image.generate").json()
@@ -1094,13 +1118,14 @@ def test_action_prompt_compiler_toggle_reaches_comfy_graph(tmp_path):
     )
     assert response.status_code == 202
     assert wait(client, response.json()["id"])["status"] == "succeeded"
-    packet = next(
-        node
-        for node in ProtocolComfy.submitted[-1].values()
-        if node["class_type"] == "CS_CompilePromptPacket"
+    graph = ProtocolComfy.submitted[-1]
+    positive_prompt = next(
+        node["inputs"]["text"]
+        for node in graph.values()
+        if node["class_type"] == "CLIPTextEncode" and node["inputs"]["text"]
     )
-    assert packet["inputs"]["prompt"] == "raw user prompt"
-    assert packet["inputs"]["compile_prompt"] is False
+    assert positive_prompt == "raw user prompt"
+    assert not any(node["class_type"] == "CS_CompilePromptPacket" for node in graph.values())
 
 
 def test_runtime_defaults_select_the_configured_recipe_when_model_is_omitted(tmp_path):

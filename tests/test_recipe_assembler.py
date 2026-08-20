@@ -30,6 +30,8 @@ def test_discovered_dimensions_bind_to_one_resolution_control():
     workflow = assemble_recipe_workflow("rt_test", recipe, "image.generate", "t2i")
     sealed = next(node for node in workflow.nodes if node.id == "sealed")
 
+    assert [node.id for node in workflow.nodes] == ["sealed"]
+    assert sealed.inputs["text"].input == "prompt"
     assert workflow.inputs["resolution"] == "Number"
     assert sealed.inputs["width"].input == "resolution"
     assert sealed.inputs["height"].input == "resolution"

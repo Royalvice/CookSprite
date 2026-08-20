@@ -1232,7 +1232,7 @@ def create_app(
             "params": request.params,
         }
         try:
-            task_revision, workflow_revisions, task_inputs = bind_action_task(
+            task_revision, workflow_revisions, task_inputs, prompt_metadata = bind_action_task(
                 store,
                 runtime["id"],
                 runtime["snapshot"],
@@ -1266,6 +1266,16 @@ def create_app(
             "packages": tool_packages.versions(),
             "prompt_compiler": COMPILER_VERSION if values.get("prompt_compile", True) else None,
             "prompt_compiler_enabled": bool(values.get("prompt_compile", True)),
+            "prompt": {
+                "sha256": hashlib.sha256(
+                    str(
+                        task_inputs["prompt"].literal
+                        if "prompt" in task_inputs and task_inputs["prompt"].literal is not None
+                        else ""
+                    ).encode()
+                ).hexdigest(),
+                "metadata": prompt_metadata,
+            },
             "runtime_snapshot": runtime["snapshot"],
         }
         store.create_run(

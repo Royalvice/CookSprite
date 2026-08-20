@@ -17,9 +17,8 @@ actions:
         options:
           - {id: character, example_key: still.actor, i18n: {zh-CN: {name: 角色, description: 单个完整角色，全身和轮廓清楚}, en: {name: Character, description: One complete character with a clear full-body silhouette}}}
           - {id: weapon, example_key: still.object, i18n: {zh-CN: {name: 武器, description: 单件完整武器，主体不被裁切}, en: {name: Weapon, description: One complete weapon, fully visible and uncropped}}}
-          - {id: prop, example_key: still.object, i18n: {zh-CN: {name: 道具, description: 单个完整可交互道具}, en: {name: Prop, description: One complete interactive prop}}}
+          - {id: prop, example_key: still.object, i18n: {zh-CN: {name: 道具 / 场景元素, description: 单个完整的道具或环境元素}, en: {name: Prop / scene element, description: One complete prop or environment element}}}
           - {id: terrain, example_key: still.tile, i18n: {zh-CN: {name: 地形块, description: 正交视角、可无缝平铺的地图块}, en: {name: Terrain tile, description: Orthographic, seamlessly tileable map material}}}
-          - {id: scene, example_key: still.tile, i18n: {zh-CN: {name: 场景元素, description: 独立、完整的环境装饰元素}, en: {name: Scene element, description: One isolated, complete environment element}}}
           - {id: vfx, example_key: still.effect, i18n: {zh-CN: {name: 特效, description: 居中的独立视觉特效}, en: {name: VFX, description: One centered, isolated visual effect}}}
       - id: style
         type: select
@@ -48,11 +47,6 @@ actions:
           - {id: terrain_stylized_low_poly, categories: [terrain], example_key: still.tile, i18n: {zh-CN: {name: 风格化低模, description: 宽材质面、简化细节和清晰色块}, en: {name: Stylized low-poly, description: Broad material planes, simplified detail and clean color blocks}}}
           - {id: terrain_pixel_art, categories: [terrain], example_key: still.tile, i18n: {zh-CN: {name: 像素地形, description: 有意组织像素簇、受控噪声和有限配色}, en: {name: Pixel-art terrain, description: Deliberate pixel clusters, controlled noise and limited palette}}}
           - {id: terrain_cartoon, categories: [terrain], example_key: still.tile, i18n: {zh-CN: {name: 卡通地形, description: 粗形状、紧凑材质细节和清晰配色}, en: {name: Cartoon terrain, description: Bold shapes, compact material detail and clear color grouping}}}
-          - {id: scene_realistic_game_ready, categories: [scene], example_key: still.tile, i18n: {zh-CN: {name: 写实游戏资产, description: 可信材质、自然变化和生产级结构}, en: {name: Realistic game asset, description: Believable materials, natural variation and production-quality construction}}}
-          - {id: scene_hand_painted_rpg, categories: [scene], example_key: still.tile, i18n: {zh-CN: {name: 手绘 RPG, description: 表现性形状、手绘材质和强玩法可读性}, en: {name: Hand-painted RPG, description: Expressive shapes, painterly materials and gameplay readability}}}
-          - {id: scene_stylized_low_poly, categories: [scene], example_key: still.tile, i18n: {zh-CN: {name: 风格化低模, description: 简化切面、宽材质面和清晰配色}, en: {name: Stylized low-poly, description: Simplified faceted geometry, broad material planes and clean color grouping}}}
-          - {id: scene_storybook, categories: [scene], example_key: still.tile, i18n: {zh-CN: {name: 绘本场景, description: 亲切形状、柔和材质和装饰性轮廓}, en: {name: Storybook scene, description: Charming forms, soft materials and decorative silhouette}}}
-          - {id: scene_pixel_art, categories: [scene], example_key: still.tile, i18n: {zh-CN: {name: 像素场景, description: 清晰像素轮廓、有限配色和模块化结构}, en: {name: Pixel-art scene, description: Crisp pixel silhouette, limited palette and modular construction}}}
           - {id: vfx_stylized_action, categories: [vfx], example_key: still.effect, i18n: {zh-CN: {name: 风格化动作, description: 粗图形、强冲击方向和玩法可读性}, en: {name: Stylized action, description: Bold graphic shapes, strong impact direction and gameplay readability}}}
           - {id: vfx_painterly_fantasy, categories: [vfx], example_key: still.effect, i18n: {zh-CN: {name: 手绘奇幻魔法, description: 分层发光形态、流动粒子和装饰能量}, en: {name: Painterly fantasy magic, description: Layered luminous forms, flowing particles and ornamental energy}}}
           - {id: vfx_anime_combat, categories: [vfx], example_key: still.effect, i18n: {zh-CN: {name: 动漫战斗, description: 锐利能量弧、赛璐璐辉光和速度线}, en: {name: Anime combat, description: Sharp energy arcs, cel-shaded glow and speed accents}}}

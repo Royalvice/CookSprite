@@ -17,6 +17,9 @@ class DevCheckError(ValueError):
     pass
 
 
+LEGACY_NODE_CLASSES = {"CS_CompilePromptPacket"}
+
+
 def check_tool_packages(runtime_url: str | None = None) -> dict[str, Any]:
     manifests = tool_packages.manifests
     declared_nodes = {node for package in manifests for node in package.node_classes}
@@ -35,10 +38,11 @@ def check_tool_packages(runtime_url: str | None = None) -> dict[str, Any]:
             installed_nodes = {
                 item.id for item in statement.value.elts if isinstance(item, ast.Name)
             }
-    if declared_nodes != installed_nodes:
+    active_installed_nodes = installed_nodes - LEGACY_NODE_CLASSES
+    if declared_nodes != active_installed_nodes:
         raise DevCheckError(
             f"node manifest drift; missing={sorted(declared_nodes - installed_nodes)}, "
-            f"unknown={sorted(installed_nodes - declared_nodes)}"
+            f"unknown={sorted(active_installed_nodes - declared_nodes)}"
         )
     for package in manifests:
         for tool in package.tools:

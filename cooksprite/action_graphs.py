@@ -19,12 +19,12 @@ from .domain import (
     WorkflowDefinition,
     WorkflowRevision,
 )
+from .prompting import compile_action_values
 from .recipe_assembler import (
     assemble_recipe_workflow,
     input_ref,
     literal,
     output_ref,
-    prompt_packet,
 )
 from .recipes import OFFICIAL_ALPHA_MODEL, Recipe, recipe_mode, recipe_variants
 from .store import Store
@@ -60,12 +60,6 @@ def _core_image_workflow(
         raise ValueError("core image recipe requires a checkpoint")
     inputs: dict[str, str] = {
         "prompt": "Text",
-        "category": "Text",
-        "style": "Text",
-        "animation": "Text",
-        "view": "Text",
-        "direction": "Text",
-        "prompt_compile": "Boolean",
         "count": "Number",
         "seed": "Number",
         "strength": "Number",
@@ -78,7 +72,6 @@ def _core_image_workflow(
         inputs[source_slot] = "Image"
 
     nodes = [
-        prompt_packet(action_id, mode),
         ToolNode(
             id="model",
             tool="comfy.CheckpointLoaderSimple",
@@ -88,7 +81,7 @@ def _core_image_workflow(
             id="positive",
             tool="comfy.CLIPTextEncode",
             inputs={
-                "text": output_ref("packet", "prompt"),
+                "text": input_ref("prompt"),
                 "clip": output_ref("model", "output_1"),
             },
         ),
@@ -461,7 +454,12 @@ def bind_action_task(
     artifacts: dict[str, list[str]],
     values: dict[str, Any],
     params: dict[str, Any] | None = None,
-) -> tuple[TaskRevision, dict[tuple[str, int], WorkflowRevision], dict[str, ValueRef]]:
+) -> tuple[
+    TaskRevision,
+    dict[tuple[str, int], WorkflowRevision],
+    dict[str, ValueRef],
+    dict[str, Any],
+]:
     workflow_ref = recipe.workflow_for(action_id, artifacts)
     if not workflow_ref:
         mode = recipe_mode(action_id, artifacts)
@@ -546,10 +544,12 @@ def bind_action_task(
     # Keep every Action value so a Recipe can declare a new workflow slot
     # without another API-side allow-list.  The aliases below normalize the
     # stable product controls to the semantic names used by old recipes.
+    mode = recipe_mode(action_id, artifacts)
+    final_prompt, prompt_metadata = compile_action_values(action_id, mode, values)
     prepared = {**values, **params}
     prepared.update(
         {
-            "prompt": str(values.get("prompt") or ""),
+            "prompt": final_prompt,
             "category": str(values.get("category") or ""),
             "style": str(values.get("style") or "2d_action_game"),
             "animation": str(values.get("action") or "idle"),
@@ -634,4 +634,4 @@ def bind_action_task(
         "task", definition.id, runtime_id, snapshot, definition.model_dump(mode="json")
     )
     task = TaskRevision(**definition.model_dump(), revision=revision, runtime_snapshot=snapshot)
-    return task, {(workflow.id, workflow.revision): workflow}, run_inputs
+    return task, {(workflow.id, workflow.revision): workflow}, run_inputs, prompt_metadata

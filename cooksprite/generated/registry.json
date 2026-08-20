@@ -72,12 +72,12 @@
               "example": null,
               "i18n": {
                 "en": {
-                  "description": "One complete interactive prop",
-                  "name": "Prop"
+                  "description": "One complete prop or environment element",
+                  "name": "Prop / scene element"
                 },
                 "zh-CN": {
-                  "description": "单个完整可交互道具",
-                  "name": "道具"
+                  "description": "单个完整的道具或环境元素",
+                  "name": "道具 / 场景元素"
                 }
               },
               "id": "prop"
@@ -96,21 +96,6 @@
                 }
               },
               "id": "terrain"
-            },
-            {
-              "categories": [],
-              "example": null,
-              "i18n": {
-                "en": {
-                  "description": "One isolated",
-                  "name": "Scene element"
-                },
-                "zh-CN": {
-                  "description": "独立、完整的环境装饰元素",
-                  "name": "场景元素"
-                }
-              },
-              "id": "scene"
             },
             {
               "categories": [],
@@ -488,91 +473,6 @@
                 }
               },
               "id": "terrain_cartoon"
-            },
-            {
-              "categories": [
-                "scene"
-              ],
-              "example": null,
-              "i18n": {
-                "en": {
-                  "description": "Believable materials",
-                  "name": "Realistic game asset"
-                },
-                "zh-CN": {
-                  "description": "可信材质、自然变化和生产级结构",
-                  "name": "写实游戏资产"
-                }
-              },
-              "id": "scene_realistic_game_ready"
-            },
-            {
-              "categories": [
-                "scene"
-              ],
-              "example": null,
-              "i18n": {
-                "en": {
-                  "description": "Expressive shapes",
-                  "name": "Hand-painted RPG"
-                },
-                "zh-CN": {
-                  "description": "表现性形状、手绘材质和强玩法可读性",
-                  "name": "手绘 RPG"
-                }
-              },
-              "id": "scene_hand_painted_rpg"
-            },
-            {
-              "categories": [
-                "scene"
-              ],
-              "example": null,
-              "i18n": {
-                "en": {
-                  "description": "Simplified faceted geometry",
-                  "name": "Stylized low-poly"
-                },
-                "zh-CN": {
-                  "description": "简化切面、宽材质面和清晰配色",
-                  "name": "风格化低模"
-                }
-              },
-              "id": "scene_stylized_low_poly"
-            },
-            {
-              "categories": [
-                "scene"
-              ],
-              "example": null,
-              "i18n": {
-                "en": {
-                  "description": "Charming forms",
-                  "name": "Storybook scene"
-                },
-                "zh-CN": {
-                  "description": "亲切形状、柔和材质和装饰性轮廓",
-                  "name": "绘本场景"
-                }
-              },
-              "id": "scene_storybook"
-            },
-            {
-              "categories": [
-                "scene"
-              ],
-              "example": null,
-              "i18n": {
-                "en": {
-                  "description": "Crisp pixel silhouette",
-                  "name": "Pixel-art scene"
-                },
-                "zh-CN": {
-                  "description": "清晰像素轮廓、有限配色和模块化结构",
-                  "name": "像素场景"
-                }
-              },
-              "id": "scene_pixel_art"
             },
             {
               "categories": [
@@ -2830,118 +2730,6 @@
         }
       ],
       "version": "1.0.0",
-      "workflows": []
-    },
-    {
-      "id": "prompt",
-      "license": "Apache-2.0",
-      "lowerings": {
-        "cooksprite.compile_prompt_packet": "CS_CompilePromptPacket"
-      },
-      "node_classes": [
-        "CS_CompilePromptPacket"
-      ],
-      "recipes": [],
-      "requirements": [],
-      "sealed_graphs": {},
-      "tasks": [],
-      "tools": [
-        {
-          "id": "cooksprite.compile_prompt_packet",
-          "inputs": [],
-          "outputs": [
-            {
-              "name": "prompt",
-              "persistable": false,
-              "required": true,
-              "type": "Text"
-            },
-            {
-              "name": "negative_prompt",
-              "persistable": false,
-              "required": true,
-              "type": "Text"
-            },
-            {
-              "name": "metadata",
-              "persistable": false,
-              "required": true,
-              "type": "Text"
-            }
-          ],
-          "package_id": "prompt",
-          "params_schema": {
-            "action": {
-              "type": "string"
-            },
-            "action_id": {
-              "type": "string"
-            },
-            "animation": {
-              "type": "string"
-            },
-            "background": {
-              "type": "string"
-            },
-            "camera_option": {
-              "type": "string"
-            },
-            "camera_preset": {
-              "type": "string"
-            },
-            "caption": {
-              "type": "string"
-            },
-            "category": {
-              "type": "string"
-            },
-            "compile_prompt": {
-              "type": "boolean"
-            },
-            "direction": {
-              "type": "string"
-            },
-            "edit_instruction": {
-              "type": "string"
-            },
-            "facing": {
-              "type": "string"
-            },
-            "height": {
-              "type": "integer"
-            },
-            "mode": {
-              "type": "string"
-            },
-            "model": {
-              "type": "string"
-            },
-            "orientation": {
-              "type": "string"
-            },
-            "prompt": {
-              "type": "string"
-            },
-            "style": {
-              "type": "string"
-            },
-            "task": {
-              "type": "string"
-            },
-            "view": {
-              "type": "string"
-            },
-            "width": {
-              "type": "integer"
-            }
-          },
-          "schema_hash": "9e0afacb4eb73e20e146d09f2c1b4218b5552b42f0a0036515bf8e81e0c19670",
-          "source": "cooksprite",
-          "title": "Compile a model-neutral Sprite prompt packet",
-          "version": 1
-        }
-      ],
-      "version": "1.5.0",
       "workflows": []
     },
     {

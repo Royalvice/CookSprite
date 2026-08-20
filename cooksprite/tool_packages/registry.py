@@ -12,7 +12,6 @@ from .frames import MANIFEST as FRAMES
 from .image import MANIFEST as IMAGE
 from .normal import MANIFEST as NORMAL
 from .pixel import MANIFEST as PIXEL
-from .prompt import MANIFEST as PROMPT
 
 
 class ToolPackageError(ValueError):
@@ -62,4 +61,4 @@ class ToolPackageRegistry:
         return [package.model_dump(mode="json") for package in self.manifests]
 
 
-tool_packages = ToolPackageRegistry([BRIDGE, PROMPT, IMAGE, PIXEL, ALPHA, FRAMES, NORMAL])
+tool_packages = ToolPackageRegistry([BRIDGE, IMAGE, PIXEL, ALPHA, FRAMES, NORMAL])

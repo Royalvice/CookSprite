@@ -54,9 +54,9 @@ typed post-processing.
 
 Recipe assembly is API-owned and generic. Runtime-discovered/imported ComfyUI
 graphs declare semantic slots, slot types, and one typed output; the shared
-`RecipeAssembler` turns any such Recipe into the same Prompt Tool → sealed
-workflow → CookSprite post-process DAG. Do not add a model-specific branch to
-the API for a new raw workflow. Stable Action controls stay in the registry;
+`RecipeAssembler` turns any such Recipe into the same API-compiled final prompt
+→ sealed workflow → CookSprite post-process DAG. Do not add a model-specific
+branch to the API for a new raw workflow. Stable Action controls stay in the registry;
 workflow-specific scalar knobs travel through the reserved `params` map and
 must match a declared Workflow input. An undeclared or wrongly typed parameter
 is an explicit error. Only a new computation requires a Tool package and

@@ -81,8 +81,9 @@ state and contract tests exist.
 
 Bind the Action's artifact inputs and controls to a versioned Task. The Task
 chooses a compatible Workflow, binds the current Runtime snapshot, declares
-candidate/output behavior, and keeps all values typed. Do not perform image,
-video, mask, or prompt computation in the API.
+candidate/output behavior, and keeps all values typed. The API may compile
+deterministic control-plane text such as Prompt Packets, but never performs
+image, video, mask, or other media computation.
 
 ### 4. Build a Workflow
 
@@ -92,7 +93,7 @@ it must not nest another Workflow or leak raw Comfy values across its boundary.
 
 For a runtime-provided API-format graph, register one compact Recipe instead
 of adding an Action/API branch. Declare its semantic `slots`, `slot_types`, and
-typed `output`; CookSprite's shared Recipe Assembler injects the Prompt Tool,
+typed `output`; CookSprite's shared Recipe Assembler injects the API-compiled final prompt,
 seals the graph, and adds the declared post-processing policy. Extra scalar
 workflow inputs are passed as Action request `params` and are rejected unless
 the selected Workflow declares them.
@@ -119,19 +120,16 @@ unavailable. Never silently switch to an incompatible Workflow.
 ### 7. Project and verify
 
 Update API, CLI, Vue, generated Agent references, and tests in the same change.
-For a prompt or media Tool, verify deterministic output, declared types,
+For a media Tool, verify deterministic output, declared types,
 provenance, real ComfyUI execution, and artifact persistence on the API host.
 
-For the generic Prompt Tool specifically:
+Prompt packets are control-plane data, not media computation:
 
-- keep `CS_CompilePromptPacket` as the compatibility node ID;
-- port the full image/video `sprite_prompt_package` behavior clean-room;
-- treat it as model-independent T2T;
-- output `prompt` and JSON `metadata`; output index 1 remains an always-empty
-  compatibility Text port for existing ComfyUI graphs;
+- compile them once in CookSprite API before Workflow lowering;
+- pass only the final prompt into declared Workflow text slots;
+- keep `CS_CompilePromptPacket` only as a legacy saved-graph compatibility node;
 - do not expose, compile, template, or persist negative prompts;
-- never assume the downstream model uses CLIP;
-- use model-specific Workflow adapters downstream.
+- keep model-specific text encoding inside each Workflow.
 
 Required checks:
 

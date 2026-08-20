@@ -63,7 +63,6 @@ CORE_IMAGE_NODES = {
     "ImageScale",
     "CS_LoadArtifact",
     "CS_StoreArtifact",
-    "CS_CompilePromptPacket",
 }
 
 CORE_PIXEL_NODES = {"CS_LoadArtifact", "CS_StoreArtifact", "CS_Pixelize"}

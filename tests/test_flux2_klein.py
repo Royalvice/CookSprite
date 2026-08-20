@@ -153,7 +153,7 @@ def test_flux2_i2i_workflow_variants_bind_one_to_four_artifacts():
         store = Store(directory)
         materialized = materialize_recipe_workflows(store, "rt_test", "snapshot", recipe)
         for count in range(1, 5):
-            task, _, run_inputs = bind_action_task(
+            task, _, run_inputs, prompt_metadata = bind_action_task(
                 store,
                 "rt_test",
                 "snapshot",
@@ -164,6 +164,7 @@ def test_flux2_i2i_workflow_variants_bind_one_to_four_artifacts():
             )
             assert len([name for name in run_inputs if name.startswith("reference_")]) == count
             assert len(task.nodes[0].inputs) >= count
+            assert prompt_metadata["compiler_enabled"] is True
 
 
 def test_model_identity_selects_t2i_or_i2i_recipe_from_inputs():

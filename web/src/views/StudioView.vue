@@ -145,8 +145,20 @@ async function applyImageRuntimeDefault() {
       : "";
 }
 function normalizeImageStyleForCategory() {
-  const category = String(imageValues.value.category || "");
-  const style = String(imageValues.value.style || "");
+  let category = String(imageValues.value.category || "");
+  let style = String(imageValues.value.style || "");
+  if (category === "scene") {
+    category = "prop";
+    style = ({
+      scene_realistic_game_ready: "prop_realistic_game_ready",
+      scene_hand_painted_rpg: "prop_hand_painted_rpg",
+      scene_stylized_low_poly: "prop_stylized_3d",
+      scene_storybook: "prop_storybook",
+      scene_pixel_art: "prop_pixel_art",
+    } as Record<string, string>)[style] || "prop_realistic_game_ready";
+    imageValues.value.category = category;
+    imageValues.value.style = style;
+  }
   delete imageValues.value.camera;
   const styleControl = imageAction.value?.controls.find((item) => item.id === "style");
   const options = styleControl?.options.filter(
