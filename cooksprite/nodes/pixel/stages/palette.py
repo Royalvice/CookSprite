@@ -237,7 +237,6 @@ def map_palette(
             axis=3,
         )
         labels = np.argmin(distance, axis=2).astype(np.int16)
-        minimum = distance
     else:
         labels, minimum = _nearest(cell_lab.reshape(-1, 3), palette.lab)
         labels = labels.reshape(shape).astype(np.int16)
@@ -245,6 +244,8 @@ def map_palette(
     if detail_mask is None:
         detail_mask = np.zeros_like(strokes, dtype=bool)
     labels[strokes & ~detail_mask & (alpha > 0.0)] = palette.outline_index
+    if exact_legacy:
+        return labels, distance
     return labels, minimum.reshape(shape)
 
 
