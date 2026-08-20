@@ -6,7 +6,7 @@ from .contracts import tool
 
 MANIFEST = ToolPackageManifest(
     id="normal",
-    version="1.1.0",
+    version="1.1.1",
     license="Apache-2.0",
     tools=[
         tool(

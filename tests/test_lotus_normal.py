@@ -13,6 +13,7 @@ from cooksprite.nodes.cooksprite_nodes import (
     CS_LotusModelLoader,
     CS_LotusNormalFinalize,
     CS_LotusNormalPrepare,
+    _lotus_normal_axes,
     _lotus_size,
     _png,
 )
@@ -91,6 +92,19 @@ def test_lotus_node_contract_replaces_legacy_node_and_keeps_alpha():
     assert CS_LotusNormalFinalize.RETURN_TYPES == ("IMAGE", "MASK")
     tool = next(item for item in builtin_tools() if item.id == "cooksprite.normal_estimate")
     assert [port.type for port in tool.outputs] == ["NormalMap", "Mask"]
+
+
+def test_lotus_finalize_preserves_official_channel_orientation():
+    raw = np.array([[[0.25, -0.5, 0.75]]], dtype=np.float32)
+
+    nx, ny, nz = _lotus_normal_axes(raw, strength=2.0, flip_y=False)
+    np.testing.assert_allclose(nx, [[0.5]])
+    np.testing.assert_allclose(ny, [[-1.0]])
+    np.testing.assert_allclose(nz, [[0.75]])
+
+    _, flipped_y, flipped_z = _lotus_normal_axes(raw, strength=1.0, flip_y=True)
+    np.testing.assert_allclose(flipped_y, [[0.5]])
+    np.testing.assert_allclose(flipped_z, [[0.75]])
 
 
 def test_normal_map_png_preserves_neutral_rgb_under_transparency():

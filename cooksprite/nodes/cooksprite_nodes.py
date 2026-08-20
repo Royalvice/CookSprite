@@ -547,6 +547,16 @@ def _lotus_size(height: int, width: int, edge: int = 768) -> tuple[int, int]:
     return target_height, target_width
 
 
+def _lotus_normal_axes(raw, strength: float, flip_y: bool):
+    """Apply CookSprite controls without changing Lotus' channel convention."""
+
+    nx = raw[..., 0] * float(strength)
+    ny = raw[..., 1] * float(strength)
+    if flip_y:
+        ny = -ny
+    return nx, ny, raw[..., 2]
+
+
 class CS_LotusNormalPrepare:
     @classmethod
     def INPUT_TYPES(cls):
@@ -631,14 +641,12 @@ class CS_LotusNormalFinalize:
             ).permute(0, 2, 3, 1)
 
         raw = value * 2.0 - 1.0
-        # Lotus uses camera coordinates: +X right, +Y down, +Z forward while
-        # visible normals face the camera. Convert to CookSprite's OpenGL map:
-        # +X right, +Y up, +Z out of the surface.
-        nx = raw[..., 0] * float(strength)
-        ny = -raw[..., 1] * float(strength)
-        if flip_y:
-            ny = -ny
-        nz = (-raw[..., 2]).clamp_min(1e-6)
+        # Lotus' official normal pipeline writes the decoded RGB prediction
+        # directly.  Its v1.1 checkpoint is already aligned to camera-facing
+        # surface normals, so preserve all three channel signs here.  The old
+        # Y/Z inversion turned the positive-Z map into saturated side-facing
+        # normals.
+        nx, ny, nz = _lotus_normal_axes(raw, strength, flip_y)
         normal = functional.normalize(torch.stack((nx, ny, nz), dim=-1), dim=-1)
         encoded = normal * 0.5 + 0.5
         alpha = _normal_mask(reference, mask)
