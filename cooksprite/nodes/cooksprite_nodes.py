@@ -548,9 +548,16 @@ def _lotus_size(height: int, width: int, edge: int = 768) -> tuple[int, int]:
 
 
 def _lotus_normal_axes(raw, strength: float, flip_y: bool):
-    """Apply CookSprite controls without changing Lotus' channel convention."""
+    """Convert Lotus camera normals to CookSprite's image-plane tangent basis.
 
-    nx = raw[..., 0] * float(strength)
+    Lotus v1.1 aligns camera-space normals with the camera ray.  CookSprite's
+    canonical normal map instead describes an outward-facing sprite plane with
+    tangent +X to image-right, +Y to image-up and +Z towards the viewer.  The
+    two image-aligned bases therefore differ by the Lotus normal orientation
+    and camera/image handedness, which reduces to a fixed X sign change.
+    """
+
+    nx = -raw[..., 0] * float(strength)
     ny = raw[..., 1] * float(strength)
     if flip_y:
         ny = -ny
@@ -641,11 +648,9 @@ class CS_LotusNormalFinalize:
             ).permute(0, 2, 3, 1)
 
         raw = value * 2.0 - 1.0
-        # Lotus' official normal pipeline writes the decoded RGB prediction
-        # directly.  Its v1.1 checkpoint is already aligned to camera-facing
-        # surface normals, so preserve all three channel signs here.  The old
-        # Y/Z inversion turned the positive-Z map into saturated side-facing
-        # normals.
+        # Convert once at the compute boundary.  Every persisted CookSprite
+        # NormalMap is then the same OpenGL-style tangent-space artifact used
+        # by Three.js and Godot Sprite2D; clients need no model-specific fix.
         nx, ny, nz = _lotus_normal_axes(raw, strength, flip_y)
         normal = functional.normalize(torch.stack((nx, ny, nz), dim=-1), dim=-1)
         encoded = normal * 0.5 + 0.5

@@ -94,17 +94,27 @@ def test_lotus_node_contract_replaces_legacy_node_and_keeps_alpha():
     assert [port.type for port in tool.outputs] == ["NormalMap", "Mask"]
 
 
-def test_lotus_finalize_preserves_official_channel_orientation():
+def test_lotus_finalize_converts_camera_normals_to_sprite_tangent_space():
     raw = np.array([[[0.25, -0.5, 0.75]]], dtype=np.float32)
 
     nx, ny, nz = _lotus_normal_axes(raw, strength=2.0, flip_y=False)
-    np.testing.assert_allclose(nx, [[0.5]])
+    np.testing.assert_allclose(nx, [[-0.5]])
     np.testing.assert_allclose(ny, [[-1.0]])
     np.testing.assert_allclose(nz, [[0.75]])
 
     _, flipped_y, flipped_z = _lotus_normal_axes(raw, strength=1.0, flip_y=True)
     np.testing.assert_allclose(flipped_y, [[0.5]])
     np.testing.assert_allclose(flipped_z, [[0.75]])
+
+
+def test_lotus_tangent_conversion_keeps_flat_normal_neutral():
+    raw = np.array([[[0.0, 0.0, 1.0]]], dtype=np.float32)
+
+    nx, ny, nz = _lotus_normal_axes(raw, strength=1.0, flip_y=False)
+
+    np.testing.assert_allclose(nx, [[0.0]])
+    np.testing.assert_allclose(ny, [[0.0]])
+    np.testing.assert_allclose(nz, [[1.0]])
 
 
 def test_normal_map_png_preserves_neutral_rgb_under_transparency():

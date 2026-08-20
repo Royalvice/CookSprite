@@ -10,9 +10,10 @@ const mount = ref<HTMLElement | null>(null);
 const mode = ref<"lit" | "diffuse" | "normal">("lit");
 const lightHorizontal = ref(0.35);
 const lightVertical = ref(0.35);
-const height = ref(2.2);
-const intensity = ref(3.2);
-const environmentIntensity = ref(0.7);
+const height = ref(0.3);
+const intensity = ref(2);
+const lightRange = ref(1.4);
+const environmentIntensity = ref(0);
 const color = ref("#ffe7b0");
 const normalStrength = ref(1);
 const flipY = ref(false);
@@ -33,6 +34,9 @@ let scene: THREE.Scene | undefined;
 let camera: THREE.OrthographicCamera | undefined;
 let material: THREE.MeshStandardMaterial | undefined;
 let plane: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshStandardMaterial> | undefined;
+let shadowMaterial: THREE.MeshDistanceMaterial | undefined;
+let backdropMaterial: THREE.MeshStandardMaterial | undefined;
+let backdrop: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshStandardMaterial> | undefined;
 let point: THREE.PointLight | undefined;
 let environment: THREE.Texture | null = null;
 let resizeObserver: ResizeObserver | undefined;
@@ -61,6 +65,13 @@ function fitPlane() {
   plane.scale.set(width, planeHeight, 1);
 }
 
+function fitBackdrop() {
+  if (!backdrop || !camera) return;
+  const viewWidth = camera.right - camera.left;
+  const viewHeight = camera.top - camera.bottom;
+  backdrop.scale.set(viewWidth * 1.12, viewHeight * 1.12, 1);
+}
+
 function resize() {
   if (!mount.value || !renderer || !camera) return;
   const width = Math.max(1, mount.value.clientWidth);
@@ -82,6 +93,7 @@ function resize() {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.setSize(width, heightValue, false);
   fitPlane();
+  fitBackdrop();
   updateLight();
 }
 
@@ -99,19 +111,43 @@ function setup() {
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.domElement.dataset.lightingCanvas = "true";
   mount.value.appendChild(renderer.domElement);
+  backdropMaterial = new THREE.MeshStandardMaterial({
+    color: 0x06070a,
+    roughness: 1,
+    metalness: 0,
+  });
+  backdrop = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), backdropMaterial);
+  backdrop.position.z = -0.18;
+  backdrop.receiveShadow = true;
+  scene.add(backdrop);
   material = new THREE.MeshStandardMaterial({
     color: 0xffffff,
     transparent: true,
+    alphaTest: 0.02,
     roughness: 0.62,
     metalness: 0.02,
+    normalMapType: THREE.TangentSpaceNormalMap,
   });
   plane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material);
+  shadowMaterial = new THREE.MeshDistanceMaterial({ alphaTest: 0.02 });
+  plane.customDistanceMaterial = shadowMaterial;
+  plane.castShadow = true;
+  plane.renderOrder = 1;
   scene.add(plane);
-  point = new THREE.PointLight(color.value, intensity.value, 12, 1.4);
+  point = new THREE.PointLight(color.value, intensity.value, lightRange.value, 2);
+  point.castShadow = true;
+  point.shadow.mapSize.set(1024, 1024);
+  point.shadow.bias = -0.0005;
+  point.shadow.normalBias = 0.01;
+  point.shadow.radius = 2;
+  point.shadow.camera.near = 0.05;
+  point.shadow.camera.far = 6;
   scene.add(point);
-  scene.add(new THREE.AmbientLight(0xffffff, 0.22));
+  scene.add(new THREE.AmbientLight(0xffffff, 0.04));
   resizeObserver = new ResizeObserver(resize);
   resizeObserver.observe(mount.value);
   resize();
@@ -155,6 +191,10 @@ async function refreshTextures() {
     material.normalMap?.dispose();
     material.map = diffuse;
     material.normalMap = normal;
+    if (shadowMaterial) {
+      shadowMaterial.map = diffuse;
+      shadowMaterial.needsUpdate = true;
+    }
     const image = diffuse?.image as { naturalWidth?: number; naturalHeight?: number; width?: number; height?: number } | undefined;
     const width = Number(image?.naturalWidth || image?.width || 1);
     const heightValue = Number(image?.naturalHeight || image?.height || 1);
@@ -214,9 +254,11 @@ function updateLight() {
   if (!point || !material || !scene || !camera) return;
   const worldX = lightHorizontal.value * (camera.right - camera.left) * 0.42;
   const worldY = lightVertical.value * (camera.top - camera.bottom) * 0.42;
-  point.position.set(worldX, worldY, 0.35 + height.value * 0.65);
+  point.position.set(worldX, worldY, height.value);
   point.color.set(color.value);
   point.intensity = intensity.value;
+  point.distance = lightRange.value;
+  point.decay = 2;
   scene.environmentIntensity = environmentIntensity.value;
   material.normalScale.set(normalStrength.value, flipY.value ? -normalStrength.value : normalStrength.value);
   scene.background = showEnvironment.value && environment ? environment : null;
@@ -261,7 +303,7 @@ watch(() => [props.diffuse?.id, props.normal?.id], refreshTextures);
 watch(hdri, refreshEnvironment);
 watch(mode, render);
 watch(
-  [lightHorizontal, lightVertical, height, intensity, environmentIntensity, color, normalStrength, flipY, showEnvironment],
+  [lightHorizontal, lightVertical, height, intensity, lightRange, environmentIntensity, color, normalStrength, flipY, showEnvironment],
   updateLight,
 );
 onMounted(setup);
@@ -272,7 +314,10 @@ onBeforeUnmount(() => {
   material?.map?.dispose();
   material?.normalMap?.dispose();
   material?.dispose();
+  shadowMaterial?.dispose();
   plane?.geometry.dispose();
+  backdropMaterial?.dispose();
+  backdrop?.geometry.dispose();
   environment?.dispose();
   renderer?.dispose();
   renderer?.domElement.remove();
@@ -281,6 +326,9 @@ onBeforeUnmount(() => {
   camera = undefined;
   material = undefined;
   plane = undefined;
+  shadowMaterial = undefined;
+  backdropMaterial = undefined;
+  backdrop = undefined;
   point = undefined;
   environment = null;
 });
@@ -327,6 +375,7 @@ onBeforeUnmount(() => {
       <label>{{ $t("lighting.vertical") }} <input v-model.number="lightVertical" type="range" min="-1" max="1" step="0.05" /><b>{{ lightVertical.toFixed(2) }}</b></label>
       <label>{{ $t("lighting.height") }} <input v-model.number="height" type="range" min="0.3" max="4" step="0.1" /><b>{{ height.toFixed(1) }}</b></label>
       <label>{{ $t("lighting.point") }} <input v-model.number="intensity" type="range" min="0" max="8" step="0.1" /><b>{{ intensity.toFixed(1) }}</b></label>
+      <label>{{ $t("lighting.range") }} <input v-model.number="lightRange" type="range" min="0.6" max="4" step="0.1" /><b>{{ lightRange.toFixed(1) }}</b></label>
       <label>{{ $t("lighting.normal") }} <input v-model.number="normalStrength" type="range" min="0" max="2" step="0.05" /><b>{{ normalStrength.toFixed(2) }}</b></label>
       <label>IBL <input v-model.number="environmentIntensity" type="range" min="0" max="2" step="0.05" /><b>{{ environmentIntensity.toFixed(2) }}</b></label>
       <label class="color-field">{{ $t("lighting.color") }} <input v-model="color" type="color" /></label>
