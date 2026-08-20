@@ -120,6 +120,7 @@ class ToolPackageManifest(BaseModel):
     requirements: list[str] = Field(default_factory=list)
     tools: list[ToolDescriptor] = Field(default_factory=list)
     lowerings: dict[str, str] = Field(default_factory=dict)
+    sealed_graphs: dict[str, dict[str, Any]] = Field(default_factory=dict)
     node_classes: list[str] = Field(default_factory=list)
     workflows: list[str] = Field(default_factory=list)
     tasks: list[str] = Field(default_factory=list)
@@ -128,9 +129,11 @@ class ToolPackageManifest(BaseModel):
     @model_validator(mode="after")
     def complete_lowerings(self) -> ToolPackageManifest:
         tool_ids = {tool.id for tool in self.tools}
-        if set(self.lowerings) != tool_ids:
-            missing = sorted(tool_ids - set(self.lowerings))
-            unknown = sorted(set(self.lowerings) - tool_ids)
+        executable_ids = set(self.lowerings) | set(self.sealed_graphs)
+        overlap = sorted(set(self.lowerings).intersection(self.sealed_graphs))
+        if executable_ids != tool_ids or overlap:
+            missing = sorted(tool_ids - executable_ids)
+            unknown = sorted(executable_ids - tool_ids)
             raise ValueError(f"package lowerings mismatch; missing={missing}, unknown={unknown}")
         if len(self.node_classes) != len(set(self.node_classes)):
             raise ValueError("package node classes must be unique")

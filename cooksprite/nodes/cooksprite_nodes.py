@@ -475,38 +475,180 @@ class CS_IsolateOnGreen:
         return (torch.stack(results),)
 
 
-class CS_NormalEstimate:
+class CS_LotusModelLoader:
+    """Load official Lotus weights through ComfyUI with an explicit dtype."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        import folder_paths
+
+        models = folder_paths.get_filename_list("diffusion_models")
+        return {
+            "required": {
+                "model_name": (
+                    models,
+                    {"default": "lotus-normal-d-v1-1.safetensors"},
+                ),
+                "precision": (
+                    ["bf16", "fp8_e4m3fn_fast"],
+                    {"default": "bf16", "advanced": True},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("MODEL",)
+    FUNCTION = "load"
+    CATEGORY = "CookSprite/Normal"
+
+    def load(self, model_name, precision):
+        if torch is None:
+            raise RuntimeError("Lotus model loading requires ComfyUI's torch runtime")
+        import comfy.sd
+        import folder_paths
+
+        model_options = {}
+        if precision == "bf16":
+            model_options["dtype"] = torch.bfloat16
+        elif precision == "fp8_e4m3fn_fast":
+            model_options["dtype"] = torch.float8_e4m3fn
+            model_options["fp8_optimizations"] = True
+        else:
+            raise ValueError(f"unsupported Lotus precision: {precision}")
+        path = folder_paths.get_full_path_or_raise("diffusion_models", model_name)
+        return (comfy.sd.load_diffusion_model(path, model_options=model_options),)
+
+
+def _normal_mask(image, mask):
+    """Normalize an optional Comfy mask to the IMAGE batch and source size."""
+
+    from torch.nn import functional
+
+    batch, height, width = image.shape[:3]
+    if mask is None:
+        return torch.ones((batch, height, width), device=image.device, dtype=image.dtype)
+    value = mask.to(device=image.device, dtype=image.dtype)
+    if value.ndim == 2:
+        value = value.unsqueeze(0)
+    if value.shape[0] == 1 and batch > 1:
+        value = value.repeat(batch, 1, 1)
+    if value.shape[0] != batch:
+        raise ValueError("Lotus mask batch must match IMAGE batch")
+    if value.shape[1:3] != (height, width):
+        value = functional.interpolate(
+            value.unsqueeze(1), size=(height, width), mode="nearest"
+        ).squeeze(1)
+    return value.clamp(0.0, 1.0)
+
+
+def _lotus_size(height: int, width: int, edge: int = 768) -> tuple[int, int]:
+    """Match Lotus' 768 longest-edge preprocessing while retaining aspect."""
+
+    scale = float(edge) / float(max(height, width))
+    target_height = max(8, round(height * scale / 8.0) * 8)
+    target_width = max(8, round(width * scale / 8.0) * 8)
+    return target_height, target_width
+
+
+class CS_LotusNormalPrepare:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {"image": ("IMAGE",)},
+            "optional": {"mask": ("MASK",)},
+        }
+
+    RETURN_TYPES = ("IMAGE", "MASK", "IMAGE")
+    RETURN_NAMES = ("image", "mask", "reference")
+    FUNCTION = "run"
+    CATEGORY = "CookSprite/Normal"
+
+    def run(self, image, mask=None):
+        if torch is None:
+            raise RuntimeError("Lotus preprocessing requires ComfyUI's torch runtime")
+        from torch.nn import functional
+
+        rgb = image[..., :3]
+        alpha = _normal_mask(rgb, mask)
+        # Grow foreground colors under transparent edge pixels before resize.
+        # This prevents dark RGB in transparent texels from bleeding into the
+        # Lotus input without changing the authoritative source alpha.
+        filled = rgb.permute(0, 3, 1, 2)
+        known = (alpha > 1e-4).unsqueeze(1).to(rgb.dtype)
+        for _ in range(8):
+            weights = functional.avg_pool2d(known, 3, stride=1, padding=1)
+            colors = functional.avg_pool2d(filled * known, 3, stride=1, padding=1)
+            candidates = colors / weights.clamp_min(1e-6)
+            grow = (known < 0.5) & (weights > 0.0)
+            filled = torch.where(grow.expand_as(filled), candidates, filled)
+            known = torch.where(grow, torch.ones_like(known), known)
+        neutral = torch.full_like(filled, 0.5)
+        background = torch.where(known > 0.5, filled, neutral)
+        source = rgb.permute(0, 3, 1, 2)
+        composed = source * alpha.unsqueeze(1) + background * (1.0 - alpha.unsqueeze(1))
+        target = _lotus_size(rgb.shape[1], rgb.shape[2])
+        prepared = functional.interpolate(
+            composed,
+            size=target,
+            mode="bilinear",
+            align_corners=False,
+            antialias=True,
+        ).permute(0, 2, 3, 1)
+        return (prepared.clamp(0.0, 1.0), alpha, rgb)
+
+
+class CS_LotusNormalFinalize:
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "image": ("IMAGE",),
+                "prediction": ("IMAGE",),
+                "reference": ("IMAGE",),
                 "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 4.0}),
                 "flip_y": ("BOOLEAN", {"default": False}),
-            }
+            },
+            "optional": {"mask": ("MASK",)},
         }
 
-    RETURN_TYPES = ("IMAGE",)
+    RETURN_TYPES = ("IMAGE", "MASK")
+    RETURN_NAMES = ("normal", "mask")
     FUNCTION = "run"
-    CATEGORY = "CookSprite/Media"
+    CATEGORY = "CookSprite/Normal"
 
-    def run(self, image, strength, flip_y):
-        rgb = image[..., :3]
-        gray = rgb[..., 0] * 0.299 + rgb[..., 1] * 0.587 + rgb[..., 2] * 0.114
-        dx = torch.zeros_like(gray)
-        dy = torch.zeros_like(gray)
-        dx[:, :, 1:-1] = (gray[:, :, 2:] - gray[:, :, :-2]) * 0.5
-        dx[:, :, 0] = gray[:, :, 1] - gray[:, :, 0]
-        dx[:, :, -1] = gray[:, :, -1] - gray[:, :, -2]
-        dy[:, 1:-1, :] = (gray[:, 2:, :] - gray[:, :-2, :]) * 0.5
-        dy[:, 0, :] = gray[:, 1, :] - gray[:, 0, :]
-        dy[:, -1, :] = gray[:, -1, :] - gray[:, -2, :]
-        ny = dy * float(strength) * (1.0 if flip_y else -1.0)
-        nx = -dx * float(strength)
-        nz = torch.ones_like(nx)
-        normal = torch.stack((nx, ny, nz), dim=-1)
-        normal = torch.nn.functional.normalize(normal, dim=-1)
-        return (normal * 0.5 + 0.5,)
+    def run(self, prediction, reference, strength, flip_y, mask=None):
+        if torch is None:
+            raise RuntimeError("Lotus postprocessing requires ComfyUI's torch runtime")
+        from torch.nn import functional
+
+        batch, height, width = reference.shape[:3]
+        value = prediction[..., :3]
+        if value.shape[0] == 1 and batch > 1:
+            value = value.repeat(batch, 1, 1, 1)
+        if value.shape[0] != batch:
+            raise ValueError("Lotus output batch must match the reference batch")
+        if value.shape[1:3] != (height, width):
+            value = functional.interpolate(
+                value.permute(0, 3, 1, 2),
+                size=(height, width),
+                mode="nearest",
+            ).permute(0, 2, 3, 1)
+
+        raw = value * 2.0 - 1.0
+        # Lotus uses camera coordinates: +X right, +Y down, +Z forward while
+        # visible normals face the camera. Convert to CookSprite's OpenGL map:
+        # +X right, +Y up, +Z out of the surface.
+        nx = raw[..., 0] * float(strength)
+        ny = -raw[..., 1] * float(strength)
+        if flip_y:
+            ny = -ny
+        nz = (-raw[..., 2]).clamp_min(1e-6)
+        normal = functional.normalize(torch.stack((nx, ny, nz), dim=-1), dim=-1)
+        encoded = normal * 0.5 + 0.5
+        alpha = _normal_mask(reference, mask)
+        neutral = torch.tensor(
+            [0.5, 0.5, 1.0], device=encoded.device, dtype=encoded.dtype
+        ).view(1, 1, 1, 3)
+        output = encoded * alpha.unsqueeze(-1) + neutral * (1.0 - alpha.unsqueeze(-1))
+        return (output.clamp(0.0, 1.0), alpha)
 
 
 class CS_SliceSpriteSheet:
@@ -626,7 +768,9 @@ NODE_CLASSES = [
     CS_Pixelize,
     CS_PixelSnap,
     CS_RemoveBackground,
-    CS_NormalEstimate,
+    CS_LotusModelLoader,
+    CS_LotusNormalPrepare,
+    CS_LotusNormalFinalize,
     CS_SliceSpriteSheet,
     CS_LoadVideoArtifact,
     CS_MakeSpritePair,

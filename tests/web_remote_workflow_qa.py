@@ -143,7 +143,6 @@ def run() -> None:
             "weapon",
             "prop",
             "terrain",
-            "scene",
             "vfx",
         }
         assert {option["id"] for option in controls["style"]["options"]} == {
@@ -232,10 +231,9 @@ def run() -> None:
         assert dimensions["width"] > 0 and dimensions["height"] > 0, dimensions
         page.screenshot(path=SHOTS / "03-real-normal-map.png")
 
-        page.get_by_role("tab", name="光照结果", exact=True).click()
+        page.get_by_role("tab", name="光照", exact=True).click()
         expect(page.locator("canvas[data-lighting-canvas=true]")).to_have_count(1)
-        gizmo = page.locator(".screen-light-gizmo")
-        expect(gizmo).to_be_visible()
+        expect(page.locator(".screen-light-gizmo")).to_have_count(0)
         stage = page.locator(".lighting-stage")
         box = stage.bounding_box()
         assert box
@@ -244,14 +242,14 @@ def run() -> None:
         page.mouse.down()
         page.mouse.move(box["x"] + box["width"] * 0.2, y)
         page.mouse.up()
-        left = float(gizmo.evaluate("element => parseFloat(element.style.left)"))
+        left = float(stage.get_attribute("data-light-x"))
         page.mouse.move(box["x"] + box["width"] * 0.2, y)
         page.mouse.down()
         page.mouse.move(box["x"] + box["width"] * 0.8, y)
         page.mouse.up()
-        right = float(gizmo.evaluate("element => parseFloat(element.style.left)"))
+        right = float(stage.get_attribute("data-light-x"))
         assert left < right, {"left": left, "right": right}
-        page.screenshot(path=SHOTS / "04-real-light-gizmo.png")
+        page.screenshot(path=SHOTS / "04-real-lighting.png")
 
         for width in (1440, 1024, 768):
             page.set_viewport_size({"width": width, "height": 900})

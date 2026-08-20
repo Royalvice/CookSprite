@@ -162,7 +162,7 @@ export const i18n = createI18n({
       },
       lighting: {
         preview: "实时法线光照预览", environment: "HDRI 光照环境", loading: "正在加载 HDRI…", left: "左", right: "右", light: "光源",
-        move: "从左到右移动光源", normal: "法线", height: "高度", point: "点光", color: "颜色", flip: "翻转 Y", show: "显示环境", neutral: "中性", day: "白天", night: "黑夜", result: "光照结果", diffuse: "原图", normalMap: "法线图",
+        move: "移动光源", pointerHint: "在画布拖动光源；方向键可微调", horizontal: "点光 X", vertical: "点光 Y", normal: "法线", height: "高度", point: "点光", color: "颜色", flip: "翻转 Y", show: "显示环境", neutral: "中性", day: "白天", night: "黑夜", result: "光照", diffuse: "原图", normalMap: "法线图", loadError: "图片加载失败", environmentError: "光照环境加载失败",
       },
       export: {
         eyebrow: "唯一正式格式", checks: ["画布、锚点、视角、动作和真实方向轨道", "逐帧时长与偏移", "OpenGL 法线约定与完整性警告", "Godot 4.4+ 官方导入目标"],
@@ -333,7 +333,7 @@ export const i18n = createI18n({
       },
       lighting: {
         preview: "Live normal-map lighting preview", environment: "HDRI lighting environment", loading: "Loading HDRI…", left: "Left", right: "Right", light: "Light",
-        move: "Move light from left to right", normal: "Normal", height: "Height", point: "Point", color: "Color", flip: "Flip Y", show: "Show environment", neutral: "Neutral", day: "Day", night: "Night", result: "Lit result", diffuse: "Diffuse", normalMap: "Normal map",
+        move: "Move light", pointerHint: "Drag on the canvas; use arrow keys for precise light movement", horizontal: "Point X", vertical: "Point Y", normal: "Normal", height: "Height", point: "Point", color: "Color", flip: "Flip Y", show: "Show environment", neutral: "Neutral", day: "Day", night: "Night", result: "Lighting", diffuse: "Original", normalMap: "Normal map", loadError: "Image failed to load", environmentError: "Lighting environment failed to load",
       },
       export: {
         eyebrow: "One canonical format", checks: ["Canvas, pivot, views, clips, and real direction tracks", "Per-frame duration and offsets", "OpenGL normal convention and integrity warnings", "Godot 4.4+ official importer target"],

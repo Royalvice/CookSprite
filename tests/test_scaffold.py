@@ -181,7 +181,7 @@ def test_registry_projections_and_node_package_manifest_are_in_sync(tmp_path):
         "frames",
         "normal",
     }
-    assert all(item["lowerings"] for item in packages)
+    assert all(item["lowerings"] or item.get("sealed_graphs") for item in packages)
 
 
 def test_cli_exposes_headless_run_artifact_and_project_export_paths():

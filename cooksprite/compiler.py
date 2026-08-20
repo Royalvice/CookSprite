@@ -33,7 +33,8 @@ class Compiler(PlanBuilder):
         super().__init__(bridge, run_id)
         self.tools = {t.id: t for t in tools}
         self.lowerings = tool_packages.lowerings()
-        self.sealed_graphs = sealed_graphs or {}
+        self.sealed_graphs = {**tool_packages.sealed_graphs(), **(sealed_graphs or {})}
+        self._sealed_shared: dict[tuple[str, str], str] = {}
 
     def _tool(self, id: str) -> ToolDescriptor:
         if id not in self.tools:
@@ -43,18 +44,41 @@ class Compiler(PlanBuilder):
     def _node(self, class_type: str, inputs: dict[str, Any]) -> str:
         return self.add(class_type, inputs)
 
-    def _sealed(self, tool_id: str, values: dict[str, Any]) -> list[Any]:
+    def _sealed(self, tool_id: str, values: dict[str, Any]) -> list[list[Any]]:
         spec = self.sealed_graphs.get(tool_id)
         if not spec:
             raise CompileError(f"{tool_id}: sealed graph implementation is missing")
         graph = copy.deepcopy(spec.get("workflow") or {})
         slots = spec.get("slots") or {}
         output = spec.get("output")
-        if not isinstance(graph, dict) or not isinstance(output, list) or len(output) != 2:
+        outputs = spec.get("outputs") or ([output] if output else [])
+        if (
+            not isinstance(graph, dict)
+            or not isinstance(outputs, list)
+            or not outputs
+            or any(not isinstance(item, list) or len(item) != 2 for item in outputs)
+        ):
             raise CompileError(f"{tool_id}: invalid sealed graph")
+        shared = {str(item) for item in (spec.get("shared_nodes") or [])}
+        if not shared.issubset({str(node_id) for node_id in graph}):
+            raise CompileError(f"{tool_id}: invalid shared sealed nodes")
         prefix = f"{self.node_prefix}_sealed_{self.sequence + 1}_"
-        mapping = {str(node_id): prefix + str(node_id) for node_id in graph}
+        mapping: dict[str, str] = {}
+        new_nodes: set[str] = set()
+        for node_id in graph:
+            source_id = str(node_id)
+            cache_key = (tool_id, source_id)
+            if source_id in shared and cache_key in self._sealed_shared:
+                mapping[source_id] = self._sealed_shared[cache_key]
+                continue
+            mapped = prefix + source_id
+            mapping[source_id] = mapped
+            new_nodes.add(source_id)
+            if source_id in shared:
+                self._sealed_shared[cache_key] = mapped
         for node_id, node in graph.items():
+            if str(node_id) not in new_nodes:
+                continue
             inputs = node.get("inputs") or {}
             for key, value in list(inputs.items()):
                 if isinstance(value, list) and len(value) == 2 and str(value[0]) in mapping:
@@ -68,11 +92,14 @@ class Compiler(PlanBuilder):
             if not separator or node_id not in mapping:
                 raise CompileError(f"{tool_id}: invalid sealed slot {name}")
             self.graph[mapping[node_id]].setdefault("inputs", {})[input_name] = value
-        output_node = mapping.get(str(output[0]))
-        if not output_node:
-            raise CompileError(f"{tool_id}: sealed output node is missing")
-        self.sequence += len(mapping)
-        return [output_node, int(output[1])]
+        refs: list[list[Any]] = []
+        for item in outputs:
+            output_node = mapping.get(str(item[0]))
+            if not output_node:
+                raise CompileError(f"{tool_id}: sealed output node is missing")
+            refs.append([output_node, int(item[1])])
+        self.sequence += len(new_nodes)
+        return refs
 
     def _value(self, ref: ValueRef, bindings: dict[str, Any]) -> Any:
         if ref.input is not None:
@@ -147,9 +174,21 @@ class Compiler(PlanBuilder):
                     raise CompileError(f"{n.id}.{p.name}: missing required input")
             data.update({name: self._value(ref, bindings) for name, ref in n.params.items()})
             if tool.id in self.sealed_graphs:
-                value = self._sealed(tool.id, data)
+                refs = self._sealed(tool.id, data)
+                if len(refs) != len(tool.outputs):
+                    raise CompileError(f"{tool.id}: sealed outputs do not match Tool contract")
+                output_refs: dict[str, list[Any]] = {}
                 for index, port in enumerate(tool.outputs):
-                    bindings[f"{n.id}.{port.name}"] = value if index == 0 else [value[0], index]
+                    output_refs[port.name] = refs[index]
+                    bindings[f"{n.id}.{port.name}"] = refs[index]
+                mask_ref = next(
+                    (output_refs[port.name] for port in tool.outputs if port.type == "Mask"),
+                    None,
+                )
+                if mask_ref is not None:
+                    for port in tool.outputs:
+                        if port.type in {"Image", "ImageBatch", "NormalMap"}:
+                            self.register_image_mask(output_refs[port.name], mask_ref)
                 continue
             lowered = self.lowerings.get(tool.id, tool.id.removeprefix("comfy."))
             if not lowered:
@@ -165,7 +204,7 @@ class Compiler(PlanBuilder):
             )
             if mask_ref is not None:
                 for port in tool.outputs:
-                    if port.type in {"Image", "ImageBatch"}:
+                    if port.type in {"Image", "ImageBatch", "NormalMap"}:
                         self.register_image_mask(output_refs[port.name], mask_ref)
         result = {name: self._value(ref, bindings) for name, ref in wf.outputs.items()}
         return result

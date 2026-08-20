@@ -226,7 +226,7 @@ def run() -> None:
         )
         assert normal_size["width"] > 0 and normal_size["height"] > 0, normal_size
         page.screenshot(path=SHOTS / "04-real-normal-map.png", full_page=True)
-        page.get_by_role("tab", name="光照结果", exact=True).click()
+        page.get_by_role("tab", name="光照", exact=True).click()
         stage = page.locator(".lighting-stage")
         box = stage.bounding_box()
         assert box
@@ -234,12 +234,12 @@ def run() -> None:
         page.mouse.down()
         page.mouse.move(box["x"] + box["width"] * 0.2, box["y"] + box["height"] * 0.45)
         page.mouse.up()
-        left = float(page.locator(".screen-light-gizmo").evaluate("e => parseFloat(e.style.left)"))
+        left = float(stage.get_attribute("data-light-x"))
         page.mouse.move(box["x"] + box["width"] * 0.2, box["y"] + box["height"] * 0.45)
         page.mouse.down()
         page.mouse.move(box["x"] + box["width"] * 0.8, box["y"] + box["height"] * 0.45)
         page.mouse.up()
-        right = float(page.locator(".screen-light-gizmo").evaluate("e => parseFloat(e.style.left)"))
+        right = float(stage.get_attribute("data-light-x"))
         assert left < right, {"left": left, "right": right}
         page.screenshot(path=SHOTS / "05-real-lighting-preview.png", full_page=True)
 

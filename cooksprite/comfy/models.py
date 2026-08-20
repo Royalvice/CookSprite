@@ -10,6 +10,7 @@ of being mistaken for a successful install.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -98,6 +99,29 @@ def _emit(
         )
 
 
+def _verify_file(path: Path, file: dict[str, Any]) -> None:
+    """Verify a declared size/hash before a model becomes usable."""
+
+    if not path.is_file() or path.stat().st_size <= 0:
+        raise ModelDownloadError(
+            f"downloaded model {_safe_file_name(file.get('name'))} is empty",
+            code="model_file_invalid",
+        )
+    expected_size = file.get("size")
+    if expected_size is not None and path.stat().st_size != int(expected_size):
+        raise ModelDownloadError(f"model size mismatch for {path.name}", code="model_size_mismatch")
+    expected_hash = str(file.get("sha256") or "").lower()
+    if expected_hash:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+                digest.update(chunk)
+        if digest.hexdigest().lower() != expected_hash:
+            raise ModelDownloadError(
+                f"model SHA-256 mismatch for {path.name}", code="model_hash_mismatch"
+            )
+
+
 def _percent(text: str) -> float | None:
     match = re.search(r"(?<!\d)(\d{1,3}(?:\.\d+)?)\s*%", text)
     if not match:
@@ -149,7 +173,9 @@ def _run_cli(
             env=os.environ.copy(),
         )
     except OSError as exc:
-        raise ModelDownloadError(f"unable to start Comfy CLI: {exc}", code="comfy_cli_failed") from exc
+        raise ModelDownloadError(
+            f"unable to start Comfy CLI: {exc}", code="comfy_cli_failed"
+        ) from exc
 
     stdout, _ = process.communicate()
     combined_output = stdout or ""
@@ -231,6 +257,11 @@ def _run_cli(
         raise ModelDownloadError(
             f"Comfy CLI finished but did not produce {name}", code="model_file_missing"
         )
+    try:
+        _verify_file(staging, file)
+    except ModelDownloadError:
+        staging.unlink(missing_ok=True)
+        raise
     final.parent.mkdir(parents=True, exist_ok=True)
     os.replace(staging, final)
 
@@ -254,7 +285,9 @@ def _download_with_http_endpoint(
             timeout=None,
         )
     except httpx.HTTPError as exc:
-        raise ModelDownloadError(f"ComfyUI download endpoint unavailable: {exc}", code="download_endpoint_unavailable") from exc
+        raise ModelDownloadError(
+            f"ComfyUI download endpoint unavailable: {exc}", code="download_endpoint_unavailable"
+        ) from exc
     if response.status_code in {401, 403}:
         raise ModelDownloadError(
             f"ComfyUI download endpoint rejected the request ({response.status_code})",
@@ -296,12 +329,26 @@ def download_bundle_file(
         root = _comfy_root(directory)
         final = comfy_model_path(root, file)
         if final.is_file() and final.stat().st_size > 0:
-            _emit(progress, current_file=name, progress_value=1.0, message="model already present")
-            return final
+            try:
+                _verify_file(final, file)
+            except ModelDownloadError:
+                final.unlink(missing_ok=True)
+            else:
+                _emit(
+                    progress,
+                    current_file=name,
+                    progress_value=1.0,
+                    message="model already present",
+                )
+                return final
         try:
             _run_cli(root, file, progress)
         except ModelDownloadError as cli_error:
-            if cli_error.code == "download_forbidden":
+            if cli_error.code in {
+                "download_forbidden",
+                "model_size_mismatch",
+                "model_hash_mismatch",
+            }:
                 raise
             # A local runtime can expose the same operation over HTTP.  Keep
             # the CLI as the first choice, but let the runtime endpoint be a
@@ -313,8 +360,11 @@ def download_bundle_file(
                 raise ModelDownloadError(
                     f"{endpoint_error}; run manually: {command}", code=endpoint_error.code
                 ) from cli_error
-        if not final.is_file() or final.stat().st_size <= 0:
-            raise ModelDownloadError(f"downloaded model {name} is empty", code="model_file_invalid")
+        try:
+            _verify_file(final, file)
+        except ModelDownloadError:
+            final.unlink(missing_ok=True)
+            raise
         _emit(progress, current_file=name, progress_value=1.0, message="model verified")
         return final
 

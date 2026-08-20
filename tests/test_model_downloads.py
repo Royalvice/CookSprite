@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+
 from cooksprite.comfy import models
 
 
@@ -13,6 +15,8 @@ def test_model_download_uses_cli_staging_and_atomic_move(tmp_path, monkeypatch):
         "folder": "diffusion_models",
         "name": "test-model.safetensors",
         "url": "https://example.com/test-model.safetensors",
+        "size": len(b"model"),
+        "sha256": hashlib.sha256(b"model").hexdigest(),
     }
     command_seen: list[str] = []
 
@@ -45,6 +49,42 @@ def test_model_download_uses_cli_staging_and_atomic_move(tmp_path, monkeypatch):
     ).exists()
     assert command_seen[:4] == ["fake-comfy", "--workspace=" + str(root), "model", "download"]
     assert events[-1]["progress"] == 1.0
+
+
+def test_model_download_rejects_a_declared_hash_mismatch(tmp_path, monkeypatch):
+    root = tmp_path / "ComfyUI"
+    root.mkdir()
+    (root / "main.py").write_text("# test ComfyUI\n", encoding="utf-8")
+    (root / "nodes.py").write_text("# test nodes\n", encoding="utf-8")
+    (root / "comfy").mkdir()
+    file = {
+        "folder": "vae",
+        "name": "bad.safetensors",
+        "url": "https://example.com/bad.safetensors",
+        "sha256": hashlib.sha256(b"expected").hexdigest(),
+    }
+
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self, *_args, **_kwargs):
+            staging = root / "models" / ".cooksprite-downloads" / "vae"
+            staging.mkdir(parents=True, exist_ok=True)
+            (staging / file["name"]).write_bytes(b"wrong")
+
+        def communicate(self):
+            return "download 100%\n", ""
+
+    monkeypatch.setattr(models, "_comfy_cli", lambda _root: "fake-comfy")
+    monkeypatch.setattr(models.subprocess, "Popen", FakeProcess)
+
+    try:
+        models.download_bundle_file({"directory": str(root), "base_url": "http://unused"}, file)
+    except models.ModelDownloadError as exc:
+        assert exc.code == "model_hash_mismatch"
+    else:
+        raise AssertionError("expected model hash verification to fail")
+    assert not (root / "models" / "vae" / file["name"]).exists()
 
 
 def test_official_download_command_contains_no_api_credentials(tmp_path):

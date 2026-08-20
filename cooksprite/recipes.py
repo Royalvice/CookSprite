@@ -17,6 +17,12 @@ from .workflows.flux2_klein import (
     FLUX2_TEMPLATE_PROVENANCE,
     flux2_klein_graph,
 )
+from .workflows.lotus_normal import (
+    LOTUS_NORMAL_BUNDLE_ID,
+    LOTUS_NORMAL_MODEL,
+    LOTUS_NORMAL_PROVENANCE,
+)
+from .workflows.model_bundles import MODEL_BUNDLES
 
 RUNTIME_ASSETS_SCHEMA = "cooksprite.runtime-assets/v1"
 RECIPE_SLOT_TYPES = {
@@ -90,6 +96,23 @@ FLUX2_I2I_NODES = FLUX2_T2I_NODES | {
     "ReferenceLatent",
 }
 FLUX2_I2I_COMPATIBLE_SCALE_NODES = ("ImageScaleToTotalPixels", "ImageScale")
+LOTUS_NORMAL_NODES = {
+    "CS_LoadArtifact",
+    "CS_StoreArtifact",
+    "CS_LotusModelLoader",
+    "CS_LotusNormalPrepare",
+    "CS_LotusNormalFinalize",
+    "VAELoader",
+    "VAEEncode",
+    "LotusConditioning",
+    "BasicGuider",
+    "DisableNoise",
+    "BasicScheduler",
+    "SetFirstSigma",
+    "KSamplerSelect",
+    "SamplerCustomAdvanced",
+    "VAEDecode",
+}
 OFFICIAL_ALPHA_MODEL = "birefnet.safetensors"
 T2I_ONLY_CHECKPOINTS = frozenset(
     {
@@ -186,7 +209,7 @@ def _bundle_file_available(report: dict[str, Any], file: dict[str, Any]) -> bool
 def model_bundle_status(report: dict[str, Any], bundle_id: str) -> dict[str, Any]:
     """Project runtime model discovery into one stable bundle view."""
 
-    bundle = FLUX2_BUNDLES.get(bundle_id)
+    bundle = MODEL_BUNDLES.get(bundle_id)
     if not bundle:
         raise KeyError(f"unknown model bundle: {bundle_id}")
     files = [
@@ -208,7 +231,7 @@ def model_bundle_status(report: dict[str, Any], bundle_id: str) -> dict[str, Any
 
 
 def model_bundles(report: dict[str, Any]) -> list[dict[str, Any]]:
-    return [model_bundle_status(report, bundle_id) for bundle_id in FLUX2_BUNDLES]
+    return [model_bundle_status(report, bundle_id) for bundle_id in MODEL_BUNDLES]
 
 
 def recipe_variants(recipe: Recipe) -> list[Recipe]:
@@ -540,14 +563,22 @@ def discover_recipes(report: dict[str, Any]) -> list[Recipe]:
 
     recipes.extend(_flux2_recipes(report))
 
-    if {"CS_LoadArtifact", "CS_StoreArtifact", "CS_NormalEstimate"}.issubset(nodes):
+    lotus_bundle = MODEL_BUNDLES[LOTUS_NORMAL_BUNDLE_ID]
+    if LOTUS_NORMAL_NODES.issubset(nodes) and all(
+        _bundle_file_available(report, file) for file in lotus_bundle["files"]
+    ):
         recipes.append(
             Recipe(
-                id="cooksprite-normal-v1",
-                label="CookSprite Normal · ComfyUI",
+                id=LOTUS_NORMAL_BUNDLE_ID,
+                label="Lotus Normal D v1.1 · BF16",
                 family="cooksprite.normal",
                 actions=["normal.generate"],
                 modes=["image-to-normal"],
+                checkpoint=LOTUS_NORMAL_MODEL,
+                source="discovered",
+                model_bundle=LOTUS_NORMAL_BUNDLE_ID,
+                model_files=list(lotus_bundle["files"]),
+                provenance=dict(LOTUS_NORMAL_PROVENANCE),
             )
         )
     if CORE_PIXEL_NODES.issubset(nodes):

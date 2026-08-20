@@ -63,8 +63,8 @@ class FakeComfy:
                     "ImageScale",
                     "CS_LoadArtifact",
                     "CS_StoreArtifact",
+                    "CS_CompilePromptPacket",
                     "CS_IsolateOnGreen",
-                    "CS_NormalEstimate",
                 )
             },
             "models": {"checkpoints": ["test-model.safetensors"]},
@@ -392,7 +392,8 @@ def test_versioned_definitions_candidates_and_comfy_compilation(tmp_path):
     assert state["status"] == "succeeded"
     assert state["runtime_state"]["phase"] == "completed"
     graph = FakeComfy.submitted[-1]
-    assert any(n["class_type"] == "CS_NormalEstimate" for n in graph.values())
+    assert any(n["class_type"] == "CS_LotusNormalFinalize" for n in graph.values())
+    assert not any(n["class_type"] == "CS_NormalEstimate" for n in graph.values())
     assert any(n["class_type"] == "CS_StoreArtifact" for n in graph.values())
     assert "private-prompt" not in str(state)
     events = c.get("/api/v1/runs/" + run.json()["id"] + "/events")

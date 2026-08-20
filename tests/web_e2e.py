@@ -116,8 +116,8 @@ def full_chromium_flow(browser_type: BrowserType) -> None:
         "() => document.querySelectorAll('.normal-source-row .artifact-card').length >= 2",
         timeout=15_000,
     )
-    page.locator(".hdri-strip button").nth(5).click()
-    page.locator(".light-arc-control input").fill("140")
+    page.locator(".hdri-strip button").nth(2).click()
+    page.locator(".lighting-controls input[type=range]").nth(0).fill("0.65")
     page.screenshot(path=SCREENSHOTS / "normal-light-1440-neon-zh.png", full_page=True)
     page.locator(".inspector-footer .arcade-button").click()
 

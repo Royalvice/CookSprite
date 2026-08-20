@@ -143,8 +143,43 @@ CORE_NODES = {
         },
         ["STRING", "STRING", "STRING"],
     ),
-    "CS_NormalEstimate": node(
-        {"image": "IMAGE", "strength": "FLOAT", "flip_y": "BOOLEAN"}, ["IMAGE"]
+    "CS_LotusModelLoader": node(
+        {"model_name": "COMBO", "precision": "COMBO"}, ["MODEL"]
+    ),
+    "CS_LotusNormalPrepare": node(
+        {"image": "IMAGE", "mask": "MASK"}, ["IMAGE", "MASK", "IMAGE"]
+    ),
+    "CS_LotusNormalFinalize": node(
+        {
+            "prediction": "IMAGE",
+            "reference": "IMAGE",
+            "mask": "MASK",
+            "strength": "FLOAT",
+            "flip_y": "BOOLEAN",
+        },
+        ["IMAGE", "MASK"],
+    ),
+    "VAELoader": node({"vae_name": "COMBO"}, ["VAE"]),
+    "LotusConditioning": node({}, ["CONDITIONING"]),
+    "BasicGuider": node(
+        {"model": "MODEL", "conditioning": "CONDITIONING"}, ["GUIDER"]
+    ),
+    "DisableNoise": node({}, ["NOISE"]),
+    "BasicScheduler": node(
+        {"model": "MODEL", "scheduler": "COMBO", "steps": "INT", "denoise": "FLOAT"},
+        ["SIGMAS"],
+    ),
+    "SetFirstSigma": node({"sigmas": "SIGMAS", "sigma": "FLOAT"}, ["SIGMAS"]),
+    "KSamplerSelect": node({"sampler_name": "COMBO"}, ["SAMPLER"]),
+    "SamplerCustomAdvanced": node(
+        {
+            "noise": "NOISE",
+            "guider": "GUIDER",
+            "sampler": "SAMPLER",
+            "sigmas": "SIGMAS",
+            "latent_image": "LATENT",
+        },
+        ["LATENT", "LATENT"],
     ),
     "CS_SliceSpriteSheet": node(
         {
@@ -178,6 +213,8 @@ class ProtocolComfy:
             "object_info": CORE_NODES,
             "models": {
                 "checkpoints": ["test-model.safetensors"],
+                "diffusion_models": ["lotus-normal-d-v1-1.safetensors"],
+                "vae": ["lotus-normal-d-v1-1-vae.safetensors"],
                 "background_removal": ["birefnet.safetensors"],
             },
             "system_stats": {"system": {"comfyui_version": "test"}},
@@ -282,7 +319,12 @@ def test_runtime_doctor_returns_a_compact_summary_not_the_dynamic_node_catalog(t
     assert "tools" not in report
     assert report["tool_count"] == len(CORE_NODES)
     assert report["recipe_count"] == len(report["recipes"])
-    assert report["models"] == {"checkpoints": 1, "background_removal": 1}
+    assert report["models"] == {
+        "checkpoints": 1,
+        "diffusion_models": 1,
+        "vae": 1,
+        "background_removal": 1,
+    }
     assert len(response.content) < 10_000
 
 
@@ -1074,7 +1116,13 @@ def test_runtime_defaults_select_the_configured_recipe_when_model_is_omitted(tmp
             "label": "test-model.safetensors",
             "actions": ["image.generate", "frame.redraw", "animation.generate"],
             "modes": ["t2i", "i2i", "i2i-sequence"],
-        }
+        },
+        {
+            "id": "lotus-normal-d-v1-1.safetensors",
+            "label": "lotus-normal-d-v1-1.safetensors",
+            "actions": ["normal.generate"],
+            "modes": ["image-to-normal"],
+        },
     ]
     updated = client.put(
         "/api/v1/runtimes/rt_test/defaults/image.generate",

@@ -42,9 +42,14 @@ def check_tool_packages(runtime_url: str | None = None) -> dict[str, Any]:
         )
     for package in manifests:
         for tool in package.tools:
-            class_type = package.lowerings[tool.id]
-            if class_type not in installed_nodes:
+            class_type = package.lowerings.get(tool.id)
+            if class_type and class_type not in installed_nodes:
                 raise DevCheckError(f"{tool.id}: lowering node {class_type} is absent")
+            sealed = package.sealed_graphs.get(tool.id) or {}
+            for node in (sealed.get("workflow") or {}).values():
+                sealed_class = str(node.get("class_type") or "")
+                if sealed_class.startswith("CS_") and sealed_class not in installed_nodes:
+                    raise DevCheckError(f"{tool.id}: sealed graph node {sealed_class} is absent")
     requirements_path = Path(__file__).with_name("nodes") / "requirements.txt"
     packaged_requirements = sorted(
         line.strip()
@@ -66,7 +71,19 @@ def check_tool_packages(runtime_url: str | None = None) -> dict[str, Any]:
         object_info = report.get("object_info") or {}
         for package in manifests:
             for tool in package.tools:
-                class_type = package.lowerings[tool.id]
+                class_type = package.lowerings.get(tool.id)
+                if not class_type:
+                    sealed = package.sealed_graphs.get(tool.id) or {}
+                    sealed_classes = {
+                        str(node.get("class_type") or "")
+                        for node in (sealed.get("workflow") or {}).values()
+                    }
+                    missing_sealed = sealed_classes - runtime_nodes
+                    if missing_sealed:
+                        raise DevCheckError(
+                            f"{tool.id}: runtime is missing sealed nodes {sorted(missing_sealed)}"
+                        )
+                    continue
                 spec = object_info[class_type]
                 node_inputs = spec.get("input") or {}
                 runtime_inputs = set(node_inputs.get("required", {})) | set(

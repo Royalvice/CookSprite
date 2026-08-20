@@ -198,11 +198,15 @@ def normal_flow(page: Page) -> None:
     page.locator(".preview-mode-tabs button").nth(2).click()
     expect(page.locator(".map-preview img")).to_be_visible()
     dimensions = page.locator(".map-preview img").evaluate(
-        "image => ({naturalWidth:image.naturalWidth,naturalHeight:image.naturalHeight})"
+        "image => ({naturalWidth:image.naturalWidth,naturalHeight:image.naturalHeight,width:image.getBoundingClientRect().width,height:image.getBoundingClientRect().height})"
     )
     assert dimensions["naturalWidth"] > 0 and dimensions["naturalHeight"] > 0, dimensions
+    assert abs(
+        dimensions["naturalWidth"] / dimensions["naturalHeight"]
+        - dimensions["width"] / dimensions["height"]
+    ) < 0.01, dimensions
     page.locator(".preview-mode-tabs button").first.click()
-    expect(page.locator(".screen-light-gizmo")).to_be_visible()
+    expect(page.locator(".screen-light-gizmo")).to_have_count(0)
     stage = page.locator(".lighting-stage")
     box = stage.bounding_box()
     assert box
@@ -210,13 +214,17 @@ def normal_flow(page: Page) -> None:
     page.mouse.down()
     page.mouse.move(box["x"] + box["width"] * 0.2, box["y"] + box["height"] * 0.45)
     page.mouse.up()
-    left = float(page.locator(".screen-light-gizmo").evaluate("e => parseFloat(e.style.left)"))
+    left = float(stage.get_attribute("data-light-x"))
     page.mouse.move(box["x"] + box["width"] * 0.2, box["y"] + box["height"] * 0.45)
     page.mouse.down()
     page.mouse.move(box["x"] + box["width"] * 0.8, box["y"] + box["height"] * 0.45)
     page.mouse.up()
-    right = float(page.locator(".screen-light-gizmo").evaluate("e => parseFloat(e.style.left)"))
+    right = float(stage.get_attribute("data-light-x"))
     assert left < right, {"left": left, "right": right}
+    stage.focus()
+    before_key = float(stage.get_attribute("data-light-y"))
+    page.keyboard.press("ArrowUp")
+    assert float(stage.get_attribute("data-light-y")) > before_key
     expect(page.locator(".three-mount canvas")).to_have_count(1)
     page.locator(".stage-rail > button").nth(0).click()
     expect(page.locator(".three-mount canvas")).to_have_count(0)

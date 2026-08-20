@@ -45,6 +45,13 @@ class ToolPackageRegistry:
             for tool_id, class_type in package.lowerings.items()
         }
 
+    def sealed_graphs(self) -> dict[str, dict[str, Any]]:
+        return {
+            tool_id: graph
+            for package in self.manifests
+            for tool_id, graph in package.sealed_graphs.items()
+        }
+
     def versions(self) -> dict[str, str]:
         return {package.id: package.version for package in self.manifests}
 

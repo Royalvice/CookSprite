@@ -66,7 +66,7 @@ from ..package import PackageError, build_package
 from ..prompting import COMPILER_VERSION
 from ..recipe_assembler import sealed_tool_descriptor, with_dimension_slots
 from ..recipes import (
-    FLUX2_BUNDLES,
+    MODEL_BUNDLES,
     Recipe,
     discover_recipes,
     imported_recipe_is_compatible,
@@ -2381,7 +2381,7 @@ def create_app(
         runtime: dict[str, Any],
         bundle_id: str,
     ) -> None:
-        bundle = FLUX2_BUNDLES[bundle_id]
+        bundle = MODEL_BUNDLES[bundle_id]
         files = list(bundle["files"])
         total_files = max(1, len(files))
         _update_model_download(
@@ -2455,7 +2455,7 @@ def create_app(
     @app.post("/api/v1/runtimes/{runtime_id}/model-bundles/{bundle_id}/download", status_code=202)
     def download_model_bundle(runtime_id: str, bundle_id: str) -> dict[str, Any]:
         runtime = runtime_or_404(runtime_id)
-        if bundle_id not in FLUX2_BUNDLES:
+        if bundle_id not in MODEL_BUNDLES:
             raise HTTPException(404, _detail("model_bundle_not_found", "unknown model bundle"))
         with model_download_lock:
             existing = next(

@@ -850,15 +850,14 @@ def test_animation_frames_normals_export(qa: QARun, browser: Browser) -> None:
             ).to_have_attribute("aria-label", diffuse_label),
             page,
         )
-        for index in range(6):
+        for index in range(3):
             button = page.locator(".hdri-strip button").nth(index)
             button.click()
             expect(button).to_have_attribute("aria-checked", "true")
-        page.locator(".light-arc-control input").fill("0")
-        page.locator(".light-arc-control input").fill("90")
-        page.locator(".light-arc-control input").fill("180")
-        page.locator(".lighting-controls input[type=range]").nth(0).fill("0")
-        page.locator(".lighting-controls input[type=range]").nth(0).fill("2")
+        page.locator(".lighting-controls input[type=range]").nth(0).fill("-1")
+        page.locator(".lighting-controls input[type=range]").nth(0).fill("1")
+        page.locator(".lighting-controls input[type=range]").nth(1).fill("-1")
+        page.locator(".lighting-controls input[type=range]").nth(1).fill("1")
         page.locator(".lighting-controls .toggle-icon").first.click()
         page.locator(".lighting-controls .toggle-icon").last.click()
         qa.step(
@@ -877,6 +876,11 @@ def test_animation_frames_normals_export(qa: QARun, browser: Browser) -> None:
                 ),
                 "lighting toggle labels are squeezed or clipped",
             ),
+            page,
+        )
+        qa.step(
+            "lighting has no visible light gizmo",
+            lambda: expect(page.locator(".screen-light-gizmo, .light-arc-control")).to_have_count(0),
             page,
         )
         mount_box = page.locator(".three-mount").bounding_box()

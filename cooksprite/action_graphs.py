@@ -558,7 +558,13 @@ def bind_action_task(
             "prompt_compile": bool(values.get("prompt_compile", True)),
             "count": max(1, min(int(values.get("count", 1)), 16)),
             "seed": seed,
-            "strength": max(0.01, min(float(values.get("strength", 0.65)), 1.0)),
+            "strength": max(
+                0.0,
+                min(
+                    float(values.get("strength", 1.0 if action_id == "normal.generate" else 0.65)),
+                    2.0 if action_id == "normal.generate" else 1.0,
+                ),
+            ),
             "pixel_enabled": action_id != "image.generate" and values.get("style") == "pixel",
             "flip_y": bool(values.get("flip_y", False)),
             "columns": int(values.get("columns", 0)),

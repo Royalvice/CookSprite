@@ -1,19 +1,20 @@
 from __future__ import annotations
 
 from ..domain import ToolPackageManifest
+from ..workflows.lotus_normal import lotus_normal_tool_graph
 from .contracts import tool
 
 MANIFEST = ToolPackageManifest(
     id="normal",
-    version="1.0.0",
+    version="1.1.0",
     license="Apache-2.0",
     tools=[
         tool(
             "normal",
             "normal_estimate",
             "Estimate normal map",
-            [("image", "Image")],
-            [("normal", "NormalMap", True)],
+            [("image", "Image"), ("mask", "Mask", False)],
+            [("normal", "NormalMap", True), ("mask", "Mask", False)],
             {"strength": {"type": "number"}, "flip_y": {"type": "boolean"}},
         ),
         tool(
@@ -25,10 +26,15 @@ MANIFEST = ToolPackageManifest(
         ),
     ],
     lowerings={
-        "cooksprite.normal_estimate": "CS_NormalEstimate",
         "cooksprite.make_sprite_pair": "CS_MakeSpritePair",
     },
-    node_classes=["CS_NormalEstimate", "CS_MakeSpritePair"],
+    sealed_graphs={"cooksprite.normal_estimate": lotus_normal_tool_graph()},
+    node_classes=[
+        "CS_LotusModelLoader",
+        "CS_LotusNormalPrepare",
+        "CS_LotusNormalFinalize",
+        "CS_MakeSpritePair",
+    ],
     workflows=["normal.generate:image-to-normal"],
     tasks=["normal.generate"],
     recipes=["cooksprite.normal"],

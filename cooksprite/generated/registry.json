@@ -2757,6 +2757,7 @@
       ],
       "recipes": [],
       "requirements": [],
+      "sealed_graphs": {},
       "tasks": [],
       "tools": [
         {
@@ -2842,6 +2843,7 @@
       ],
       "recipes": [],
       "requirements": [],
+      "sealed_graphs": {},
       "tasks": [],
       "tools": [
         {
@@ -2957,6 +2959,7 @@
       "requirements": [
         "scipy>=1.11,<2"
       ],
+      "sealed_graphs": {},
       "tasks": [
         "image.generate",
         "frame.redraw",
@@ -3023,6 +3026,7 @@
         "scikit-image>=0.22,<1",
         "scipy>=1.11,<2"
       ],
+      "sealed_graphs": {},
       "tasks": [
         "image.pixelize"
       ],
@@ -3217,6 +3221,7 @@
         "onnxruntime-gpu>=1.23.2,<1.24",
         "Pillow>=10,<13"
       ],
+      "sealed_graphs": {},
       "tasks": [
         "image.cutout"
       ],
@@ -3311,6 +3316,7 @@
         "imageio>=2.34",
         "imageio-ffmpeg>=0.5"
       ],
+      "sealed_graphs": {},
       "tasks": [
         "sheet.slice",
         "video.sample"
@@ -3406,17 +3412,192 @@
       "id": "normal",
       "license": "Apache-2.0",
       "lowerings": {
-        "cooksprite.make_sprite_pair": "CS_MakeSpritePair",
-        "cooksprite.normal_estimate": "CS_NormalEstimate"
+        "cooksprite.make_sprite_pair": "CS_MakeSpritePair"
       },
       "node_classes": [
-        "CS_NormalEstimate",
+        "CS_LotusModelLoader",
+        "CS_LotusNormalPrepare",
+        "CS_LotusNormalFinalize",
         "CS_MakeSpritePair"
       ],
       "recipes": [
         "cooksprite.normal"
       ],
       "requirements": [],
+      "sealed_graphs": {
+        "cooksprite.normal_estimate": {
+          "output": [
+            "finalize",
+            0
+          ],
+          "outputs": [
+            [
+              "finalize",
+              0
+            ],
+            [
+              "finalize",
+              1
+            ]
+          ],
+          "shared_nodes": [
+            "model",
+            "vae",
+            "conditioning",
+            "guider",
+            "noise",
+            "scheduler",
+            "sigma",
+            "sampler"
+          ],
+          "slots": {
+            "flip_y": "finalize.flip_y",
+            "image": "prepare.image",
+            "mask": "prepare.mask",
+            "strength": "finalize.strength"
+          },
+          "workflow": {
+            "conditioning": {
+              "class_type": "LotusConditioning",
+              "inputs": {}
+            },
+            "decode": {
+              "class_type": "VAEDecode",
+              "inputs": {
+                "samples": [
+                  "sample",
+                  0
+                ],
+                "vae": [
+                  "vae",
+                  0
+                ]
+              }
+            },
+            "encode": {
+              "class_type": "VAEEncode",
+              "inputs": {
+                "pixels": [
+                  "prepare",
+                  0
+                ],
+                "vae": [
+                  "vae",
+                  0
+                ]
+              }
+            },
+            "finalize": {
+              "class_type": "CS_LotusNormalFinalize",
+              "inputs": {
+                "flip_y": false,
+                "mask": [
+                  "prepare",
+                  1
+                ],
+                "prediction": [
+                  "decode",
+                  0
+                ],
+                "reference": [
+                  "prepare",
+                  2
+                ],
+                "strength": 1.0
+              }
+            },
+            "guider": {
+              "class_type": "BasicGuider",
+              "inputs": {
+                "conditioning": [
+                  "conditioning",
+                  0
+                ],
+                "model": [
+                  "model",
+                  0
+                ]
+              }
+            },
+            "model": {
+              "class_type": "CS_LotusModelLoader",
+              "inputs": {
+                "model_name": "lotus-normal-d-v1-1.safetensors",
+                "precision": "bf16"
+              }
+            },
+            "noise": {
+              "class_type": "DisableNoise",
+              "inputs": {}
+            },
+            "prepare": {
+              "class_type": "CS_LotusNormalPrepare",
+              "inputs": {
+                "image": ""
+              }
+            },
+            "sample": {
+              "class_type": "SamplerCustomAdvanced",
+              "inputs": {
+                "guider": [
+                  "guider",
+                  0
+                ],
+                "latent_image": [
+                  "encode",
+                  0
+                ],
+                "noise": [
+                  "noise",
+                  0
+                ],
+                "sampler": [
+                  "sampler",
+                  0
+                ],
+                "sigmas": [
+                  "sigma",
+                  0
+                ]
+              }
+            },
+            "sampler": {
+              "class_type": "KSamplerSelect",
+              "inputs": {
+                "sampler_name": "euler"
+              }
+            },
+            "scheduler": {
+              "class_type": "BasicScheduler",
+              "inputs": {
+                "denoise": 1.0,
+                "model": [
+                  "model",
+                  0
+                ],
+                "scheduler": "normal",
+                "steps": 1
+              }
+            },
+            "sigma": {
+              "class_type": "SetFirstSigma",
+              "inputs": {
+                "sigma": 999.0000000000002,
+                "sigmas": [
+                  "scheduler",
+                  0
+                ]
+              }
+            },
+            "vae": {
+              "class_type": "VAELoader",
+              "inputs": {
+                "vae_name": "lotus-normal-d-v1-1-vae.safetensors"
+              }
+            }
+          }
+        }
+      },
       "tasks": [
         "normal.generate"
       ],
@@ -3429,6 +3610,12 @@
               "persistable": false,
               "required": true,
               "type": "Image"
+            },
+            {
+              "name": "mask",
+              "persistable": false,
+              "required": false,
+              "type": "Mask"
             }
           ],
           "outputs": [
@@ -3437,6 +3624,12 @@
               "persistable": true,
               "required": true,
               "type": "NormalMap"
+            },
+            {
+              "name": "mask",
+              "persistable": false,
+              "required": true,
+              "type": "Mask"
             }
           ],
           "package_id": "normal",
@@ -3448,7 +3641,7 @@
               "type": "number"
             }
           },
-          "schema_hash": "5afdabdd8a0421cdb2e4cf9a71ca9f64cf810c62ce1f3efbe172f0a68edd5261",
+          "schema_hash": "4f0e3a9ebc272195c8f8929d444accdba1f27314820d742f464189e3d0af47ee",
           "source": "cooksprite",
           "title": "Estimate normal map",
           "version": 1
@@ -3491,7 +3684,7 @@
           "version": 1
         }
       ],
-      "version": "1.0.0",
+      "version": "1.1.0",
       "workflows": [
         "normal.generate:image-to-normal"
       ]
