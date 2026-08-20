@@ -971,8 +971,10 @@ h2 { font-size: 21px; }
 @keyframes added-frame { from { border-color: var(--confirm); box-shadow: 0 0 0 4px color-mix(in srgb, var(--confirm) 40%, transparent); transform: translateY(-4px); } }
 .extractor-controls select { width: 100%; min-height: 32px; border: 1px solid var(--line); background: var(--surface); color: var(--text); padding: 4px 7px; }
 .normal-workspace { grid-template-columns: minmax(230px, .55fr) minmax(0, 1.45fr); overflow: visible; }
-.normal-input .drop-target.has-artifact { grid-template-columns: 64px minmax(0, 1fr); grid-template-rows: auto auto auto; }
-.normal-input .drop-target.has-artifact .text-button { grid-column: 1 / -1; grid-row: 3; width: 100%; justify-content: center; }
+.normal-input .drop-target.has-artifact { grid-template-columns: 64px minmax(0, 1fr); grid-template-rows: auto auto; }
+.normal-input .drop-target.has-artifact > strong { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: normal; word-break: normal; }
+.normal-input .drop-target.has-artifact .drop-actions { grid-column: 1 / -1; grid-row: 2; width: 100%; justify-content: stretch; }
+.normal-input .drop-target.has-artifact .drop-actions .text-button { width: 100%; min-width: 0; justify-content: center; }
 .preview-mode-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-bottom: 7px; }
 .preview-mode-tabs button { min-height: 44px; display: flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--muted); font-size: 8px; font-weight: 800; }
 .preview-mode-tabs button.active { border-color: var(--aux); background: color-mix(in srgb, var(--aux) 12%, var(--bg)); color: var(--text); }
