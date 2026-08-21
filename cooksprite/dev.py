@@ -149,6 +149,7 @@ def registry_snapshot() -> dict[str, Any]:
             "Video",
             "Mask",
             "NormalMap",
+            "PixelGeometryPlan",
             "Palette",
             "SpritePair",
             "CookSpritePack",

@@ -143,24 +143,58 @@ def _stabilize_labels(
         return labels
     output = [labels[0].copy()]
     for index in range(1, len(labels)):
-        previous_l = evidences[index - 1].lab[..., 0].astype(np.float32)
-        current_l = evidences[index].lab[..., 0].astype(np.float32)
-        flow_buffer = np.empty((*previous_l.shape, 2), dtype=np.float32)
-        flow = cv2.calcOpticalFlowFarneback(previous_l, current_l, flow_buffer, 0.5, 2, 9, 2, 5, 1.1, 0)
-        height, width = current_l.shape
-        xx, yy = np.meshgrid(np.arange(width, dtype=np.float32), np.arange(height, dtype=np.float32))
-        warped = cv2.remap(output[-1].astype(np.float32), xx - flow[..., 0], yy - flow[..., 1], cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=-1).astype(np.int16)
-        magnitude = np.linalg.norm(flow, axis=2)
-        current = labels[index].copy()
-        valid = (warped >= 0) & foregrounds[index] & (magnitude <= 1.20)
-        if np.any(valid):
-            warped_lab = np.zeros_like(evidences[index].lab)
-            warped_lab[valid] = palette.lab[warped[valid]]
-            color_delta = np.linalg.norm(warped_lab - evidences[index].lab, axis=2)
-            inherit = valid & (color_delta <= 0.028) & (evidences[index].edge <= 0.35)
-            current[inherit] = warped[inherit]
-        output.append(current)
+        output.append(
+            stabilize_label_step(
+                output[-1],
+                evidences[index - 1],
+                labels[index],
+                evidences[index],
+                foregrounds[index],
+                palette,
+            )
+        )
     return output
+
+
+def stabilize_label_step(
+    previous_labels: np.ndarray,
+    previous_evidence: CellEvidence,
+    labels: np.ndarray,
+    evidence: CellEvidence,
+    foreground: np.ndarray,
+    palette: PaletteBuildResult,
+) -> np.ndarray:
+    """Apply the legacy Farneback inheritance gate to one next frame.
+
+    Keeping this public helper lets the long sequence compiler keep only the
+    previous logical frame in RAM while preserving the exact continuous-mode
+    optical-flow operation and its color/edge/foreground protection gates.
+    """
+
+    previous_l = previous_evidence.lab[..., 0].astype(np.float32)
+    current_l = evidence.lab[..., 0].astype(np.float32)
+    flow_buffer = np.empty((*previous_l.shape, 2), dtype=np.float32)
+    flow = cv2.calcOpticalFlowFarneback(previous_l, current_l, flow_buffer, 0.5, 2, 9, 2, 5, 1.1, 0)
+    height, width = current_l.shape
+    xx, yy = np.meshgrid(np.arange(width, dtype=np.float32), np.arange(height, dtype=np.float32))
+    warped = cv2.remap(
+        previous_labels.astype(np.float32),
+        xx - flow[..., 0],
+        yy - flow[..., 1],
+        cv2.INTER_NEAREST,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=-1,
+    ).astype(np.int16)
+    magnitude = np.linalg.norm(flow, axis=2)
+    current = labels.copy()
+    valid = (warped >= 0) & foreground & (magnitude <= 1.20)
+    if np.any(valid):
+        warped_lab = np.zeros_like(evidence.lab)
+        warped_lab[valid] = palette.lab[warped[valid]]
+        color_delta = np.linalg.norm(warped_lab - evidence.lab, axis=2)
+        inherit = valid & (color_delta <= 0.028) & (evidence.edge <= 0.35)
+        current[inherit] = warped[inherit]
+    return current
 
 
 def compile_continuous(

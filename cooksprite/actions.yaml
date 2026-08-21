@@ -247,6 +247,7 @@ actions:
       en: {name: Generate normals, description: Generate same-size normals for an image or animation track}
     accepts:
       source: {type: [Image, FrameSeq, SpriteSheet], required: true, max: 1}
+      pixel_plan: {type: PixelGeometryPlan, required: false, max: 1}
     produces: [NormalMap]
     controls:
       - {id: strength, type: range, default: 1, min: 0, max: 2, step: 0.05, i18n: {zh-CN: {name: 法线强度}, en: {name: Normal strength}}}
@@ -308,8 +309,8 @@ actions:
       zh-CN: {name: 像素化图片, description: 把高分辨率图片转换为像素化图片}
       en: {name: Pixelize image, description: Convert a high-resolution image into pixel art}
     accepts:
-      source: {type: Image, required: true, max: 1}
-    produces: [Image]
+      source: {type: [Image, FrameSeq], required: true, max: 1}
+    produces: [Image, FrameSeq]
     controls:
       - id: target_size
         type: select
@@ -342,6 +343,17 @@ actions:
         i18n:
           zh-CN: {name: 描边颜色, description: 描边开启时使用的颜色}
           en: {name: Outline color, description: Color used when outline is enabled}
+      - id: temporal_mode
+        type: select
+        default: auto
+        i18n:
+          zh-CN: {name: 时序处理, description: 仅多帧序列可用；自动模式只对连续视频启用光流}
+          en: {name: Temporal mode, description: Only used for frame sequences; auto enables flow only for continuous sampled video}
+        options:
+          - {id: auto, i18n: {zh-CN: {name: 自动, description: 连续视频使用光流，其他序列共享风格}, en: {name: Auto, description: Flow for sampled video; shared style otherwise}}}
+          - {id: shared, i18n: {zh-CN: {name: 共享风格, description: 共享几何和调色板，不使用光流}, en: {name: Shared style, description: Shared geometry and palette without flow}}}
+          - {id: flow, i18n: {zh-CN: {name: 连续视频（光流）, description: 仅适用于每秒至少 8 帧的连续视频取帧}, en: {name: Continuous video (flow), description: Only for sampled continuous video at 8 FPS or above}}}
+          - {id: independent, i18n: {zh-CN: {name: 逐帧, description: 每帧独立像素化}, en: {name: Independent, description: Pixelize every frame independently}}}
 
   - id: image.cutout
     i18n:

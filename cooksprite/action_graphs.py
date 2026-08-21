@@ -234,6 +234,43 @@ def _normal_workflow(runtime_id: str, recipe: Recipe) -> WorkflowDefinition:
     )
 
 
+def _normal_pixel_plan_workflow(runtime_id: str, recipe: Recipe) -> WorkflowDefinition:
+    """Lotus followed by a source-verified PixelGeometryPlan projection."""
+
+    return WorkflowDefinition(
+        id=f"{recipe.id}.normal.generate.pixel-plan",
+        title=f"{recipe.label} · normal.generate · pixel plan",
+        runtime_id=runtime_id,
+        inputs={
+            "source": "ImageBatch",
+            "pixel_plan": "PixelGeometryPlan",
+            "frame_index": "Number",
+            "strength": "Number",
+            "flip_y": "Boolean",
+        },
+        nodes=[
+            ToolNode(
+                id="normal",
+                tool="cooksprite.normal_estimate",
+                inputs={"image": input_ref("source")},
+                params={"strength": input_ref("strength"), "flip_y": input_ref("flip_y")},
+            ),
+            ToolNode(
+                id="project",
+                tool="cooksprite.project_normal_to_pixel_plan",
+                inputs={
+                    "source": input_ref("source"),
+                    "normal": output_ref("normal", "normal"),
+                    "pixel_plan": input_ref("pixel_plan"),
+                },
+                params={"frame_index": input_ref("frame_index")},
+            ),
+        ],
+        outputs={"normal": output_ref("project", "normal")},
+        output_sources={"normal": input_ref("source")},
+    )
+
+
 def _sprite_pixel_workflow(runtime_id: str, recipe: Recipe) -> WorkflowDefinition:
     return WorkflowDefinition(
         id=f"{recipe.id}.sprite.pixelize",
@@ -378,6 +415,45 @@ def _pixel_workflow(runtime_id: str, recipe: Recipe) -> WorkflowDefinition:
     )
 
 
+def _pixel_sequence_workflow(runtime_id: str, recipe: Recipe) -> WorkflowDefinition:
+    """Stream a FrameSeq through the long-sequence pixel compiler."""
+
+    return WorkflowDefinition(
+        id=f"{recipe.id}.image.pixelize.sequence",
+        title=f"{recipe.label} · image.pixelize · sequence",
+        runtime_id=runtime_id,
+        inputs={
+            "source": "FrameSeq",
+            "target_size": "Number",
+            "palette_budget": "Number",
+            "outline": "Boolean",
+            "outline_color": "Text",
+            "temporal_mode": "Text",
+        },
+        nodes=[
+            ToolNode(
+                id="pixel",
+                tool="cooksprite.pixelize_sequence",
+                inputs={"source": input_ref("source")},
+                params={
+                    "target_size": input_ref("target_size"),
+                    "target_width": literal(128),
+                    "target_height": literal(128),
+                    "profile": literal("fidelity"),
+                    "palette_budget": input_ref("palette_budget"),
+                    "padding_x": literal(-1),
+                    "padding_y": literal(-1),
+                    "outline": input_ref("outline"),
+                    "outline_color": input_ref("outline_color"),
+                    "temporal_mode": input_ref("temporal_mode"),
+                },
+            )
+        ],
+        outputs={"frames": output_ref("pixel", "frames"), "plan": output_ref("pixel", "plan")},
+        output_sources={"frames": input_ref("source"), "plan": input_ref("source")},
+    )
+
+
 def _cutout_workflow(runtime_id: str, recipe: Recipe) -> WorkflowDefinition:
     """Build ComfyUI's official BiRefNet background-removal workflow."""
 
@@ -437,6 +513,10 @@ def materialize_recipe_workflows(
         }
     elif recipe.family == "cooksprite.normal":
         definitions = {"normal.generate:image-to-normal": _normal_workflow(runtime_id, recipe)}
+        if "image-to-pixel-normal" in recipe.modes:
+            definitions["normal.generate:image-to-pixel-normal"] = _normal_pixel_plan_workflow(
+                runtime_id, recipe
+            )
     elif recipe.family == "cooksprite.sprite":
         definitions = {
             "sprite.pixelize:image-to-sprite-pair": _sprite_pixel_workflow(runtime_id, recipe)
@@ -447,6 +527,10 @@ def materialize_recipe_workflows(
         definitions = {"video.sample:video-to-frames": _video_workflow(runtime_id, recipe)}
     elif recipe.family == "cooksprite.pixel":
         definitions = {"image.pixelize:image-to-image": _pixel_workflow(runtime_id, recipe)}
+        if "frames-to-frames" in recipe.modes:
+            definitions["image.pixelize:frames-to-frames"] = _pixel_sequence_workflow(
+                runtime_id, recipe
+            )
     elif recipe.family == "cooksprite.alpha":
         definitions = {"image.cutout:image-to-image": _cutout_workflow(runtime_id, recipe)}
     elif recipe.family == "comfy.flux2-klein":
@@ -541,6 +625,8 @@ def bind_action_task(
         "palette_budget",
         "outline",
         "outline_color",
+        "temporal_mode",
+        "frame_index",
         "flip_y",
         "columns",
         "rows",
@@ -578,7 +664,14 @@ def bind_action_task(
     task_outputs: dict[str, ValueRef] = {}
 
     source_slots: list[tuple[str, str]] = []
-    if action_id == "normal.generate":
+    static_artifact_slots: list[tuple[str, str]] = []
+    if action_id == "normal.generate" and artifacts.get("pixel_plan"):
+        # Plan-backed normal generation is intentionally one human-selected
+        # source keyframe.  It must not silently turn into a 100+ frame Lotus
+        # batch or invent automatic keyframe selection.
+        source_slots = [("source", artifacts["source"][0])]
+        static_artifact_slots = [("pixel_plan", artifacts["pixel_plan"][0])]
+    elif action_id == "normal.generate":
         source_slots = [
             (f"source_{index}", artifact_id)
             for index, artifact_id in enumerate(artifacts["source"])
@@ -590,6 +683,8 @@ def bind_action_task(
         ]
     else:
         for slot, artifact_ids in artifacts.items():
+            if slot.startswith("__"):
+                continue
             if artifact_ids:
                 source_slots.append((slot, artifact_ids[0]))
         if not source_slots:
@@ -638,6 +733,8 @@ def bind_action_task(
             "palette_budget": int(values.get("palette_budget", 32)),
             "outline": bool(values.get("outline", False)),
             "outline_color": _outline_color(values.get("outline_color", "#000000")),
+            "temporal_mode": str(values.get("temporal_mode", "auto")),
+            "frame_index": int(values.get("frame_index", 0)),
         }
     )
 
@@ -659,6 +756,13 @@ def bind_action_task(
             task_inputs[input_name] = port_type
             run_inputs[input_name] = ValueRef(artifact=artifact_id)
             call_inputs[workflow_slot] = input_ref(input_name)
+        for static_slot, artifact_id in static_artifact_slots:
+            port_type = workflow.inputs.get(static_slot)
+            if not port_type:
+                raise ValueError(f"Recipe {recipe.id} does not declare artifact input {static_slot}")
+            task_inputs.setdefault(static_slot, port_type)
+            run_inputs.setdefault(static_slot, ValueRef(artifact=artifact_id))
+            call_inputs[static_slot] = input_ref(static_slot)
         for name, port_type in workflow.inputs.items():
             if name in call_inputs:
                 continue

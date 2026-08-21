@@ -6,6 +6,7 @@ import type { ActionDescriptor, ActionOption, Locale } from "../api/generated";
 const props = defineProps<{
   action?: ActionDescriptor;
   values: Record<string, unknown>;
+  showTemporal?: boolean;
 }>();
 const emit = defineEmits<{
   change: [id: string, value: unknown];
@@ -14,6 +15,7 @@ const { locale } = useI18n();
 
 const controls = computed(() => props.action?.controls.filter((control) => (
   ["target_size", "palette_budget", "outline", "outline_color"].includes(control.id)
+  || (props.showTemporal && control.id === "temporal_mode")
 )) || []);
 
 function options(control: ActionDescriptor["controls"][number]): ActionOption[] {
@@ -70,12 +72,17 @@ function options(control: ActionDescriptor["controls"][number]): ActionOption[] 
         <span>{{ control.i18n[locale as Locale].name }}</span>
         <select
           :value="String(values[control.id] ?? control.default)"
+          :aria-describedby="control.i18n[locale as Locale].description ? `${control.id}-description` : undefined"
           @change="emit('change', control.id, ($event.target as HTMLSelectElement).value)"
         >
           <option v-for="option in options(control)" :key="option.id" :value="option.id">
             {{ option.i18n[locale as Locale].name }}
           </option>
         </select>
+        <small
+          v-if="control.id === 'temporal_mode' && control.i18n[locale as Locale].description"
+          :id="`${control.id}-description`"
+        >{{ control.i18n[locale as Locale].description }}</small>
       </template>
     </label>
   </div>

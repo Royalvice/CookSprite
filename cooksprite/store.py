@@ -688,7 +688,15 @@ class Store:
         return [self.artifact_ref(row, project_id) for row in rows]
 
     def project_artifacts(self, project_id: str) -> list[ArtifactRef]:
-        items = self.artifacts(project_id=project_id)
+        # PixelGeometryPlan and other bridge sidecars are operational state,
+        # not user-facing project media.  Keep them addressable by ID for a
+        # later ComfyUI graph, but never surface or materialize them as a
+        # project asset.
+        items = [
+            item
+            for item in self.artifacts(project_id=project_id)
+            if not item.meta.get("system")
+        ]
         self.materialize_project(project_id)
         return items
 
@@ -714,7 +722,10 @@ class Store:
                 "WHERE pa.project_id=? ORDER BY a.created_at ASC,a.id ASC",
                 (project_id,),
             ).fetchall()
-            self._write_project_manifest(project_id, directory, rows)
+            visible_rows = [
+                row for row in rows if not self.artifact_ref(row, project_id).meta.get("system")
+            ]
+            self._write_project_manifest(project_id, directory, visible_rows)
             return directory
 
     def materialize_project(self, project_id: str) -> Path:
@@ -758,11 +769,18 @@ class Store:
         ).fetchone()
         if not project_row or not document_row:
             return
-        artifact_rows = rows or self.db.execute(
-            "SELECT a.* FROM artifacts a JOIN project_artifacts pa ON pa.artifact_id=a.id "
-            "WHERE pa.project_id=? ORDER BY a.created_at ASC,a.id ASC",
-            (project_id,),
-        ).fetchall()
+        artifact_rows = rows
+        if artifact_rows is None:
+            artifact_rows = self.db.execute(
+                "SELECT a.* FROM artifacts a JOIN project_artifacts pa ON pa.artifact_id=a.id "
+                "WHERE pa.project_id=? ORDER BY a.created_at ASC,a.id ASC",
+                (project_id,),
+            ).fetchall()
+            artifact_rows = [
+                row
+                for row in artifact_rows
+                if not self.artifact_ref(row, project_id).meta.get("system")
+            ]
         artifacts = []
         for row in artifact_rows:
             item = dict(row)

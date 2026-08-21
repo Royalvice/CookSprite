@@ -37,7 +37,7 @@ class PlanBuilder:
         # Alpha is an internal Image binding detail.  It follows an IMAGE
         # reference through the graph without becoming a public Action input.
         self._image_masks: dict[tuple[str, int], list[Any]] = {}
-        self._loaded_artifacts: dict[tuple[str, bool, bool], list[Any]] = {}
+        self._loaded_artifacts: dict[tuple[str, bool, bool, bool, bool], list[Any]] = {}
 
     def add(self, class_type: str, inputs: dict[str, Any]) -> str:
         self.sequence += 1
@@ -46,11 +46,25 @@ class PlanBuilder:
         return node_id
 
     def load_artifact(
-        self, artifact_id: str, *, video: bool = False, image_batch: bool = False
+        self,
+        artifact_id: str,
+        *,
+        video: bool = False,
+        image_batch: bool = False,
+        frame_sequence: bool = False,
+        pixel_plan: bool = False,
     ) -> list[Any]:
         if not self.bridge or not self.run_id:
             raise ValueError("artifact references require a signed runtime bridge")
-        cache_key = (str(artifact_id), bool(video), bool(image_batch))
+        if sum((bool(video), bool(image_batch), bool(frame_sequence), bool(pixel_plan))) > 1:
+            raise ValueError("artifact bridge loading modes are mutually exclusive")
+        cache_key = (
+            str(artifact_id),
+            bool(video),
+            bool(image_batch),
+            bool(frame_sequence),
+            bool(pixel_plan),
+        )
         if cache_key in self._loaded_artifacts:
             return list(self._loaded_artifacts[cache_key])
         class_type = "CS_LoadVideoArtifact" if video else "CS_LoadArtifact"
@@ -61,12 +75,19 @@ class PlanBuilder:
                 input_name: self.bridge.download_url(
                     artifact_id,
                     self.run_id,
-                    expand="frames" if image_batch and not video else "",
+                    expand=(
+                        "frames"
+                        if image_batch and not video
+                        else "sequence"
+                        if frame_sequence and not video
+                        else ""
+                    ),
                 )
             },
         )
-        image_ref = [node_id, 0]
-        if not video:
+        output_index = 2 if frame_sequence else 3 if pixel_plan else 0
+        image_ref = [node_id, output_index]
+        if not video and not frame_sequence and not pixel_plan:
             self._image_masks[(node_id, 0)] = [node_id, 1]
         self._loaded_artifacts[cache_key] = image_ref
         return image_ref
@@ -98,19 +119,25 @@ class PlanBuilder:
     ) -> str:
         if not self.bridge or not self.run_id:
             raise ValueError("persisted outputs require a signed runtime bridge")
-        storage_kind = "Image" if kind == "ImageBatch" else kind
+        storage_kind = "Image" if kind in {"ImageBatch", "FrameSeq"} else kind
+        inputs: dict[str, Any] = {
+            "upload_url": self.bridge.upload_url(
+                self.run_id,
+                storage_kind,
+                source_artifact,
+            ),
+        }
+        if kind == "FrameSeq":
+            inputs["sequence"] = value
+        elif kind == "PixelGeometryPlan":
+            inputs["pixel_plan"] = value
+        else:
+            inputs["value"] = value
         node_id = self.add(
             "CS_StoreArtifact",
-            {
-                "value": value,
-                "upload_url": self.bridge.upload_url(
-                    self.run_id,
-                    storage_kind,
-                    source_artifact,
-                ),
-            },
+            inputs,
         )
-        mask = self.mask_for_image(value)
+        mask = self.mask_for_image(value) if kind not in {"FrameSeq", "PixelGeometryPlan"} else None
         if mask is not None:
             self.graph[node_id]["inputs"]["mask"] = mask
         self.sinks.append(node_id)

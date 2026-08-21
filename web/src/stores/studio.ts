@@ -537,7 +537,7 @@ export const useStudioStore = defineStore("studio", () => {
   };
 });
 
-const SEQUENCE_ACTIONS = new Set(["animation.generate", "sheet.slice", "video.sample"]);
+const SEQUENCE_ACTIONS = new Set(["animation.generate", "sheet.slice", "video.sample", "image.pixelize"]);
 
 function readableError(reason: unknown): string {
   if (reason instanceof ApiError) return reason.detail.message || reason.message;

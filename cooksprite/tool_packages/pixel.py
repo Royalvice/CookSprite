@@ -7,7 +7,7 @@ PIXEL_PROFILES = ["production", "fidelity", "balanced", "graphic"]
 
 MANIFEST = ToolPackageManifest(
     id="pixel",
-    version="2.0.0",
+    version="2.1.0",
     license="MIT",
     requirements=[
         "numpy>=1.26,<3",
@@ -82,14 +82,37 @@ MANIFEST = ToolPackageManifest(
                 "sequence_mode": {"type": "string", "enum": ["auto", "independent", "chunk", "continuous"]},
             },
         ),
+        tool(
+            "pixel",
+            "pixelize_sequence",
+            "Stream a long FrameSeq through deterministic shared or optical-flow pixelization",
+            [("source", "FrameSeq")],
+            [("frames", "FrameSeq", True), ("plan", "PixelGeometryPlan", True)],
+            {
+                "target_size": {"type": "integer", "min": 16, "max": 512},
+                "target_width": {"type": "integer", "min": 16, "max": 512},
+                "target_height": {"type": "integer", "min": 16, "max": 512},
+                "profile": {"type": "string", "enum": PIXEL_PROFILES},
+                "outline": {"type": "boolean"},
+                "outline_color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
+                "palette_budget": {"type": "integer", "min": 0, "max": 256},
+                "padding_x": {"type": "integer", "min": -1, "max": 256},
+                "padding_y": {"type": "integer", "min": -1, "max": 256},
+                "temporal_mode": {
+                    "type": "string",
+                    "enum": ["auto", "shared", "flow", "independent"],
+                },
+            },
+        ),
     ],
     lowerings={
         "cooksprite.pixelize": "CS_Pixelize",
         "cooksprite.pixel_snap": "CS_PixelSnap",
         "cooksprite.pixelize_pair": "CS_PixelizePair",
+        "cooksprite.pixelize_sequence": "CS_PixelizeSequence",
     },
-    node_classes=["CS_Pixelize", "CS_PixelSnap", "CS_PixelizePair"],
-    workflows=["image.pixelize:image-to-image", "sprite.pixelize:image-to-sprite-pair"],
+    node_classes=["CS_Pixelize", "CS_PixelSnap", "CS_PixelizePair", "CS_PixelizeSequence"],
+    workflows=["image.pixelize:image-to-image", "image.pixelize:frames-to-frames", "sprite.pixelize:image-to-sprite-pair"],
     tasks=["image.pixelize", "sprite.pixelize"],
     recipes=["cooksprite.pixel", "cooksprite.sprite"],
 )

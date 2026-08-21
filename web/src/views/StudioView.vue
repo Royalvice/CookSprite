@@ -73,10 +73,33 @@ const sourceArtifact = computed(() => {
   const id = Array.isArray(raw) ? raw[0] : raw;
   return store.artifactById.get(String(id || ""));
 });
+const selectedNormalSource = computed(() => {
+  const sequence = normalSequence.value;
+  if (sourceArtifact.value?.kind === "FrameSeq" && sequence?.frames.length) {
+    return sequence.frames[Math.min(normalFrameIndex.value, sequence.frames.length - 1)];
+  }
+  return sourceArtifact.value;
+});
+// A plan is deliberately discovered from the chosen original frame rather
+// than from a generic history lookup.  This keeps the user in control of the
+// keyframe and lets the API reject stale/mismatched geometry explicitly.
+const normalPixelPlanId = computed(() => {
+  const value = selectedNormalSource.value?.meta.latest_pixel_plan_artifact;
+  return typeof value === "string" ? value : "";
+});
+const pixelPlanDiffuse = computed(() => {
+  const value = normalResultNormals.value.find((item) => (
+    item.meta.pixel_plan_artifact === normalPixelPlanId.value
+    && Array.isArray(item.meta.paired_diffuses)
+  ))?.meta.paired_diffuses;
+  const id = Array.isArray(value) ? value[0] : "";
+  return typeof id === "string" ? store.artifactById.get(id) : undefined;
+});
 const normalFrames = computed(() => normalResultSequence.value?.frames
   || normalSequence.value?.frames
   || (normalResultImage.value ? [normalResultImage.value] : sourceArtifact.value?.kind === "Image" ? [sourceArtifact.value] : []));
 const diffuse = computed(() => {
+  if (stage.value === "normal" && pixelPlanDiffuse.value) return pixelPlanDiffuse.value;
   if (stage.value === "normal" && normalFrames.value.length) return normalFrames.value[Math.min(normalFrameIndex.value, normalFrames.value.length - 1)];
   if (sourceArtifact.value?.kind === "Image" || sourceArtifact.value?.kind === "SpriteSheet") return sourceArtifact.value;
   if (selectedArtifact.value?.kind === "Image") return selectedArtifact.value;
@@ -135,7 +158,15 @@ const animationCanRun = computed(() => {
     : modes.has("t2v") || modes.has("t2i-sequence");
 });
 const normalRunAction = computed(() => normalPixelize.value ? spritePixelAction.value : normalAction.value);
-const normalCanRun = computed(() => Boolean(sourceArtifact.value && normalRunAction.value?.available && !running.value));
+const normalPlanSupported = computed(() => !normalPixelPlanId.value || Boolean(
+  normalAction.value?.models.some((model) => model.modes.includes("image-to-pixel-normal"))
+));
+const normalCanRun = computed(() => Boolean(
+  (normalPixelize.value ? sourceArtifact.value : selectedNormalSource.value)
+  && normalRunAction.value?.available
+  && normalPlanSupported.value
+  && !running.value
+));
 
 function fillDefaults(target: Record<string, unknown>, action = activeAction.value) {
   if (!action) return;
@@ -209,6 +240,16 @@ watch(() => store.lastOutputsByAction["sprite.pixelize"], async (outputs) => {
     selectedArtifact.value = finalSource;
   }
   normalFrameIndex.value = 0;
+});
+watch(() => store.lastOutputsByAction["normal.generate"], (outputs) => {
+  if (!outputs?.length) return;
+  normalResultNormals.value = outputs.filter((item) => item.kind === "NormalMap");
+  const paired = normalResultNormals.value[0]?.meta.paired_diffuses;
+  const pairedId = Array.isArray(paired) ? paired[0] : "";
+  normalResultImage.value = typeof pairedId === "string"
+    ? store.artifactById.get(pairedId) || null
+    : null;
+  normalResultSequence.value = null;
 });
 
 function readArtifactDimensions(artifact: ArtifactRef | null) {
@@ -349,7 +390,7 @@ async function runAnimation() {
   finally { window.setTimeout(() => { reveal.value = false; }, 500); }
 }
 async function normalRun() {
-  if (!sourceArtifact.value || !normalCanRun.value) return;
+  if (!sourceArtifact.value || !selectedNormalSource.value || !normalCanRun.value) return;
   clearNormalResult();
   const actionId = normalPixelize.value ? "sprite.pixelize" : "normal.generate";
   const values = normalPixelize.value
@@ -358,7 +399,12 @@ async function normalRun() {
       normalPixelValues.value[control.id] ?? control.default,
     ]))
     : { strength: 1, flip_y: false };
-  await store.runAction(actionId, { source: sourceArtifact.value.id }, values);
+  const normalInputs: Record<string, string | string[]> = normalPixelize.value
+    ? { source: sourceArtifact.value.id }
+    : normalPixelPlanId.value
+      ? { source: selectedNormalSource.value.id, pixel_plan: normalPixelPlanId.value }
+      : { source: sourceArtifact.value.id };
+  await store.runAction(actionId, normalInputs, values);
 }
 function setNormalPixelValue(id: string, value: unknown) { normalPixelValues.value[id] = value; }
 function clearNormalResult() {
@@ -591,6 +637,9 @@ function downloadPack(artifact: ArtifactRef) { const anchor = document.createEle
                 @change="setNormalPixelValue"
               />
             </section>
+            <p v-if="!normalPixelize && normalPixelPlanId" class="normal-pixel-plan-status" role="status">
+              {{ $t("studio.pixelPlanAttached") }}
+            </p>
 
             <div v-if="normalFrames.length > 1" class="normal-sequence-controls">
               <button class="arcade-button" type="button" @click="toggleNormalPlayback">

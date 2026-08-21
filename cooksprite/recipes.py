@@ -33,6 +33,7 @@ RECIPE_SLOT_TYPES = {
     "Video",
     "Mask",
     "NormalMap",
+    "PixelGeometryPlan",
     "Palette",
     "SpritePair",
     "CookSpritePack",
@@ -48,6 +49,7 @@ RECIPE_OUTPUT_TYPES = {
     "Video",
     "Mask",
     "NormalMap",
+    "PixelGeometryPlan",
     "Palette",
     "SpritePair",
     "CookSpritePack",
@@ -67,6 +69,7 @@ CORE_IMAGE_NODES = {
 
 CORE_PIXEL_NODES = {"CS_LoadArtifact", "CS_StoreArtifact", "CS_Pixelize"}
 CORE_PIXEL_PAIR_NODES = CORE_PIXEL_NODES | {"CS_PixelizePair"}
+CORE_PIXEL_SEQUENCE_NODES = CORE_PIXEL_NODES | {"CS_PixelizeSequence"}
 CORE_ALPHA_NODES = {
     "CS_LoadArtifact",
     "CS_StoreArtifact",
@@ -113,6 +116,7 @@ LOTUS_NORMAL_NODES = {
     "SamplerCustomAdvanced",
     "VAEDecode",
 }
+LOTUS_NORMAL_PLAN_NODES = LOTUS_NORMAL_NODES | {"CS_ProjectNormalToPixelPlan"}
 OFFICIAL_ALPHA_MODEL = "birefnet.safetensors"
 T2I_ONLY_CHECKPOINTS = frozenset(
     {
@@ -573,7 +577,11 @@ def discover_recipes(report: dict[str, Any]) -> list[Recipe]:
                 label="Lotus Normal D v1.1 · BF16",
                 family="cooksprite.normal",
                 actions=["normal.generate"],
-                modes=["image-to-normal"],
+                modes=(
+                    ["image-to-normal", "image-to-pixel-normal"]
+                    if LOTUS_NORMAL_PLAN_NODES.issubset(nodes)
+                    else ["image-to-normal"]
+                ),
                 checkpoint=LOTUS_NORMAL_MODEL,
                 source="discovered",
                 model_bundle=LOTUS_NORMAL_BUNDLE_ID,
@@ -595,7 +603,7 @@ def discover_recipes(report: dict[str, Any]) -> list[Recipe]:
                     model_files=list(lotus_bundle["files"]),
                     provenance={
                         "normal": dict(LOTUS_NORMAL_PROVENANCE),
-                        "pixel": {"package": "cooksprite.pixel", "version": "2.0.0"},
+                        "pixel": {"package": "cooksprite.pixel", "version": "2.1.0"},
                     },
                 )
             )
@@ -606,7 +614,11 @@ def discover_recipes(report: dict[str, Any]) -> list[Recipe]:
                 label="CookSprite Pixelize · ComfyUI",
                 family="cooksprite.pixel",
                 actions=["image.pixelize"],
-                modes=["image-to-image"],
+                modes=(
+                    ["image-to-image", "frames-to-frames"]
+                    if CORE_PIXEL_SEQUENCE_NODES.issubset(nodes)
+                    else ["image-to-image"]
+                ),
             )
         )
     if CORE_ALPHA_NODES.issubset(nodes) and OFFICIAL_ALPHA_MODEL in set(
@@ -813,11 +825,11 @@ def recipe_mode(action_id: str, inputs: dict[str, list[str]]) -> str:
     if action_id == "animation.generate":
         return "i2v" if inputs.get("character") else "t2v"
     return {
-        "normal.generate": "image-to-normal",
+        "normal.generate": "image-to-pixel-normal" if inputs.get("pixel_plan") else "image-to-normal",
         "sprite.pixelize": "image-to-sprite-pair",
         "sheet.slice": "sheet-to-frames",
         "video.sample": "video-to-frames",
-        "image.pixelize": "image-to-image",
+        "image.pixelize": "frames-to-frames" if inputs.get("__source_kind") == ["FrameSeq"] else "image-to-image",
         "image.cutout": "image-to-image",
     }.get(action_id, "")
 

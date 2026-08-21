@@ -169,7 +169,7 @@ def test_server_restart_marks_unsubmitted_run_as_explicitly_retryable(tmp_path):
 def test_registry_projections_and_node_package_manifest_are_in_sync(tmp_path):
     assert check_generated()
     report = check_tool_packages()
-    assert report["tools"] == 11
+    assert report["tools"] == 13
     client = TestClient(create_app(tmp_path, allow_test_runtime=True))
     packages = client.get("/api/v1/tool-packages").json()
     assert {item["id"] for item in packages} == {

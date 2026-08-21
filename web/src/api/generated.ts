@@ -2,7 +2,7 @@
 export type Locale = "zh-CN" | "en";
 export type ProjectType = "static" | "character" | "tileset";
 export type RunStatus = "queued" | "running" | "cancel_requested" | "cancelled" | "succeeded" | "failed";
-export type ArtifactKind = "Image" | "ImageBatch" | "SpriteSheet" | "FrameSeq" | "Video" | "NormalMap" | "CookSpritePack" | string;
+export type ArtifactKind = "Image" | "ImageBatch" | "SpriteSheet" | "FrameSeq" | "Video" | "NormalMap" | "PixelGeometryPlan" | "CookSpritePack" | string;
 export type RuntimePhase = "queued" | "starting" | "loading_model" | "sampling" | "processing" | "saving" | "completed" | "failed" | "cancelled" | "unknown";
 export type RuntimeModelStatus = "unknown" | "loading" | "ready" | "failed";
 export type RuntimeNodeKind = "model" | "conditioning" | "sampling" | "processing" | "artifact" | "other";
@@ -54,6 +54,33 @@ export interface FrameSequenceManifest {
   view?: "level" | "top45";
   direction?: Direction;
   frames: string[];
+  temporal?: FrameSequenceTemporal;
+}
+export interface FrameSequenceTemporal {
+  source: "sampled_video";
+  sample_fps: number;
+}
+export interface PixelGeometryPlanFrame {
+  source_artifact: string;
+  source_sha256: string;
+  canvas: [number, number];
+}
+export interface PixelGeometryPlanManifest {
+  schema: "cooksprite.pixel-geometry-plan/v1";
+  algorithm: "cooksprite.pixel-compiler/v2";
+  source_order_sha256: string;
+  frames: PixelGeometryPlanFrame[];
+  canvas: [number, number];
+  transform: Record<string, unknown>;
+  target: [number, number];
+  padding: [number, number];
+  supersample: number;
+  sampling: "cooksprite.cell-sampling/v1";
+  temporal_mode: "shared" | "flow" | "independent";
+  profile: string;
+  palette_budget: number;
+  outline: boolean;
+  outline_color?: string;
 }
 export interface FrameSequenceView {
   artifact: ArtifactRef;

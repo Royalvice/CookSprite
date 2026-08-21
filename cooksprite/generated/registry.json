@@ -2324,6 +2324,11 @@
     },
     {
       "accepts": {
+        "pixel_plan": {
+          "max": 1,
+          "required": false,
+          "type": "PixelGeometryPlan"
+        },
         "source": {
           "max": 1,
           "required": true,
@@ -2659,7 +2664,10 @@
         "source": {
           "max": 1,
           "required": true,
-          "type": "Image"
+          "type": [
+            "Image",
+            "FrameSeq"
+          ]
         }
       },
       "controls": [
@@ -2826,6 +2834,88 @@
           "options_range": null,
           "step": null,
           "type": "color"
+        },
+        {
+          "advanced": false,
+          "default": "auto",
+          "i18n": {
+            "en": {
+              "description": "Only used for frame sequences; auto enables flow only for continuous sampled video",
+              "name": "Temporal mode"
+            },
+            "zh-CN": {
+              "description": "仅多帧序列可用；自动模式只对连续视频启用光流",
+              "name": "时序处理"
+            }
+          },
+          "id": "temporal_mode",
+          "max": null,
+          "min": null,
+          "options": [
+            {
+              "categories": [],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Flow for sampled video; shared style otherwise",
+                  "name": "Auto"
+                },
+                "zh-CN": {
+                  "description": "连续视频使用光流，其他序列共享风格",
+                  "name": "自动"
+                }
+              },
+              "id": "auto"
+            },
+            {
+              "categories": [],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Shared geometry and palette without flow",
+                  "name": "Shared style"
+                },
+                "zh-CN": {
+                  "description": "共享几何和调色板，不使用光流",
+                  "name": "共享风格"
+                }
+              },
+              "id": "shared"
+            },
+            {
+              "categories": [],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Only for sampled continuous video at 8 FPS or above",
+                  "name": "Continuous video (flow)"
+                },
+                "zh-CN": {
+                  "description": "仅适用于每秒至少 8 帧的连续视频取帧",
+                  "name": "连续视频（光流）"
+                }
+              },
+              "id": "flow"
+            },
+            {
+              "categories": [],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "Pixelize every frame independently",
+                  "name": "Independent"
+                },
+                "zh-CN": {
+                  "description": "每帧独立像素化",
+                  "name": "逐帧"
+                }
+              },
+              "id": "independent"
+            }
+          ],
+          "options_range": null,
+          "step": null,
+          "type": "select"
         }
       ],
       "i18n": {
@@ -2840,7 +2930,8 @@
       },
       "id": "image.pixelize",
       "produces": [
-        "Image"
+        "Image",
+        "FrameSeq"
       ]
     },
     {
@@ -2876,6 +2967,7 @@
     "Video",
     "Mask",
     "NormalMap",
+    "PixelGeometryPlan",
     "Palette",
     "SpritePair",
     "CookSpritePack"
@@ -3036,12 +3128,14 @@
       "lowerings": {
         "cooksprite.pixel_snap": "CS_PixelSnap",
         "cooksprite.pixelize": "CS_Pixelize",
-        "cooksprite.pixelize_pair": "CS_PixelizePair"
+        "cooksprite.pixelize_pair": "CS_PixelizePair",
+        "cooksprite.pixelize_sequence": "CS_PixelizeSequence"
       },
       "node_classes": [
         "CS_Pixelize",
         "CS_PixelSnap",
-        "CS_PixelizePair"
+        "CS_PixelizePair",
+        "CS_PixelizeSequence"
       ],
       "recipes": [
         "cooksprite.pixel",
@@ -3344,11 +3438,99 @@
           "source": "cooksprite",
           "title": "Jointly pixelize diffuse art and a tangent-space normal map",
           "version": 1
+        },
+        {
+          "id": "cooksprite.pixelize_sequence",
+          "inputs": [
+            {
+              "name": "source",
+              "persistable": false,
+              "required": true,
+              "type": "FrameSeq"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "frames",
+              "persistable": true,
+              "required": true,
+              "type": "FrameSeq"
+            },
+            {
+              "name": "plan",
+              "persistable": true,
+              "required": true,
+              "type": "PixelGeometryPlan"
+            }
+          ],
+          "package_id": "pixel",
+          "params_schema": {
+            "outline": {
+              "type": "boolean"
+            },
+            "outline_color": {
+              "pattern": "^#[0-9A-Fa-f]{6}$",
+              "type": "string"
+            },
+            "padding_x": {
+              "max": 256,
+              "min": -1,
+              "type": "integer"
+            },
+            "padding_y": {
+              "max": 256,
+              "min": -1,
+              "type": "integer"
+            },
+            "palette_budget": {
+              "max": 256,
+              "min": 0,
+              "type": "integer"
+            },
+            "profile": {
+              "enum": [
+                "production",
+                "fidelity",
+                "balanced",
+                "graphic"
+              ],
+              "type": "string"
+            },
+            "target_height": {
+              "max": 512,
+              "min": 16,
+              "type": "integer"
+            },
+            "target_size": {
+              "max": 512,
+              "min": 16,
+              "type": "integer"
+            },
+            "target_width": {
+              "max": 512,
+              "min": 16,
+              "type": "integer"
+            },
+            "temporal_mode": {
+              "enum": [
+                "auto",
+                "shared",
+                "flow",
+                "independent"
+              ],
+              "type": "string"
+            }
+          },
+          "schema_hash": "0bdd218b20588c6155daac32af2c2fdf610fbe292080d6b0fbd1f999316acf5d",
+          "source": "cooksprite",
+          "title": "Stream a long FrameSeq through deterministic shared or optical-flow pixelization",
+          "version": 1
         }
       ],
-      "version": "2.0.0",
+      "version": "2.1.0",
       "workflows": [
         "image.pixelize:image-to-image",
+        "image.pixelize:frames-to-frames",
         "sprite.pixelize:image-to-sprite-pair"
       ]
     },
@@ -3560,12 +3742,14 @@
       "id": "normal",
       "license": "Apache-2.0",
       "lowerings": {
-        "cooksprite.make_sprite_pair": "CS_MakeSpritePair"
+        "cooksprite.make_sprite_pair": "CS_MakeSpritePair",
+        "cooksprite.project_normal_to_pixel_plan": "CS_ProjectNormalToPixelPlan"
       },
       "node_classes": [
         "CS_LotusModelLoader",
         "CS_LotusNormalPrepare",
         "CS_LotusNormalFinalize",
+        "CS_ProjectNormalToPixelPlan",
         "CS_MakeSpritePair"
       ],
       "recipes": [
@@ -3829,11 +4013,67 @@
           "source": "cooksprite",
           "title": "Make a SpritePair",
           "version": 1
+        },
+        {
+          "id": "cooksprite.project_normal_to_pixel_plan",
+          "inputs": [
+            {
+              "name": "source",
+              "persistable": false,
+              "required": true,
+              "type": "Image"
+            },
+            {
+              "name": "normal",
+              "persistable": false,
+              "required": true,
+              "type": "NormalMap"
+            },
+            {
+              "name": "mask",
+              "persistable": false,
+              "required": false,
+              "type": "Mask"
+            },
+            {
+              "name": "pixel_plan",
+              "persistable": false,
+              "required": true,
+              "type": "PixelGeometryPlan"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "normal",
+              "persistable": true,
+              "required": true,
+              "type": "NormalMap"
+            },
+            {
+              "name": "mask",
+              "persistable": false,
+              "required": true,
+              "type": "Mask"
+            }
+          ],
+          "package_id": "normal",
+          "params_schema": {
+            "frame_index": {
+              "max": 239,
+              "min": 0,
+              "type": "integer"
+            }
+          },
+          "schema_hash": "091f82ecec8f8561492a31131b95bed88782e16a3864f22aa7b01c8d9edb49ae",
+          "source": "cooksprite",
+          "title": "Project a normal map through a verified PixelGeometryPlan",
+          "version": 1
         }
       ],
-      "version": "1.1.2",
+      "version": "1.1.3",
       "workflows": [
-        "normal.generate:image-to-normal"
+        "normal.generate:image-to-normal",
+        "normal.generate:image-to-pixel-normal"
       ]
     }
   ]

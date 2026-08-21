@@ -47,6 +47,7 @@ const accepts = computed<ArtifactKind[]>(() => {
   const declared = action.value?.accepts.source?.type;
   return declared ? (Array.isArray(declared) ? declared : [declared]) : ["Image"];
 });
+const isFrameSequence = computed(() => source.value?.kind === "FrameSeq");
 // Keep mode-local state in the UI, but only send controls declared by the
 // active Action. This prevents pixelize values from leaking into cutout (and
 // keeps future Tool controls similarly isolated).
@@ -189,6 +190,7 @@ function useOutput() {
       v-if="mode === 'pixelize'"
       :action="action"
       :values="values"
+      :show-temporal="isFrameSequence"
       @change="setPixelValue"
     />
     <p v-if="error" class="tool-bench-error" role="alert">{{ error }}</p>

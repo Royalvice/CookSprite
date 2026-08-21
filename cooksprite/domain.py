@@ -20,6 +20,7 @@ PortType = Literal[
     "Video",
     "Mask",
     "NormalMap",
+    "PixelGeometryPlan",
     "Palette",
     "SpritePair",
     "CookSpritePack",
@@ -40,6 +41,7 @@ PersistableType = Literal[
     "Video",
     "Mask",
     "NormalMap",
+    "PixelGeometryPlan",
     "Palette",
     "SpritePair",
     "CookSpritePack",
@@ -309,6 +311,13 @@ class ArtifactPatch(BaseModel):
     title: str | None = Field(default=None, max_length=160)
 
 
+class FrameSequenceTemporal(BaseModel):
+    """Bounded provenance needed to choose a temporal pixel strategy."""
+
+    source: Literal["sampled_video"]
+    sample_fps: float = Field(gt=0.0, le=240.0)
+
+
 class FrameSequenceManifest(BaseModel):
     schema_id: Literal["cooksprite.frame-sequence/v1"] = Field(
         default="cooksprite.frame-sequence/v1", alias="schema", serialization_alias="schema"
@@ -317,6 +326,45 @@ class FrameSequenceManifest(BaseModel):
     view: ViewId | None = None
     direction: Direction | None = None
     frames: list[str] = Field(min_length=1)
+    # Only sampled videos opt into temporal continuity.  Hand-authored Sprite
+    # sequences deliberately leave this empty, so automatic pixelization does
+    # not mistake jumps between poses for optical flow.
+    temporal: FrameSequenceTemporal | None = None
+
+
+class PixelGeometryPlanFrame(BaseModel):
+    """One immutable source identity covered by a geometry plan."""
+
+    source_artifact: str
+    source_sha256: str = Field(min_length=64, max_length=64)
+    canvas: tuple[int, int]
+
+
+class PixelGeometryPlanManifest(BaseModel):
+    """Private, replayable geometry contract for a pixelized FrameSeq.
+
+    The artifact is deliberately typed rather than an ad-hoc metadata blob:
+    a later normal pass can verify that its selected source frame is exactly
+    the frame whose diffuse sampling geometry it will reuse.
+    """
+
+    schema_id: Literal["cooksprite.pixel-geometry-plan/v1"] = Field(
+        default="cooksprite.pixel-geometry-plan/v1", alias="schema", serialization_alias="schema"
+    )
+    algorithm: Literal["cooksprite.pixel-compiler/v2"] = "cooksprite.pixel-compiler/v2"
+    source_order_sha256: str = Field(min_length=64, max_length=64)
+    frames: list[PixelGeometryPlanFrame] = Field(min_length=1, max_length=240)
+    canvas: tuple[int, int]
+    transform: dict[str, Any]
+    target: tuple[int, int]
+    padding: tuple[int, int]
+    supersample: int = Field(ge=1, le=8)
+    sampling: Literal["cooksprite.cell-sampling/v1"] = "cooksprite.cell-sampling/v1"
+    temporal_mode: Literal["shared", "flow", "independent"]
+    profile: str
+    palette_budget: int = Field(ge=0, le=256)
+    outline: bool
+    outline_color: str | None = None
 
 
 class FrameSequenceView(BaseModel):

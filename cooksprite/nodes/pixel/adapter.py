@@ -6,8 +6,14 @@ from collections.abc import Iterable
 
 import numpy as np
 
+from .geometry import render_normal_supersampled
 from .pipelines.continuous import compile_continuous
 from .pipelines.pseudo_pixel import snap_pseudo_pixels
+from .plan import PixelGeometryPlanValue, resolve_temporal_mode, transform_for_frame
+from .sequence import PixelSequenceResult, compile_sequence
+from .stages.contour import compile_silhouette
+from .stages.evidence import analyse_frame, compile_cell_evidence
+from .stages.normals import normals_to_rgb, reduce_normal_cells
 from .types import GridSpec, TargetGrid
 
 
@@ -59,6 +65,18 @@ def _target_dimensions(image: np.ndarray, target_size: int) -> tuple[int, int]:
     longest = max(int(width), int(height))
     if longest <= 0:
         raise ValueError("IMAGE canvas must be non-empty")
+    size = int(target_size)
+    if not 16 <= size <= 512:
+        raise ValueError("target_size must be between 16 and 512")
+    scale = size / longest
+    return max(16, round(width * scale)), max(16, round(height * scale))
+
+
+def _target_dimensions_from_canvas(canvas: tuple[int, int], target_size: int) -> tuple[int, int]:
+    width, height = (int(canvas[0]), int(canvas[1]))
+    longest = max(width, height)
+    if longest <= 0:
+        raise ValueError("FrameSeq canvas must be non-empty")
     size = int(target_size)
     if not 16 <= size <= 512:
         raise ValueError("target_size must be between 16 and 512")
@@ -232,6 +250,106 @@ def pixelize_pair_batch(
         raise RuntimeError("pixel compiler did not return one normal per diffuse frame")
     output, output_mask = _outputs(output_frames)
     return output, output_mask, np.stack(output_normals).astype(np.float32)
+
+
+def pixelize_sequence_reader(
+    reader,
+    target_width: int,
+    target_height: int,
+    profile: str = "production",
+    palette_budget: int = 0,
+    padding_x: int = -1,
+    padding_y: int = -1,
+    target_size: int | None = None,
+    outline: bool = True,
+    outline_color: str = "#000000",
+    temporal_mode: str = "auto",
+    progress=None,
+) -> PixelSequenceResult:
+    """Compile a lazy bridge ``FrameSeq`` without an IMAGE batch allocation."""
+
+    frames = list(getattr(reader, "frames", ()) or ())
+    if not 1 <= len(frames) <= 240:
+        raise ValueError("long sequence pixelization accepts 1 to 240 frames")
+    canvas = getattr(reader, "canvas", None)
+    # Older FrameSeq manifests do not carry decoded canvas metadata.  Resolve
+    # the first frame lazily in the ComfyUI node and keep it cached on the
+    # bridge reader; the API never decodes image pixels just to fill this in.
+    if not isinstance(canvas, (tuple, list)) or len(canvas) != 2:
+        resolve_canvas = getattr(reader, "resolve_canvas", None)
+        canvas = resolve_canvas() if callable(resolve_canvas) else None
+    if not isinstance(canvas, (tuple, list)) or len(canvas) != 2:
+        raise ValueError("FrameSeq bridge manifest is missing a shared canvas")
+    if target_size is not None:
+        target_width, target_height = _target_dimensions_from_canvas(
+            (int(canvas[0]), int(canvas[1])), int(target_size)
+        )
+    target = TargetGrid(
+        int(target_width),
+        int(target_height),
+        None if int(padding_x) < 0 else int(padding_x),
+        None if int(padding_y) < 0 else int(padding_y),
+        None if int(palette_budget) <= 0 else int(palette_budget),
+    )
+    if profile not in {"production", "fidelity", "balanced", "graphic"}:
+        raise ValueError(f"unknown pixel profile: {profile}")
+    resolved_mode = resolve_temporal_mode(str(temporal_mode), getattr(reader, "temporal", None))
+    return compile_sequence(
+        reader.iter_rgba,
+        frames,
+        target,
+        profile=str(profile),
+        outline=bool(outline),
+        outline_color=str(outline_color),
+        temporal_mode=resolved_mode,
+        progress=progress,
+    )
+
+
+def project_normal_to_pixel_plan(
+    source: np.ndarray,
+    normal: np.ndarray,
+    mask: np.ndarray | None,
+    plan: PixelGeometryPlanValue | dict,
+    frame_index: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Reduce a Lotus normal using the exact diffuse sampling geometry plan."""
+
+    payload = plan.payload if isinstance(plan, PixelGeometryPlanValue) else plan
+    if not isinstance(payload, dict):
+        raise TypeError("PixelGeometryPlan value is missing")
+    transform, target, supersample = transform_for_frame(payload, int(frame_index))
+    frames = _rgba_frames(source, mask)
+    if len(frames) != 1:
+        raise ValueError("PixelGeometryPlan normal projection accepts one selected source frame")
+    rgba = frames[0]
+    height, width = rgba.shape[:2]
+    expected_canvas = tuple(int(item) for item in payload["frames"][int(frame_index)]["canvas"])
+    if (width, height) != expected_canvas:
+        raise ValueError("source canvas does not match the selected PixelGeometryPlan frame")
+    value = np.asarray(normal, dtype=np.float32)
+    if value.ndim != 4 or value.shape[0] != 1 or value.shape[1:3] != (height, width) or value.shape[-1] < 3:
+        raise ValueError("normal canvas must match the selected PixelGeometryPlan source frame")
+    source_alpha = rgba[..., 3].astype(np.float32) / 255.0
+    analysis = analyse_frame(
+        rgba,
+        transform,
+        None,
+        supersample,
+        fast_regions=payload.get("temporal_mode") in {"shared", "flow"},
+    )
+    evidence, sampling = compile_cell_evidence(
+        analysis, target.width, target.height, include_sampling=True
+    )
+    silhouette = compile_silhouette(evidence)
+    # Keep this expression in lock-step with the compiler: the same source
+    # alpha/semantic reduction defines the logical transparent boundary.
+    from .pipelines.continuous import _alpha_from_semantics
+
+    alpha = _alpha_from_semantics(evidence, silhouette.mask)
+    rendered = render_normal_supersampled(value[0, ..., :3], source_alpha, transform, supersample)
+    reduced = reduce_normal_cells(rendered, sampling, target.width, target.height)
+    return normals_to_rgb(reduced, alpha)[None, ...], alpha[None, ...]
 
 
 def snap_batch(

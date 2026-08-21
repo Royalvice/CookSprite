@@ -43,8 +43,10 @@ from ..domain import (
     ArtifactRef,
     DocumentView,
     FrameSequenceManifest,
+    FrameSequenceTemporal,
     FrameSequenceView,
     GalleryItem,
+    PixelGeometryPlanManifest,
     ProjectCreate,
     ProjectExportCreate,
     ProjectPatch,
@@ -85,7 +87,13 @@ from ..store import DocumentConflict, Store, utcnow
 from ..supervisor import RunSupervisor
 from ..tool_packages import tool_packages
 
-SEQUENCE_ACTIONS = {"animation.generate", "sheet.slice", "video.sample", "sprite.pixelize"}
+SEQUENCE_ACTIONS = {
+    "animation.generate",
+    "sheet.slice",
+    "video.sample",
+    "sprite.pixelize",
+    "image.pixelize",
+}
 TEST_RUNTIME_VERSIONS = {"test", "demo-test", "cooksprite-test-runtime"}
 
 
@@ -942,11 +950,19 @@ def create_app(
         target_action = target_value(values, "action")
         view = target_value(values, "view")
         direction = target_value(values, "direction")
+        temporal = (
+            FrameSequenceTemporal(
+                source="sampled_video", sample_fps=float(values.get("sample_fps", 12))
+            )
+            if action_id == "video.sample"
+            else None
+        )
         manifest = FrameSequenceManifest(
             action=target_action,
             view=view,
             direction=direction,
             frames=frames,
+            temporal=temporal,
         )
         payload = manifest.model_dump_json(by_alias=True, exclude_none=False).encode()
         sequence = store.put_artifact(
@@ -962,6 +978,7 @@ def create_app(
                 "action": target_action,
                 "view": view,
                 "direction": direction,
+                "temporal": temporal.model_dump(mode="json") if temporal else None,
                 "needs_target": not all((target_action, view, direction)),
                 "source_artifacts": frames,
             },
@@ -1075,6 +1092,216 @@ def create_app(
             store.set_run_artifacts(
                 run_id, [images[0], normals[0]], preserve_duplicates=True
             )
+
+    def pixel_plan_source_digest(frames: list[Any]) -> str:
+        """Return the canonical digest shared by a Plan and its source order."""
+
+        canonical = [
+            {
+                "artifact": str(frame.source_artifact),
+                "sha256": str(frame.source_sha256),
+                "canvas": [int(frame.canvas[0]), int(frame.canvas[1])],
+            }
+            for frame in frames
+        ]
+        return hashlib.sha256(
+            json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+    def validate_pixel_plan_integrity(plan: PixelGeometryPlanManifest) -> None:
+        """Reject a stale or malformed geometry sidecar before graph execution."""
+
+        if plan.source_order_sha256 != pixel_plan_source_digest(plan.frames):
+            raise ValueError("PixelGeometryPlan source order digest does not match its frame list")
+        if any(tuple(frame.canvas) != tuple(plan.canvas) for frame in plan.frames):
+            raise ValueError("PixelGeometryPlan frames must share the declared canvas")
+
+    def validate_pixel_plan_sequence(
+        plan: PixelGeometryPlanManifest, source_view: FrameSequenceView
+    ) -> None:
+        """Validate a Plan against the exact source FrameSeq without decoding pixels."""
+
+        validate_pixel_plan_integrity(plan)
+        if len(plan.frames) != len(source_view.frames):
+            raise ValueError("PixelGeometryPlan does not describe every source frame")
+        for index, (source, frame) in enumerate(zip(source_view.frames, plan.frames, strict=True)):
+            if frame.source_artifact != source.id or frame.source_sha256 != source.sha256:
+                raise ValueError(
+                    f"PixelGeometryPlan source frame {index + 1} does not match the FrameSeq"
+                )
+            raw_canvas = source.meta.get("canvas")
+            if (
+                isinstance(raw_canvas, (list, tuple))
+                and len(raw_canvas) == 2
+                and tuple(int(value) for value in raw_canvas) != tuple(frame.canvas)
+            ):
+                raise ValueError(
+                    f"PixelGeometryPlan source frame {index + 1} canvas does not match the artifact"
+                )
+
+    def pixel_plan_frame_index(source_id: str, plan_id: str) -> int:
+        """Verify one human-selected source against an immutable geometry plan."""
+
+        source = store.artifact(source_id)
+        plan_row = store.artifact(plan_id)
+        if not source or not plan_row or plan_row.get("kind") != "PixelGeometryPlan":
+            raise ValueError("PixelGeometryPlan input is unavailable")
+        try:
+            plan = PixelGeometryPlanManifest.model_validate_json(store.artifact_bytes(plan_id))
+        except Exception as exc:
+            raise ValueError("PixelGeometryPlan artifact is invalid") from exc
+        validate_pixel_plan_integrity(plan)
+        matches = [
+            index
+            for index, frame in enumerate(plan.frames)
+            if frame.source_artifact == source_id and frame.source_sha256 == source.get("sha256")
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                "the selected source image is not an exact source frame of this PixelGeometryPlan"
+            )
+        return matches[0]
+
+    def finalize_pixelize_sequence(
+        run_id: str,
+        source_artifact: str,
+        project_id: str,
+    ) -> ArtifactRef:
+        """Wrap streamed frame uploads and hide their internal geometry sidecar."""
+
+        record = store.run(run_id)
+        output_ids = json.loads(record.get("artifacts") or "[]") if record else []
+        images = [
+            artifact_id
+            for artifact_id in output_ids
+            if (store.artifact(artifact_id) or {}).get("kind") == "Image"
+        ]
+        plans = [
+            artifact_id
+            for artifact_id in output_ids
+            if (store.artifact(artifact_id) or {}).get("kind") == "PixelGeometryPlan"
+        ]
+        source_view = frame_sequence_view(source_artifact)
+        if len(images) != len(source_view.sequence.frames) or len(plans) != 1:
+            raise RuntimeError("ComfyUI streamed pixel outputs do not match the source FrameSeq")
+        plan_id = plans[0]
+        plan = PixelGeometryPlanManifest.model_validate_json(store.artifact_bytes(plan_id))
+        try:
+            validate_pixel_plan_sequence(plan, source_view)
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
+        expected_canvas = tuple(plan.target)
+        for image_id in images:
+            image_row = store.artifact(image_id)
+            image_canvas = json.loads(image_row.get("meta") or "{}").get("canvas") if image_row else None
+            if (
+                isinstance(image_canvas, (list, tuple))
+                and len(image_canvas) == 2
+                and tuple(int(value) for value in image_canvas) != expected_canvas
+            ):
+                raise RuntimeError("PixelGeometryPlan target canvas does not match a streamed output")
+        for index, (source_id, image_id) in enumerate(
+            zip(source_view.sequence.frames, images, strict=True)
+        ):
+            source_row = store.artifact(source_id)
+            image_row = store.artifact(image_id)
+            if source_row:
+                source_meta = json.loads(source_row.get("meta") or "{}")
+                # Latest operational relation only: re-pixelizing the same
+                # source replaces this pointer instead of growing SQLite.
+                source_meta.update(
+                    latest_pixel_plan_artifact=plan_id,
+                    latest_pixel_plan_frame_index=index,
+                    latest_pixel_frame_artifact=image_id,
+                )
+                store.update_artifact_meta(source_id, source_meta)
+            if image_row:
+                image_meta = json.loads(image_row.get("meta") or "{}")
+                image_meta.update(
+                    source_artifacts=[source_id],
+                    pixel_plan_artifact=plan_id,
+                    pixel_plan_frame_index=index,
+                )
+                store.update_artifact_meta(image_id, image_meta)
+        plan_row = store.artifact(plan_id)
+        if plan_row:
+            plan_meta = json.loads(plan_row.get("meta") or "{}")
+            plan_meta.update(
+                role="pixel_geometry_plan",
+                system=True,
+                run_id=run_id,
+                action_id="image.pixelize",
+                source_artifacts=[source_artifact],
+                frame_count=len(images),
+            )
+            store.update_artifact_meta(plan_id, plan_meta)
+        original = source_view.sequence
+        manifest = FrameSequenceManifest(
+            action=original.action,
+            view=original.view,
+            direction=original.direction,
+            frames=images,
+            temporal=original.temporal,
+        )
+        sequence = store.put_artifact(
+            manifest.model_dump_json(by_alias=True, exclude_none=False).encode(),
+            "application/vnd.cooksprite.frame-sequence+json",
+            "FrameSeq",
+            {
+                "role": "pixel_frame_sequence",
+                "run_id": run_id,
+                "action_id": "image.pixelize",
+                "frame_count": len(images),
+                "cover_artifact": images[0],
+                "pixel_plan_artifact": plan_id,
+                "source_artifacts": [source_artifact],
+                "temporal": original.temporal.model_dump(mode="json") if original.temporal else None,
+            },
+            project_id=project_id,
+            title="Pixelized Frame Sequence",
+        )
+        store.set_run_artifacts(run_id, [sequence.id])
+        return sequence
+
+    def finalize_pixel_plan_normal(
+        run_id: str,
+        source_id: str,
+        plan_id: str,
+        frame_index: int,
+    ) -> None:
+        record = store.run(run_id)
+        output_ids = json.loads(record.get("artifacts") or "[]") if record else []
+        normals = [
+            artifact_id
+            for artifact_id in output_ids
+            if (store.artifact(artifact_id) or {}).get("kind") == "NormalMap"
+        ]
+        if len(normals) != 1:
+            raise RuntimeError("ComfyUI pixel-plan normal projection did not return one NormalMap")
+        normal_id = normals[0]
+        source_row = store.artifact(source_id)
+        normal_row = store.artifact(normal_id)
+        source_meta = json.loads(source_row.get("meta") or "{}") if source_row else {}
+        if source_meta.get("latest_pixel_plan_artifact") != plan_id:
+            raise RuntimeError("PixelGeometryPlan is no longer the current pixel relation for this source frame")
+        diffuse_id = str(source_meta.get("latest_pixel_frame_artifact") or "")
+        if not diffuse_id or not store.artifact(diffuse_id):
+            raise RuntimeError("selected source frame has no current pixel diffuse paired with this plan")
+        if normal_row:
+            normal_meta = json.loads(normal_row.get("meta") or "{}")
+            normal_meta.update(
+                source_artifacts=[source_id, diffuse_id],
+                paired_diffuses=[diffuse_id],
+                pixel_plan_artifact=plan_id,
+                pixel_plan_frame_index=frame_index,
+            )
+            store.update_artifact_meta(normal_id, normal_meta)
+        diffuse_row = store.artifact(diffuse_id)
+        if diffuse_row:
+            diffuse_meta = json.loads(diffuse_row.get("meta") or "{}")
+            diffuse_meta.update(paired_normals=[normal_id])
+            store.update_artifact_meta(diffuse_id, diffuse_meta)
+        store.set_run_artifacts(run_id, [normal_id])
 
     def selected_runtime(values: dict[str, Any]) -> dict[str, Any] | None:
         runtime_id = values.get("runtime")
@@ -1234,8 +1461,49 @@ def create_app(
                 ),
             )
         normalized_inputs = validate_artifact_inputs(registered, request.inputs)
+        compile_inputs = {key: list(value) for key, value in normalized_inputs.items()}
+        source_row = (
+            store.artifact(normalized_inputs["source"][0])
+            if normalized_inputs.get("source")
+            else None
+        )
+        if action_id == "image.pixelize" and source_row and source_row.get("kind") == "FrameSeq":
+            sequence = frame_sequence_view(normalized_inputs["source"][0]).sequence
+            if len(sequence.frames) > 240:
+                raise HTTPException(
+                    422,
+                    _detail("sequence_too_large", "long sequence pixelization accepts at most 240 frames"),
+                )
+            if values.get("temporal_mode") == "flow" and not (
+                sequence.temporal
+                and sequence.temporal.source == "sampled_video"
+                and sequence.temporal.sample_fps >= 8.0
+            ):
+                raise HTTPException(
+                    422,
+                    _detail(
+                        "flow_requires_continuous_video",
+                        "continuous video flow requires a FrameSeq sampled from video at at least 8 FPS",
+                    ),
+                )
+            compile_inputs["__source_kind"] = ["FrameSeq"]
+        if action_id == "normal.generate" and normalized_inputs.get("pixel_plan"):
+            if not source_row or source_row.get("kind") != "Image":
+                raise HTTPException(
+                    422,
+                    _detail(
+                        "pixel_plan_source_invalid",
+                        "PixelGeometryPlan normal projection requires one selected original Image frame",
+                    ),
+                )
+            try:
+                values["frame_index"] = pixel_plan_frame_index(
+                    normalized_inputs["source"][0], normalized_inputs["pixel_plan"][0]
+                )
+            except ValueError as exc:
+                raise HTTPException(422, _detail("pixel_plan_source_invalid", str(exc))) from exc
         ordered_sources: list[str] = []
-        if action_id in {"normal.generate", "sprite.pixelize"}:
+        if action_id in {"normal.generate", "sprite.pixelize"} and not normalized_inputs.get("pixel_plan"):
             try:
                 ordered_sources = source_frame_ids(
                     normalized_inputs.get("source", []), limit=32
@@ -1294,7 +1562,7 @@ def create_app(
                 ),
             )
         selected_recipe = recipe_for_model(
-            runtime_recipes, model_id, action_id, normalized_inputs
+            runtime_recipes, model_id, action_id, compile_inputs
         )
         if not selected_recipe:
             raise HTTPException(
@@ -1326,7 +1594,7 @@ def create_app(
                 runtime["snapshot"],
                 selected_recipe,
                 action_id,
-                normalized_inputs,
+                compile_inputs,
                 values,
                 request.params,
             )
@@ -1383,10 +1651,20 @@ def create_app(
                     ordered_sources,
                     request.project,
                 )
-            elif action_id in SEQUENCE_ACTIONS:
+            elif action_id == "image.pixelize" and source_row and source_row.get("kind") == "FrameSeq":
+                finalize_pixelize_sequence(run_id, normalized_inputs["source"][0], request.project)
+            elif action_id in SEQUENCE_ACTIONS and action_id != "image.pixelize":
                 finalize_frame_sequence(run_id, action_id, request.project, values)
             elif action_id == "normal.generate":
-                order_normal_outputs(run_id, ordered_sources)
+                if normalized_inputs.get("pixel_plan"):
+                    finalize_pixel_plan_normal(
+                        run_id,
+                        normalized_inputs["source"][0],
+                        normalized_inputs["pixel_plan"][0],
+                        int(values["frame_index"]),
+                    )
+                else:
+                    order_normal_outputs(run_id, ordered_sources)
 
         execute_plan(run_id, runtime, compiled, finalize_action)
         return run_view(run_id)
@@ -1576,6 +1854,7 @@ def create_app(
     @app.post(
         "/api/v1/projects/{project_id}/sequences",
         response_model=FrameSequenceView,
+        response_model_exclude_none=True,
         status_code=201,
     )
     def materialize_track_sequence(
@@ -1798,6 +2077,7 @@ def create_app(
     @app.get(
         "/api/v1/artifacts/{artifact_id}/sequence",
         response_model=FrameSequenceView,
+        response_model_exclude_none=True,
     )
     def get_frame_sequence(artifact_id: str) -> FrameSequenceView:
         return frame_sequence_view(artifact_id)
@@ -1895,29 +2175,61 @@ def create_app(
                 _detail("bridge_scope_violation", "artifact is not an input of this run"),
             )
         if expand:
-            if expand != "frames":
+            if expand not in {"frames", "sequence"}:
                 raise HTTPException(422, _detail("bridge_expand_invalid", "unknown bridge expansion"))
             if row.get("kind") != "FrameSeq":
                 return BinaryResponse(store.artifact_bytes(artifact_id), media_type=row["media_type"])
             sequence = frame_sequence_view(artifact_id)
-            if len(sequence.frames) > 32:
+            limit = 32 if expand == "frames" else 240
+            if len(sequence.frames) > limit:
                 raise HTTPException(
                     422,
-                    _detail("sprite_chunk_too_large", "Sprite chunks may contain at most 32 frames"),
+                    _detail(
+                        "sequence_too_large",
+                        f"CookSprite {expand} bridge accepts at most {limit} frames",
+                    ),
                 )
-            payload = {
-                "schema": "cooksprite.bridge-image-batch/v1",
-                "frames": [
-                    {
-                        "artifact": frame.id,
-                        "url": bridge_for(runtime).download_url(frame.id, run_id),
-                    }
+            if expand == "frames":
+                payload = {
+                    "schema": "cooksprite.bridge-image-batch/v1",
+                    "frames": [
+                        {
+                            "artifact": frame.id,
+                            "url": bridge_for(runtime).download_url(frame.id, run_id),
+                        }
+                        for frame in sequence.frames
+                    ],
+                }
+                media_type = "application/vnd.cooksprite.bridge-image-batch+json"
+            else:
+                raw_canvas = [
+                    (json.loads(store.artifact(frame.id).get("meta") or "{}").get("canvas"))
                     for frame in sequence.frames
-                ],
-            }
+                    if store.artifact(frame.id)
+                ]
+                canvas = raw_canvas[0] if raw_canvas and all(item == raw_canvas[0] for item in raw_canvas) else None
+                payload = {
+                    "schema": "cooksprite.bridge-frame-sequence/v1",
+                    "canvas": canvas,
+                    "temporal": sequence.sequence.temporal.model_dump(mode="json")
+                    if sequence.sequence.temporal
+                    else None,
+                    "frames": [
+                        {
+                            "artifact": frame.id,
+                            "sha256": frame.sha256,
+                            "canvas": json.loads(store.artifact(frame.id).get("meta") or "{}").get("canvas")
+                            if store.artifact(frame.id)
+                            else None,
+                            "url": bridge_for(runtime).download_url(frame.id, run_id),
+                        }
+                        for frame in sequence.frames
+                    ],
+                }
+                media_type = "application/vnd.cooksprite.bridge-frame-sequence+json"
             return BinaryResponse(
                 json.dumps(payload, separators=(",", ":")).encode(),
-                media_type="application/vnd.cooksprite.bridge-image-batch+json",
+                media_type=media_type,
             )
         return BinaryResponse(store.artifact_bytes(artifact_id), media_type=row["media_type"])
 
@@ -1930,6 +2242,8 @@ def create_app(
         expires: int = 0,
         signature: str = "",
         output_index: int | None = None,
+        canvas_width: int | None = None,
+        canvas_height: int | None = None,
     ) -> ArtifactRef:
         run = store.run(run_id)
         if not run:
@@ -1939,14 +2253,25 @@ def create_app(
             bridge_for(runtime).verify_upload(run_id, kind, source_artifact, expires, signature)
         except BridgeError as exc:
             raise HTTPException(403, _detail("bridge_signature_invalid", str(exc))) from exc
-        if kind not in {"Image", "NormalMap"}:
+        if kind not in {"Image", "NormalMap", "PixelGeometryPlan"}:
             raise HTTPException(
                 422,
-                _detail("artifact_type_invalid", "ComfyUI may persist only typed image outputs"),
+                _detail("artifact_type_invalid", "ComfyUI may persist only declared typed bridge outputs"),
             )
         data = await request.body()
         if not data:
             raise HTTPException(422, _detail("empty_artifact", "artifact request body is empty"))
+        media_type = "image/png"
+        if kind == "PixelGeometryPlan":
+            try:
+                plan = PixelGeometryPlanManifest.model_validate_json(data)
+                validate_pixel_plan_integrity(plan)
+            except Exception as exc:
+                raise HTTPException(
+                    422, _detail("pixel_plan_invalid", "PixelGeometryPlan payload is invalid")
+                ) from exc
+            data = plan.model_dump_json(by_alias=True, exclude_none=False).encode()
+            media_type = "application/vnd.cooksprite.pixel-geometry-plan+json"
         source_artifacts: list[str] = []
         if source_artifact:
             source_row = store.artifact(source_artifact)
@@ -1965,16 +2290,21 @@ def create_app(
             run_request = json.loads(run.get("request") or "{}")
             for supplied in run_request.get("inputs", {}).values():
                 source_artifacts.extend(supplied if isinstance(supplied, list) else [supplied])
+        meta = {
+            "run_id": run_id,
+            "action_id": run.get("action_id"),
+            "source_artifacts": source_artifacts,
+            "output_index": output_index,
+        }
+        if canvas_width is not None and canvas_height is not None and canvas_width > 0 and canvas_height > 0:
+            meta["canvas"] = [int(canvas_width), int(canvas_height)]
+        if kind == "PixelGeometryPlan":
+            meta["system"] = True
         artifact = store.put_artifact(
             data,
-            "image/png",
+            media_type,
             kind,
-            {
-                "run_id": run_id,
-                "action_id": run.get("action_id"),
-                "source_artifacts": source_artifacts,
-                "output_index": output_index,
-            },
+            meta,
             project_id=run.get("project_id"),
         )
         store.attach_run_artifact(
@@ -3081,6 +3411,15 @@ def create_app(
                 expanded,
                 row.get("project_id") or request.get("project"),
             )
+        if action_id == "image.pixelize":
+            sources = (request.get("inputs") or {}).get("source") or []
+            source_id = sources[0] if isinstance(sources, list) and sources else sources
+            source = store.artifact(source_id) if source_id else None
+            if source and source.get("kind") == "FrameSeq":
+                return lambda: finalize_pixelize_sequence(
+                    row["id"], source_id, row.get("project_id") or request.get("project")
+                )
+            return None
         if action_id in SEQUENCE_ACTIONS:
             return lambda: finalize_frame_sequence(
                 row["id"],
@@ -3091,6 +3430,12 @@ def create_app(
         if action_id == "normal.generate":
             sources = (request.get("inputs") or {}).get("source") or []
             source_ids = sources if isinstance(sources, list) else [sources]
+            plans = (request.get("inputs") or {}).get("pixel_plan") or []
+            plan_id = plans[0] if isinstance(plans, list) and plans else plans
+            if plan_id and source_ids:
+                return lambda: finalize_pixel_plan_normal(
+                    row["id"], source_ids[0], plan_id, int((request.get("values") or {}).get("frame_index", 0))
+                )
             expanded = source_frame_ids(source_ids, limit=32)
             return lambda: order_normal_outputs(row["id"], expanded)
         return None

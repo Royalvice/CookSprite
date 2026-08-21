@@ -11,6 +11,7 @@ import json
 import tempfile
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass, field
 
 import numpy as np
 from PIL import Image
@@ -83,11 +84,11 @@ def _read(url: str) -> tuple[bytes, str]:
         return response.read(), response.headers.get_content_type()
 
 
-def _post(url: str, data: bytes):
+def _post(url: str, data: bytes, content_type: str = "image/png"):
     request = urllib.request.Request(
         url,
         data=data,
-        headers={"Content-Type": "image/png", "User-Agent": "CookSprite-Comfy/1"},
+        headers={"Content-Type": content_type, "User-Agent": "CookSprite-Comfy/1"},
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=120) as response:
@@ -99,13 +100,50 @@ def _append_query(url: str, **values) -> str:
     return url + separator + urllib.parse.urlencode(values)
 
 
+@dataclass
+class _BridgeFrameSequence:
+    """A re-playable, lazy FrameSeq reader carried inside the node graph."""
+
+    frames: list[dict]
+    temporal: dict | None = None
+    canvas: tuple[int, int] | None = None
+    _first: np.ndarray | None = field(default=None, init=False, repr=False)
+
+    @staticmethod
+    def _rgba(frame: dict) -> np.ndarray:
+        data, _ = _read(str(frame["url"]))
+        return np.asarray(Image.open(io.BytesIO(data)).convert("RGBA"), dtype=np.uint8).copy()
+
+    def resolve_canvas(self) -> tuple[int, int]:
+        if self.canvas is not None:
+            return self.canvas
+        if not self.frames:
+            raise ValueError("FrameSeq bridge manifest has no frames")
+        self._first = self._rgba(self.frames[0])
+        self.canvas = (int(self._first.shape[1]), int(self._first.shape[0]))
+        return self.canvas
+
+    def iter_rgba(self):
+        expected = self.resolve_canvas()
+        for index, frame in enumerate(self.frames):
+            value = self._first if index == 0 and self._first is not None else self._rgba(frame)
+            assert value is not None
+            canvas = (int(value.shape[1]), int(value.shape[0]))
+            if canvas != expected:
+                raise ValueError("all long FrameSeq frames must use the same canvas")
+            yield value
+
+
 class CS_LoadArtifact:
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {"artifact_url": ("STRING", {"multiline": False})}}
 
-    RETURN_TYPES = ("IMAGE", "MASK")
-    RETURN_NAMES = ("image", "mask")
+    # The first image/mask outputs deliberately keep their historic indexes.
+    # Long FrameSeq and PixelGeometryPlan are private bridge values, not raw
+    # filesystem paths crossing a Tool boundary.
+    RETURN_TYPES = ("IMAGE", "MASK", "CS_FRAMESEQ", "CS_PIXEL_PLAN")
+    RETURN_NAMES = ("image", "mask", "frames", "pixel_plan")
     FUNCTION = "load"
     CATEGORY = "CookSprite/Bridge"
 
@@ -123,8 +161,36 @@ class CS_LoadArtifact:
 
     def load(self, artifact_url):
         data, media_type = _read(artifact_url)
+        if media_type == "application/vnd.cooksprite.pixel-geometry-plan+json":
+            from .pixel.plan import PixelGeometryPlanValue, validate_payload
+
+            return (None, None, None, PixelGeometryPlanValue(validate_payload(json.loads(data))))
+        if media_type == "application/vnd.cooksprite.bridge-frame-sequence+json":
+            manifest = json.loads(data.decode("utf-8"))
+            if manifest.get("schema") != "cooksprite.bridge-frame-sequence/v1":
+                raise ValueError("unsupported CookSprite FrameSeq bridge manifest")
+            frames = manifest.get("frames") or []
+            if not 1 <= len(frames) <= 240:
+                raise ValueError("CookSprite FrameSeq must contain 1 to 240 frames")
+            raw_canvas = manifest.get("canvas")
+            canvas = (
+                (int(raw_canvas[0]), int(raw_canvas[1]))
+                if isinstance(raw_canvas, list) and len(raw_canvas) == 2
+                else None
+            )
+            return (
+                None,
+                None,
+                _BridgeFrameSequence(
+                    [dict(frame) for frame in frames],
+                    dict(manifest["temporal"]) if isinstance(manifest.get("temporal"), dict) else None,
+                    canvas,
+                ),
+                None,
+            )
         if media_type != "application/vnd.cooksprite.bridge-image-batch+json":
-            return self._decode(data)
+            image, mask = self._decode(data)
+            return (image, mask, None, None)
         manifest = json.loads(data.decode("utf-8"))
         if manifest.get("schema") != "cooksprite.bridge-image-batch/v1":
             raise ValueError("unsupported CookSprite image batch manifest")
@@ -144,7 +210,7 @@ class CS_LoadArtifact:
                 raise ValueError("all Sprite chunk frames must use the same canvas")
             images.append(image)
             masks.append(mask)
-        return (torch.cat(images, dim=0), torch.cat(masks, dim=0))
+        return (torch.cat(images, dim=0), torch.cat(masks, dim=0), None, None)
 
 
 class CS_StoreArtifact:
@@ -152,10 +218,14 @@ class CS_StoreArtifact:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "value": ("IMAGE",),
                 "upload_url": ("STRING", {"multiline": False}),
             },
-            "optional": {"mask": ("MASK",)},
+            "optional": {
+                "value": ("IMAGE",),
+                "mask": ("MASK",),
+                "sequence": ("CS_PIXEL_SEQUENCE",),
+                "pixel_plan": ("CS_PIXEL_PLAN",),
+            },
         }
 
     RETURN_TYPES = ("STRING",)
@@ -163,18 +233,58 @@ class CS_StoreArtifact:
     CATEGORY = "CookSprite/Bridge"
     OUTPUT_NODE = True
 
-    def store(self, value, upload_url, mask=None):
+    def store(self, upload_url, value=None, mask=None, sequence=None, pixel_plan=None):
         refs = []
         kind = urllib.parse.parse_qs(urllib.parse.urlparse(upload_url).query).get(
             "kind", ["Image"]
         )[0]
+        if pixel_plan is not None:
+            payload = getattr(pixel_plan, "payload", pixel_plan)
+            if not isinstance(payload, dict):
+                raise ValueError("CS_StoreArtifact received an invalid PixelGeometryPlan")
+            body = _post(
+                upload_url,
+                json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(),
+                "application/json",
+            )
+            return (json.dumps([json.loads(body.decode())["id"]]),)
+        if sequence is not None:
+            if not hasattr(sequence, "iter_frames"):
+                raise ValueError("CS_StoreArtifact received an invalid streamed pixel sequence")
+            try:
+                for index, frame in enumerate(sequence.iter_frames()):
+                    rgba = np.asarray(frame, dtype=np.uint8)
+                    if rgba.ndim != 3 or rgba.shape[-1] != 4:
+                        raise ValueError("streamed pixel frame must be RGBA")
+                    body = _post(
+                        _append_query(
+                            upload_url,
+                            output_index=index,
+                            canvas_width=int(rgba.shape[1]),
+                            canvas_height=int(rgba.shape[0]),
+                        ),
+                        _png(rgba[..., :3].astype(np.float32) / 255.0, kind, rgba[..., 3].astype(np.float32) / 255.0),
+                    )
+                    refs.append(json.loads(body.decode())["id"])
+            finally:
+                close = getattr(sequence, "close", None)
+                if callable(close):
+                    close()
+            return (json.dumps(refs),)
+        if value is None:
+            raise ValueError("CS_StoreArtifact needs image, sequence, or PixelGeometryPlan input")
         mask_array = _array(mask) if mask is not None else None
         for index, frame in enumerate(value):
             frame_mask = None
             if mask_array is not None:
                 frame_mask = mask_array[index if mask_array.ndim == 3 else 0]
             body = _post(
-                _append_query(upload_url, output_index=index),
+                _append_query(
+                    upload_url,
+                    output_index=index,
+                    canvas_width=int(_array(frame).shape[1]),
+                    canvas_height=int(_array(frame).shape[0]),
+                ),
                 _png(frame, kind, frame_mask),
             )
             refs.append(json.loads(body.decode())["id"])
@@ -467,6 +577,124 @@ class CS_PixelizePair:
             torch.from_numpy(output).to(dtype=image.dtype),
             torch.from_numpy(output_mask).to(dtype=image.dtype),
             torch.from_numpy(output_normal).to(dtype=normal.dtype),
+        )
+
+
+class CS_PixelizeSequence:
+    """Stream up to 240 bridge-loaded frames through Pixel Compiler v2."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "source": ("CS_FRAMESEQ",),
+                "target_width": ("INT", {"default": 128, "min": 16, "max": 512}),
+                "target_height": ("INT", {"default": 128, "min": 16, "max": 512}),
+                "profile": (
+                    "STRING",
+                    {"default": "production", "enum": ["production", "fidelity", "balanced", "graphic"]},
+                ),
+                "palette_budget": ("INT", {"default": 0, "min": 0, "max": 256}),
+                "padding_x": ("INT", {"default": -1, "min": -1, "max": 256}),
+                "padding_y": ("INT", {"default": -1, "min": -1, "max": 256}),
+                "temporal_mode": (
+                    "STRING",
+                    {"default": "auto", "enum": ["auto", "shared", "flow", "independent"]},
+                ),
+            },
+            "optional": {
+                "target_size": ("INT", {"default": 0, "min": 0, "max": 512}),
+                "outline": ("BOOLEAN", {"default": True}),
+                "outline_color": ("STRING", {"default": "#000000"}),
+            },
+        }
+
+    RETURN_TYPES = ("CS_PIXEL_SEQUENCE", "CS_PIXEL_PLAN")
+    RETURN_NAMES = ("frames", "pixel_plan")
+    FUNCTION = "run"
+    CATEGORY = "CookSprite/Pixel"
+
+    def run(
+        self,
+        source,
+        target_width,
+        target_height,
+        profile="production",
+        palette_budget=0,
+        padding_x=-1,
+        padding_y=-1,
+        temporal_mode="auto",
+        target_size=0,
+        outline=True,
+        outline_color="#000000",
+    ):
+        from .pixel.adapter import pixelize_sequence_reader
+
+        count = len(getattr(source, "frames", ()) or ())
+        progress_bar = None
+        try:  # ComfyUI runtime only; unit tests keep the node dependency-light.
+            from comfy.utils import ProgressBar
+
+            progress_bar = ProgressBar(max(1, count * 2))
+        except (ImportError, AttributeError):  # pragma: no cover - absent outside ComfyUI.
+            pass
+
+        def progress(stage, current, total):
+            if progress_bar is None:
+                return
+            offset = 0 if stage == "分析全局几何与调色板" else count
+            progress_bar.update_absolute(min(count * 2, offset + int(current)), count * 2, stage)
+
+        result = pixelize_sequence_reader(
+            source,
+            int(target_width),
+            int(target_height),
+            profile=str(profile),
+            palette_budget=int(palette_budget),
+            padding_x=int(padding_x),
+            padding_y=int(padding_y),
+            target_size=int(target_size) if int(target_size) > 0 else None,
+            outline=bool(outline),
+            outline_color=str(outline_color),
+            temporal_mode=str(temporal_mode),
+            progress=progress,
+        )
+        return (result, result.plan)
+
+
+class CS_ProjectNormalToPixelPlan:
+    """Apply a verified PixelGeometryPlan to a single Lotus normal result."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "source": ("IMAGE",),
+                "normal": ("IMAGE",),
+                "pixel_plan": ("CS_PIXEL_PLAN",),
+                "frame_index": ("INT", {"default": 0, "min": 0, "max": 239}),
+            },
+            "optional": {"mask": ("MASK",)},
+        }
+
+    RETURN_TYPES = ("IMAGE", "MASK")
+    RETURN_NAMES = ("normal", "mask")
+    FUNCTION = "run"
+    CATEGORY = "CookSprite/Normal"
+
+    def run(self, source, normal, pixel_plan, frame_index, mask=None):
+        from .pixel.adapter import project_normal_to_pixel_plan
+
+        output, output_mask = project_normal_to_pixel_plan(
+            source.detach().cpu().numpy(),
+            normal.detach().cpu().numpy(),
+            mask.detach().cpu().numpy() if mask is not None else None,
+            pixel_plan,
+            int(frame_index),
+        )
+        return (
+            torch.from_numpy(output).to(dtype=normal.dtype),
+            torch.from_numpy(output_mask).to(dtype=normal.dtype),
         )
 
 
@@ -889,11 +1117,13 @@ NODE_CLASSES = [
     CS_IsolateOnGreen,
     CS_Pixelize,
     CS_PixelizePair,
+    CS_PixelizeSequence,
     CS_PixelSnap,
     CS_RemoveBackground,
     CS_LotusModelLoader,
     CS_LotusNormalPrepare,
     CS_LotusNormalFinalize,
+    CS_ProjectNormalToPixelPlan,
     CS_SliceSpriteSheet,
     CS_LoadVideoArtifact,
     CS_MakeSpritePair,

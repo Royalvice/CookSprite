@@ -108,6 +108,25 @@ def _node_id(data: dict[str, Any]) -> Any:
     )
 
 
+def _sequence_progress_message(
+    graph: dict[str, dict[str, Any]], node_id: Any, value: float, maximum: float
+) -> str | None:
+    """Name the two streamed PixelSequence phases without exposing internals.
+
+    ``CS_PixelizeSequence`` reports a single standard ComfyUI progress range:
+    the first half scans shared geometry/palette and the second emits frames.
+    The public Run state turns that into understandable product status while
+    leaving the graph and raw Comfy event protocol untouched.
+    """
+
+    if str(_node_spec(graph, node_id).get("class_type") or "") != "CS_PixelizeSequence":
+        return None
+    half = max(1, round(maximum / 2.0))
+    if value <= half:
+        return f"Analyzing geometry and palette · {int(value)}/{half}"
+    return f"Pixelizing sequence · {int(value - half)}/{half}"
+
+
 def _phase(kind: str) -> str:
     return {
         "model": "loading_model",
@@ -241,7 +260,10 @@ def apply_runtime_event(
             state.phase = _phase(node["kind"])
             if node["kind"] != "model" and state.model_status == "loading":
                 state.model_status = "ready"
-            state.message = f"{node['label']} · {int(value)}/{int(maximum)}"
+            state.message = (
+                _sequence_progress_message(graph, _node_id(data), float(value), maximum)
+                or f"{node['label']} · {int(value)}/{int(maximum)}"
+            )
         else:
             state.phase = "sampling"
             state.message = f"ComfyUI · {int(value)}/{int(maximum)}"
@@ -278,7 +300,10 @@ def apply_runtime_event(
                 state.phase = _phase(node["kind"])
                 if node["kind"] != "model" and state.model_status == "loading":
                     state.model_status = "ready"
-                state.message = f"{node['label']} · {int(value)}/{int(maximum)}"
+                state.message = (
+                    _sequence_progress_message(graph, _node_id(active), float(value), maximum)
+                    or f"{node['label']} · {int(value)}/{int(maximum)}"
+                )
     elif event_type == "executed":
         node = _node_view(graph, _node_id(data), status="completed", progress=1)
         if node:

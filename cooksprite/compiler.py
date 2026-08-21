@@ -125,7 +125,12 @@ class Compiler(PlanBuilder):
         if port_type == "Video":
             return self.bridge.download_url(value.id, self.run_id)
         try:
-            image_ref = self.load_artifact(value.id, image_batch=port_type == "ImageBatch")
+            image_ref = self.load_artifact(
+                value.id,
+                image_batch=port_type == "ImageBatch",
+                frame_sequence=port_type == "FrameSeq",
+                pixel_plan=port_type == "PixelGeometryPlan",
+            )
             if port_type == "Mask":
                 mask_ref = self.mask_for_image(image_ref)
                 if mask_ref is None:
@@ -165,7 +170,7 @@ class Compiler(PlanBuilder):
                     raise CompileError(f"{n.id}.{name}: not a declared input")
                 value = self._port_value(self._value(ref, bindings), ports[name].type)
                 data[name] = value
-                if ports[name].type in {"Image", "ImageBatch"} and "mask" in ports:
+                if ports[name].type in {"Image", "ImageBatch", "NormalMap"} and "mask" in ports:
                     mask = self.mask_for_image(value)
                     if mask is not None and "mask" not in data:
                         data["mask"] = mask
