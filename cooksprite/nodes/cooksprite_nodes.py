@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 import numpy as np
 from PIL import Image
 
+from .normalcrafter import CS_NormalCrafterBatch, CS_NormalCrafterSequence
+
 try:  # Prompt Tool tests and API tooling do not need the compute-only torch dependency.
     import torch
 except ImportError:  # pragma: no cover - ComfyUI always supplies torch at node runtime.
@@ -224,6 +226,7 @@ class CS_StoreArtifact:
                 "value": ("IMAGE",),
                 "mask": ("MASK",),
                 "sequence": ("CS_PIXEL_SEQUENCE",),
+                "normal_sequence": ("CS_NORMAL_SEQUENCE",),
                 "pixel_plan": ("CS_PIXEL_PLAN",),
             },
         }
@@ -233,7 +236,15 @@ class CS_StoreArtifact:
     CATEGORY = "CookSprite/Bridge"
     OUTPUT_NODE = True
 
-    def store(self, upload_url, value=None, mask=None, sequence=None, pixel_plan=None):
+    def store(
+        self,
+        upload_url,
+        value=None,
+        mask=None,
+        sequence=None,
+        normal_sequence=None,
+        pixel_plan=None,
+    ):
         refs = []
         kind = urllib.parse.parse_qs(urllib.parse.urlparse(upload_url).query).get(
             "kind", ["Image"]
@@ -271,8 +282,36 @@ class CS_StoreArtifact:
                 if callable(close):
                     close()
             return (json.dumps(refs),)
+        if normal_sequence is not None:
+            if not hasattr(normal_sequence, "iter_normal_frames"):
+                raise ValueError("CS_StoreArtifact received an invalid streamed normal sequence")
+            try:
+                for index, (normal, alpha) in enumerate(normal_sequence.iter_normal_frames()):
+                    normal_value = np.asarray(normal, dtype=np.float32)
+                    alpha_value = np.asarray(alpha, dtype=np.float32)
+                    if normal_value.ndim != 3 or normal_value.shape[-1] != 3:
+                        raise ValueError("streamed normal frame must have three channels")
+                    if alpha_value.shape != normal_value.shape[:2]:
+                        raise ValueError("streamed normal alpha must match its normal frame")
+                    body = _post(
+                        _append_query(
+                            upload_url,
+                            output_index=index,
+                            canvas_width=int(normal_value.shape[1]),
+                            canvas_height=int(normal_value.shape[0]),
+                        ),
+                        _png(normal_value, kind, alpha_value),
+                    )
+                    refs.append(json.loads(body.decode())["id"])
+            finally:
+                close = getattr(normal_sequence, "close", None)
+                if callable(close):
+                    close()
+            return (json.dumps(refs),)
         if value is None:
-            raise ValueError("CS_StoreArtifact needs image, sequence, or PixelGeometryPlan input")
+            raise ValueError(
+                "CS_StoreArtifact needs image, sequence, normal sequence, or PixelGeometryPlan input"
+            )
         mask_array = _array(mask) if mask is not None else None
         for index, frame in enumerate(value):
             frame_mask = None
@@ -1126,6 +1165,8 @@ NODE_CLASSES = [
     CS_LotusModelLoader,
     CS_LotusNormalPrepare,
     CS_LotusNormalFinalize,
+    CS_NormalCrafterSequence,
+    CS_NormalCrafterBatch,
     CS_ProjectNormalToPixelPlan,
     CS_SliceSpriteSheet,
     CS_LoadVideoArtifact,

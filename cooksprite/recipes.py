@@ -23,6 +23,11 @@ from .workflows.lotus_normal import (
     LOTUS_NORMAL_PROVENANCE,
 )
 from .workflows.model_bundles import MODEL_BUNDLES
+from .workflows.normalcrafter import (
+    NORMALCRAFTER_BUNDLE_ID,
+    NORMALCRAFTER_MODEL,
+    NORMALCRAFTER_PROVENANCE,
+)
 
 RUNTIME_ASSETS_SCHEMA = "cooksprite.runtime-assets/v1"
 RECIPE_SLOT_TYPES = {
@@ -33,6 +38,7 @@ RECIPE_SLOT_TYPES = {
     "Video",
     "Mask",
     "NormalMap",
+    "NormalMapSequence",
     "PixelGeometryPlan",
     "Palette",
     "SpritePair",
@@ -49,6 +55,7 @@ RECIPE_OUTPUT_TYPES = {
     "Video",
     "Mask",
     "NormalMap",
+    "NormalMapSequence",
     "PixelGeometryPlan",
     "Palette",
     "SpritePair",
@@ -117,6 +124,12 @@ LOTUS_NORMAL_NODES = {
     "VAEDecode",
 }
 LOTUS_NORMAL_PLAN_NODES = LOTUS_NORMAL_NODES | {"CS_ProjectNormalToPixelPlan"}
+NORMALCRAFTER_SEQUENCE_NODES = {
+    "CS_LoadArtifact",
+    "CS_StoreArtifact",
+    "CS_NormalCrafterSequence",
+}
+NORMALCRAFTER_BATCH_NODES = NORMALCRAFTER_SEQUENCE_NODES | {"CS_NormalCrafterBatch"}
 OFFICIAL_ALPHA_MODEL = "birefnet.safetensors"
 T2I_ONLY_CHECKPOINTS = frozenset(
     {
@@ -195,9 +208,17 @@ def _model_names(report: dict[str, Any], folder: str) -> set[str]:
     return {str(item) for item in values}
 
 
+def _bundle_file_name(file: dict[str, Any]) -> str:
+    """Return a safe, runtime-discovery-relative member name."""
+
+    relative = str(file.get("relative_path") or "").strip("/")
+    name = str(file.get("name") or "")
+    return f"{relative}/{name}" if relative else name
+
+
 def _bundle_file_available(report: dict[str, Any], file: dict[str, Any]) -> bool:
     folder = str(file.get("folder") or "")
-    name = str(file.get("name") or "")
+    name = _bundle_file_name(file)
     if not folder or not name:
         return False
     if name in _model_names(report, folder):
@@ -219,7 +240,7 @@ def model_bundle_status(report: dict[str, Any], bundle_id: str) -> dict[str, Any
     files = [
         {
             **file,
-            "path": f"models/{file['folder']}/{file['name']}",
+            "path": f"models/{file['folder']}/{_bundle_file_name(file)}",
             "present": _bundle_file_available(report, file),
         }
         for file in bundle["files"]
@@ -578,9 +599,9 @@ def discover_recipes(report: dict[str, Any]) -> list[Recipe]:
                 family="cooksprite.normal",
                 actions=["normal.generate"],
                 modes=(
-                    ["image-to-normal", "image-to-pixel-normal"]
+                    ["image-to-normal", "frames-to-normal", "image-to-pixel-normal"]
                     if LOTUS_NORMAL_PLAN_NODES.issubset(nodes)
-                    else ["image-to-normal"]
+                    else ["image-to-normal", "frames-to-normal"]
                 ),
                 checkpoint=LOTUS_NORMAL_MODEL,
                 source="discovered",
@@ -596,13 +617,49 @@ def discover_recipes(report: dict[str, Any]) -> list[Recipe]:
                     label="Lotus Normal + CookSprite Pixelize",
                     family="cooksprite.sprite",
                     actions=["sprite.pixelize"],
-                    modes=["image-to-sprite-pair"],
+                    modes=["image-to-sprite-pair", "frames-to-sprite-pair"],
                     checkpoint=LOTUS_NORMAL_MODEL,
                     source="discovered",
                     model_bundle=LOTUS_NORMAL_BUNDLE_ID,
                     model_files=list(lotus_bundle["files"]),
                     provenance={
                         "normal": dict(LOTUS_NORMAL_PROVENANCE),
+                        "pixel": {"package": "cooksprite.pixel", "version": "2.1.0"},
+                    },
+                )
+            )
+    normalcrafter_bundle = MODEL_BUNDLES[NORMALCRAFTER_BUNDLE_ID]
+    if NORMALCRAFTER_SEQUENCE_NODES.issubset(nodes) and all(
+        _bundle_file_available(report, file) for file in normalcrafter_bundle["files"]
+    ):
+        recipes.append(
+            Recipe(
+                id=NORMALCRAFTER_BUNDLE_ID,
+                label="NormalCrafter · FP16 · Temporal",
+                family="cooksprite.normal-temporal",
+                actions=["normal.generate"],
+                modes=["frames-to-normal"],
+                checkpoint=NORMALCRAFTER_MODEL,
+                source="discovered",
+                model_bundle=NORMALCRAFTER_BUNDLE_ID,
+                model_files=list(normalcrafter_bundle["files"]),
+                provenance=dict(NORMALCRAFTER_PROVENANCE),
+            )
+        )
+        if NORMALCRAFTER_BATCH_NODES.issubset(nodes) and CORE_PIXEL_PAIR_NODES.issubset(nodes):
+            recipes.append(
+                Recipe(
+                    id="cooksprite-sprite-pixel-normalcrafter-v1",
+                    label="NormalCrafter + CookSprite Pixelize",
+                    family="cooksprite.sprite-temporal",
+                    actions=["sprite.pixelize"],
+                    modes=["frames-to-sprite-pair"],
+                    checkpoint=NORMALCRAFTER_MODEL,
+                    source="discovered",
+                    model_bundle=NORMALCRAFTER_BUNDLE_ID,
+                    model_files=list(normalcrafter_bundle["files"]),
+                    provenance={
+                        "normal": dict(NORMALCRAFTER_PROVENANCE),
                         "pixel": {"package": "cooksprite.pixel", "version": "2.1.0"},
                     },
                 )
@@ -700,9 +757,7 @@ def imported_recipe_is_compatible(recipe: Recipe, report: dict[str, Any]) -> boo
 def recipe_contract_is_valid(recipe: Recipe) -> bool:
     """Validate the small semantic contract used by the generic assembler."""
 
-    if recipe.checkpoint in T2I_ONLY_CHECKPOINTS and any(
-        mode != "t2i" for mode in recipe.modes
-    ):
+    if recipe.checkpoint in T2I_ONLY_CHECKPOINTS and any(mode != "t2i" for mode in recipe.modes):
         return False
     if not recipe.workflow:
         return True
@@ -766,8 +821,7 @@ def _runtime_recipe_allowed(recipe: Recipe) -> bool:
     """Prevent stale manifests from reviving unsupported model modes."""
 
     return not (
-        recipe.checkpoint in T2I_ONLY_CHECKPOINTS
-        and any(mode != "t2i" for mode in recipe.modes)
+        recipe.checkpoint in T2I_ONLY_CHECKPOINTS and any(mode != "t2i" for mode in recipe.modes)
     )
 
 
@@ -825,11 +879,23 @@ def recipe_mode(action_id: str, inputs: dict[str, list[str]]) -> str:
     if action_id == "animation.generate":
         return "i2v" if inputs.get("character") else "t2v"
     return {
-        "normal.generate": "image-to-pixel-normal" if inputs.get("pixel_plan") else "image-to-normal",
-        "sprite.pixelize": "image-to-sprite-pair",
+        "normal.generate": (
+            "image-to-pixel-normal"
+            if inputs.get("pixel_plan")
+            else "frames-to-normal"
+            if inputs.get("__source_kind") == ["FrameSeq"]
+            else "image-to-normal"
+        ),
+        "sprite.pixelize": (
+            "frames-to-sprite-pair"
+            if inputs.get("__source_kind") == ["FrameSeq"]
+            else "image-to-sprite-pair"
+        ),
         "sheet.slice": "sheet-to-frames",
         "video.sample": "video-to-frames",
-        "image.pixelize": "frames-to-frames" if inputs.get("__source_kind") == ["FrameSeq"] else "image-to-image",
+        "image.pixelize": "frames-to-frames"
+        if inputs.get("__source_kind") == ["FrameSeq"]
+        else "image-to-image",
         "image.cutout": "image-to-image",
     }.get(action_id, "")
 

@@ -275,6 +275,7 @@ export interface ModelDownloadView {
 export interface RuntimeDefaultsView {
   runtime_id: string;
   defaults: Record<string, RuntimeDefaultBinding>;
+  normal_estimators: Partial<Record<"single" | "temporal", RuntimeDefaultBinding>>;
   model_bundles: ModelBundleView[];
   models: Array<{ id: string; label: string; actions: string[]; modes: string[] }>;
   recipes: Array<{ id: string; label: string; actions: string[]; modes: string[]; model_id: string }>;
@@ -375,6 +376,8 @@ export const api = {
     json<ModelDownloadView>(`/runtimes/${encodeURIComponent(id)}/model-downloads/${encodeURIComponent(downloadId)}`),
   setRuntimeDefault: (id: string, actionId: string, body: RuntimeDefaultBinding) =>
     json<{ runtime_id: string; action_id: string; default: RuntimeDefaultBinding }>(`/runtimes/${encodeURIComponent(id)}/defaults/${encodeURIComponent(actionId)}`, { method: "PUT", ...jsonBody(body) }),
+  setRuntimeNormalEstimator: (id: string, mode: "single" | "temporal", body: RuntimeDefaultBinding) =>
+    json<{ runtime_id: string; mode: "single" | "temporal"; default: RuntimeDefaultBinding }>(`/runtimes/${encodeURIComponent(id)}/defaults/normal/${encodeURIComponent(mode)}`, { method: "PUT", ...jsonBody(body) }),
   doctorRuntime: (id: string) => json<{ runtime_id: string; snapshot: string; tool_count: number; recipe_count: number; system: Record<string, unknown>; device?: Record<string, unknown>; models: Record<string, number>; recipes: RuntimeRecipe[] }>(`/runtimes/${encodeURIComponent(id)}/doctor`, { method: "POST" }),
   installRuntimeNodes: (id: string) => json<{ runtime_id: string; status: "installed" | "manual_required"; message: string; command?: string; restart_required: boolean }>(`/runtimes/${encodeURIComponent(id)}/nodes/install`, { method: "POST" }),
   restartRuntime: (id: string) => json<LocalSetupView | RuntimeRestartManualView>(`/runtimes/${encodeURIComponent(id)}/restart`, { method: "POST" }),

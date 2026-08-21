@@ -1182,7 +1182,12 @@ def test_runtime_defaults_select_the_configured_recipe_when_model_is_omitted(tmp
                 "id": "lotus-normal-d-v1-1.safetensors",
                 "label": "lotus-normal-d-v1-1.safetensors",
                 "actions": ["normal.generate", "sprite.pixelize"],
-                "modes": ["image-to-normal", "image-to-sprite-pair"],
+                "modes": [
+                    "image-to-normal",
+                    "frames-to-normal",
+                    "image-to-sprite-pair",
+                    "frames-to-sprite-pair",
+                ],
             },
     ]
     updated = client.put(
@@ -1275,7 +1280,11 @@ def test_frame_sequence_normal_expands_and_preserves_pairing(tmp_path):
     ).json()
     run = client.post(
         "/api/v1/actions/normal.generate/runs",
-        json={"project": project["id"], "inputs": {"source": sequence["id"]}, "values": {}},
+        json={
+            "project": project["id"],
+            "inputs": {"source": sequence["id"]},
+            "values": {"model": "rt_test:lotus-normal-d-v1-1.safetensors"},
+        },
     )
     assert run.status_code == 202
     state = wait(client, run.json()["id"])
@@ -1328,7 +1337,8 @@ def test_sprite_pixelize_compiles_one_batch_and_pairs_final_sequence(tmp_path):
         json={
             "project": project["id"],
             "inputs": {"source": sequence["id"]},
-            "values": {
+                "values": {
+                "model": "rt_test:lotus-normal-d-v1-1.safetensors",
                 "target_size": "128",
                 "palette_budget": "32",
                 "outline": False,

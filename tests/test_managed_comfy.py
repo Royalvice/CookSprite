@@ -60,6 +60,9 @@ def test_node_pack_copies_new_python_modules(monkeypatch, tmp_path):
     (source / "pixel" / "presets").mkdir(parents=True)
     (source / "pixel" / "__init__.py").write_text("pixel\n", encoding="utf-8")
     (source / "pixel" / "presets" / "high_density_v3.yaml").write_text("preset\n", encoding="utf-8")
+    (source / "normalcrafter").mkdir()
+    (source / "normalcrafter" / "runtime.py").write_text("runtime\n", encoding="utf-8")
+    (source / "normalcrafter" / "LICENSE").write_text("MIT\n", encoding="utf-8")
     (source / "requirements.txt").write_text("# generated\n", encoding="utf-8")
     monkeypatch.setattr(managed, "__file__", str(managed_file))
 
@@ -72,3 +75,5 @@ def test_node_pack_copies_new_python_modules(monkeypatch, tmp_path):
     assert (target / "future_tool.py").read_text(encoding="utf-8") == "future\n"
     assert (target / "pixel" / "__init__.py").read_text(encoding="utf-8") == "pixel\n"
     assert (target / "pixel" / "presets" / "high_density_v3.yaml").read_text(encoding="utf-8") == "preset\n"
+    assert (target / "normalcrafter" / "runtime.py").read_text(encoding="utf-8") == "runtime\n"
+    assert (target / "normalcrafter" / "LICENSE").read_text(encoding="utf-8") == "MIT\n"

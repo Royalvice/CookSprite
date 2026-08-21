@@ -51,11 +51,36 @@ def _safe_folder(value: Any) -> str:
     return folder
 
 
+def _safe_relative_path(value: Any) -> Path:
+    """Validate an optional model-subdirectory declared by a bundle.
+
+    Diffusers bundles contain repeated names such as ``config.json``.  A
+    checked relative path lets those files retain their upstream layout while
+    still preventing a manifest from escaping ``ComfyUI/models``.
+    """
+
+    raw = str(value or "").strip().strip("/")
+    if not raw:
+        return Path()
+    path = Path(raw)
+    if path.is_absolute() or "\\" in raw or any(part in {"", ".", ".."} for part in path.parts):
+        raise ModelDownloadError("invalid model relative path", code="model_path_invalid")
+    return path
+
+
+def _model_directory(file: dict[str, Any]) -> Path:
+    return (
+        Path("models")
+        / _safe_folder(file.get("folder"))
+        / _safe_relative_path(file.get("relative_path"))
+    )
+
+
 def comfy_model_path(directory: str | Path, file: dict[str, Any]) -> Path:
     """Resolve one declared bundle file below the validated ComfyUI root."""
 
     root = _comfy_root(directory)
-    return root / "models" / _safe_folder(file.get("folder")) / _safe_file_name(file.get("name"))
+    return root / _model_directory(file) / _safe_file_name(file.get("name"))
 
 
 def official_download_command(directory: str | Path, file: dict[str, Any]) -> str:
@@ -65,7 +90,7 @@ def official_download_command(directory: str | Path, file: dict[str, Any]) -> st
     url = str(file.get("url") or "")
     if urlsplit(url).scheme != "https":
         raise ModelDownloadError("model source must use HTTPS", code="model_source_invalid")
-    folder = _safe_folder(file.get("folder"))
+    relative = _model_directory(file)
     cli = _comfy_cli(root) or "comfy"
     # ``launch`` uses the managed runtime parent as its CLI workspace, but
     # model download resolves paths relative to the actual ComfyUI checkout.
@@ -74,7 +99,7 @@ def official_download_command(directory: str | Path, file: dict[str, Any]) -> st
     workspace = root
     return (
         f'{cli} --workspace="{workspace}" model download '
-        f'--url "{url}" --relative-path "models/{folder}"'
+        f'--url "{url}" --relative-path "{relative.as_posix()}"'
     )
 
 
@@ -141,14 +166,14 @@ def _run_cli(
     if urlsplit(url).scheme != "https":
         raise ModelDownloadError("model source must use HTTPS", code="model_source_invalid")
     name = _safe_file_name(file.get("name"))
-    folder = _safe_folder(file.get("folder"))
+    relative = _model_directory(file)
     # The model command must run with the ComfyUI checkout as its workspace;
     # the parent runtime workspace is only valid for lifecycle commands such
     # as ``comfy launch``.
     workspace = root
-    staging_relative = Path("models") / ".cooksprite-downloads" / folder
+    staging_relative = Path("models") / ".cooksprite-downloads" / relative.relative_to("models")
     staging = root / staging_relative / name
-    final = root / "models" / folder / name
+    final = root / relative / name
     staging.parent.mkdir(parents=True, exist_ok=True)
     command = [
         cli,
@@ -276,12 +301,12 @@ def _download_with_http_endpoint(
     if urlsplit(url).scheme != "https":
         raise ModelDownloadError("model source must use HTTPS", code="model_source_invalid")
     name = _safe_file_name(file.get("name"))
-    folder = _safe_folder(file.get("folder"))
+    relative = _model_directory(file)
     _emit(progress, current_file=name, progress_value=0.0, message="requesting ComfyUI download")
     try:
         response = httpx.post(
             base_url.rstrip("/") + "/download_model",
-            json={"url": url, "relative_path": f"models/{folder}"},
+            json={"url": url, "relative_path": relative.as_posix()},
             timeout=None,
         )
     except httpx.HTTPError as exc:
@@ -302,7 +327,7 @@ def _download_with_http_endpoint(
             f"ComfyUI download endpoint returned HTTP {response.status_code}",
             code="download_endpoint_failed",
         )
-    target = root / "models" / folder / name if root else None
+    target = root / relative / name if root else None
     if target is not None and (not target.is_file() or target.stat().st_size <= 0):
         raise ModelDownloadError(
             f"ComfyUI download endpoint returned success but did not produce {name}",
@@ -378,7 +403,7 @@ def download_bundle_file(
     except (KeyError, ModelDownloadError) as endpoint_error:
         command = (
             f'comfy model download --url "{file.get("url")}" '
-            f'--relative-path "models/{_safe_folder(file.get("folder"))}"'
+            f'--relative-path "{_model_directory(file).as_posix()}"'
         )
         if isinstance(endpoint_error, ModelDownloadError):
             raise ModelDownloadError(
@@ -389,11 +414,7 @@ def download_bundle_file(
             f"remote runtime directory is unavailable; run on the ComfyUI host: {command}",
             code="remote_download_manual",
         ) from endpoint_error
-    return (
-        root / "models" / _safe_folder(file.get("folder")) / name
-        if root
-        else Path(f"models/{_safe_folder(file.get('folder'))}/{name}")
-    )
+    return root / _model_directory(file) / name if root else _model_directory(file) / name
 
 
 __all__ = [

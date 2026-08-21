@@ -119,7 +119,13 @@ class PlanBuilder:
     ) -> str:
         if not self.bridge or not self.run_id:
             raise ValueError("persisted outputs require a signed runtime bridge")
-        storage_kind = "Image" if kind in {"ImageBatch", "FrameSeq"} else kind
+        storage_kind = (
+            "Image"
+            if kind in {"ImageBatch", "FrameSeq"}
+            else "NormalMap"
+            if kind == "NormalMapSequence"
+            else kind
+        )
         inputs: dict[str, Any] = {
             "upload_url": self.bridge.upload_url(
                 self.run_id,
@@ -129,6 +135,8 @@ class PlanBuilder:
         }
         if kind == "FrameSeq":
             inputs["sequence"] = value
+        elif kind == "NormalMapSequence":
+            inputs["normal_sequence"] = value
         elif kind == "PixelGeometryPlan":
             inputs["pixel_plan"] = value
         else:
@@ -137,7 +145,11 @@ class PlanBuilder:
             "CS_StoreArtifact",
             inputs,
         )
-        mask = self.mask_for_image(value) if kind not in {"FrameSeq", "PixelGeometryPlan"} else None
+        mask = (
+            self.mask_for_image(value)
+            if kind not in {"FrameSeq", "NormalMapSequence", "PixelGeometryPlan"}
+            else None
+        )
         if mask is not None:
             self.graph[node_id]["inputs"]["mask"] = mask
         self.sinks.append(node_id)

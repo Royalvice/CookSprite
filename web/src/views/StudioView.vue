@@ -9,6 +9,7 @@ import DropTarget from "../components/DropTarget.vue";
 import FrameStudio from "../components/FrameStudio.vue";
 import ImageStyleCameraControls from "../components/ImageStyleCameraControls.vue";
 import ImageToolsBench from "../components/ImageToolsBench.vue";
+import NormalEstimatorControls, { type NormalEstimatorOption } from "../components/NormalEstimatorControls.vue";
 import PixelizeControls from "../components/PixelizeControls.vue";
 import RunStatusPanel from "../components/RunStatusPanel.vue";
 import StageRail from "../components/StageRail.vue";
@@ -49,6 +50,8 @@ const normalFrameIndex = ref(0);
 const normalPlaying = ref(false);
 const normalPixelize = ref(false);
 const normalPixelValues = ref<Record<string, unknown>>({});
+const normalModel = ref("");
+const normalParams = ref<Record<string, unknown>>({});
 
 const imageAction = computed(() => store.actions.find((item) => item.id === "image.generate"));
 const animationAction = computed(() => store.actions.find((item) => item.id === "animation.generate"));
@@ -158,12 +161,32 @@ const animationCanRun = computed(() => {
     : modes.has("t2v") || modes.has("t2i-sequence");
 });
 const normalRunAction = computed(() => normalPixelize.value ? spritePixelAction.value : normalAction.value);
+const normalInputMode = computed<"single" | "temporal">(() => (
+  sourceArtifact.value?.kind === "FrameSeq" ? "temporal" : "single"
+));
+const normalWorkflowMode = computed(() => {
+  if (normalInputMode.value === "temporal") {
+    return normalPixelize.value ? "frames-to-sprite-pair" : "frames-to-normal";
+  }
+  return normalPixelize.value ? "image-to-sprite-pair" : "image-to-normal";
+});
+const normalEstimatorOptions = computed<NormalEstimatorOption[]>(() => {
+  const seen = new Set<string>();
+  return (normalRunAction.value?.models || []).flatMap((model) => {
+    if (!model.modes.includes(normalWorkflowMode.value) || seen.has(model.id)) return [];
+    seen.add(model.id);
+    return [{ id: model.id, modelId: model.model_id, label: model.label }];
+  });
+});
+const normalSelectedModel = computed(() => normalRunAction.value?.models.find((model) => model.id === normalModel.value));
 const normalPlanSupported = computed(() => !normalPixelPlanId.value || Boolean(
-  normalAction.value?.models.some((model) => model.modes.includes("image-to-pixel-normal"))
+  normalSelectedModel.value?.modes.includes("image-to-pixel-normal")
 ));
 const normalCanRun = computed(() => Boolean(
   (normalPixelize.value ? sourceArtifact.value : selectedNormalSource.value)
   && normalRunAction.value?.available
+  && normalSelectedModel.value
+  && normalSelectedModel.value.modes.includes(normalWorkflowMode.value)
   && normalPlanSupported.value
   && !running.value
 ));
@@ -189,6 +212,20 @@ async function applyImageRuntimeDefault() {
     : action.models.length && !action.models.some((item) => item.family === "comfy.flux2-klein")
       ? action.models[0].id
       : "";
+}
+async function applyNormalRuntimeDefault() {
+  const runtimeId = store.activeRuntimeId;
+  const selected = normalEstimatorOptions.value.find((item) => item.id === normalModel.value);
+  if (selected) return;
+  if (!runtimeId || !normalEstimatorOptions.value.length) {
+    normalModel.value = "";
+    return;
+  }
+  const defaults = await api.runtimeDefaults(runtimeId).catch(() => null);
+  const binding = defaults?.normal_estimators[normalInputMode.value];
+  normalModel.value = normalEstimatorOptions.value.find(
+    (item) => item.modelId === binding?.model_id,
+  )?.id || normalEstimatorOptions.value[0].id;
 }
 function normalizeImageStyleForCategory() {
   let category = String(imageValues.value.category || "");
@@ -217,6 +254,11 @@ watch([imageAction, () => store.activeRuntimeId], () => { void applyImageRuntime
 watch(() => [imageValues.value.category, imageValues.value.style], normalizeImageStyleForCategory, { immediate: true });
 watch(animationAction, (action) => { if (action) fillDefaults(animationValues.value, action); }, { immediate: true });
 watch(spritePixelAction, (action) => { if (action) fillDefaults(normalPixelValues.value, action); }, { immediate: true });
+watch(
+  [normalRunAction, normalInputMode, normalEstimatorOptions, () => store.activeRuntimeId],
+  () => { void applyNormalRuntimeDefault(); },
+  { immediate: true },
+);
 watch(stage, (next) => {
   hideHoverPreview(true);
   if (workspaceReady && next === "animate" && selectedArtifact.value?.kind === "Image") inputs.value.character = selectedArtifact.value.id;
@@ -403,14 +445,21 @@ async function normalRun() {
       flip_y: false,
       ...(normalPixelPlanId.value ? { frame_index: normalFrameIndex.value } : {}),
     };
+  values.model = normalModel.value;
   const normalInputs: Record<string, string | string[]> = normalPixelize.value
     ? { source: sourceArtifact.value.id }
     : normalPixelPlanId.value
       ? { source: selectedNormalSource.value.id, pixel_plan: normalPixelPlanId.value }
       : { source: sourceArtifact.value.id };
-  await store.runAction(actionId, normalInputs, values);
+  await store.runAction(
+    actionId,
+    normalInputs,
+    values,
+    normalSelectedModel.value?.model_id === "normalcrafter-v1" ? normalParams.value : {},
+  );
 }
 function setNormalPixelValue(id: string, value: unknown) { normalPixelValues.value[id] = value; }
+function setNormalParam(name: string, value: number) { normalParams.value[name] = value; }
 function clearNormalResult() {
   normalResultSequence.value = null;
   normalResultImage.value = null;
@@ -641,6 +690,15 @@ function downloadPack(artifact: ArtifactRef) { const anchor = document.createEle
                 @change="setNormalPixelValue"
               />
             </section>
+            <NormalEstimatorControls
+              :options="normalEstimatorOptions"
+              :model="normalModel"
+              :params="normalParams"
+              :disabled="running"
+              :advanced="normalInputMode === 'temporal'"
+              @update:model="normalModel = $event"
+              @update:param="setNormalParam"
+            />
             <p v-if="!normalPixelize && normalPixelPlanId" class="normal-pixel-plan-status" role="status">
               {{ $t("studio.pixelPlanAttached") }}
             </p>

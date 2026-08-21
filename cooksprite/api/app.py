@@ -372,6 +372,11 @@ def create_app(
         available = recipes if recipes is not None else recipes_from_runtime(runtime)
         result: dict[str, dict[str, str]] = {}
         for action_id in ACTION_IDS:
+            # Normal-aware Actions use the two explicit still/temporal
+            # estimator bindings below.  Keeping a second Action-level
+            # default would be misleading and would not affect routing.
+            if action_id in {"normal.generate", "sprite.pixelize"}:
+                continue
             has_flux = any(
                 recipe.family == "comfy.flux2-klein"
                 and action_id in recipe.actions
@@ -389,11 +394,84 @@ def create_app(
                 result[action_id] = binding
         return result
 
+    def _normal_estimator_binding(
+        mode: str,
+        recipes: list[Recipe],
+        current: dict[str, Any] | None = None,
+    ) -> dict[str, str] | None:
+        """Resolve one explicitly mode-compatible normal estimator.
+
+        A single image never silently becomes a temporal model, and a missing
+        user-selected temporal model never falls back to Lotus.  That keeps
+        model semantics visible instead of changing output quality behind the
+        user's back.
+        """
+
+        if mode not in {"single", "temporal"}:
+            raise ValueError("normal estimator mode must be single or temporal")
+        inputs = {"__source_kind": ["FrameSeq"]} if mode == "temporal" else {}
+        compatible = [
+            recipe
+            for recipe in recipes
+            if supports(recipe, "normal.generate", inputs)
+            and (
+                recipe.family == "cooksprite.normal"
+                if mode == "single"
+                else recipe.family in {"cooksprite.normal", "cooksprite.normal-temporal"}
+            )
+        ]
+        if isinstance(current, dict):
+            model_id = str(current.get("model_id") or "")
+            if model_id and any(
+                str(recipe.checkpoint or recipe.id) == model_id for recipe in compatible
+            ):
+                return {"model_id": model_id}
+            # A recorded selection that disappeared is deliberately not
+            # replaced by another estimator.
+            if model_id:
+                return None
+        if not compatible:
+            return None
+        if mode == "temporal":
+            # Lotus stays available as an explicit <=32-frame choice, but it
+            # is never promoted automatically when the temporal model is
+            # absent.  That avoids an invisible quality/temporal-consistency
+            # downgrade.
+            selected = next(
+                (recipe for recipe in compatible if recipe.family == "cooksprite.normal-temporal"),
+                None,
+            )
+            if selected is None:
+                return None
+        else:
+            selected = compatible[0]
+        return {"model_id": str(selected.checkpoint or selected.id)}
+
+    def runtime_normal_estimators(
+        runtime: dict[str, Any] | None,
+        recipes: list[Recipe] | None = None,
+    ) -> dict[str, dict[str, str]]:
+        if not runtime:
+            return {}
+        manifest = manifest_from_assets(runtime_assets(runtime))
+        stored = (
+            manifest.get("normal_estimators")
+            if isinstance(manifest.get("normal_estimators"), dict)
+            else {}
+        )
+        available = recipes if recipes is not None else recipes_from_runtime(runtime)
+        return {
+            mode: binding
+            for mode in ("single", "temporal")
+            if (binding := _normal_estimator_binding(mode, available, stored.get(mode)))
+        }
+
     def save_runtime_defaults(
         runtime: dict[str, Any],
         defaults: dict[str, dict[str, str]],
         *,
         explicit_action: str | None = None,
+        normal_estimators: dict[str, dict[str, str]] | None = None,
     ) -> None:
         manifest = manifest_from_assets(runtime_assets(runtime))
         default_sources = (
@@ -408,6 +486,11 @@ def create_app(
             "schema": manifest.get("schema", "cooksprite.runtime-assets/v1"),
             "defaults": defaults,
             "default_sources": default_sources,
+            "normal_estimators": (
+                normal_estimators
+                if normal_estimators is not None
+                else manifest.get("normal_estimators", {})
+            ),
             "callback_url": callback_for(runtime),
         }
         assets = [
@@ -479,9 +562,15 @@ def create_app(
             if isinstance(existing_manifest.get("default_sources"), dict)
             else {}
         )
+        stored_normal_estimators = (
+            existing_manifest.get("normal_estimators")
+            if isinstance(existing_manifest.get("normal_estimators"), dict)
+            else {}
+        )
         manifest["defaults"] = {
             action_id: binding
             for action_id in ACTION_IDS
+            if action_id not in {"normal.generate", "sprite.pixelize"}
             if (
                 binding := _default_binding(
                     action_id,
@@ -508,6 +597,11 @@ def create_app(
             )
         }
         manifest["default_sources"] = stored_sources
+        manifest["normal_estimators"] = {
+            mode: binding
+            for mode in ("single", "temporal")
+            if (binding := _normal_estimator_binding(mode, recipes, stored_normal_estimators.get(mode)))
+        }
         model_sources: dict[str, str] = {}
         for folder, names in (manifest.get("models") or {}).items():
             if not isinstance(names, list):
@@ -1495,6 +1589,30 @@ def create_app(
             if normalized_inputs.get("source")
             else None
         )
+        source_sequence_count = 0
+        if (
+            action_id in {"normal.generate", "sprite.pixelize"}
+            and source_row
+            and source_row.get("kind") == "FrameSeq"
+            and not normalized_inputs.get("pixel_plan")
+        ):
+            source_sequence_count = len(
+                frame_sequence_view(normalized_inputs["source"][0]).sequence.frames
+            )
+            limit = 240 if action_id == "normal.generate" else 32
+            if source_sequence_count > limit:
+                raise HTTPException(
+                    422,
+                    _detail(
+                        "sprite_chunk_too_large" if action_id == "sprite.pixelize" else "sequence_too_large",
+                        f"{action_id} accepts at most {limit} frames for this selected mode",
+                    ),
+                )
+            # A one-frame FrameSeq remains a still-image request.  A temporal
+            # estimator only receives an actual sequence, never a fabricated
+            # duplicate image.
+            if source_sequence_count >= 2:
+                compile_inputs["__source_kind"] = ["FrameSeq"]
         if action_id == "image.pixelize" and source_row and source_row.get("kind") == "FrameSeq":
             sequence = frame_sequence_view(normalized_inputs["source"][0]).sequence
             if len(sequence.frames) > 240:
@@ -1539,7 +1657,8 @@ def create_app(
         if action_id in {"normal.generate", "sprite.pixelize"} and not normalized_inputs.get("pixel_plan"):
             try:
                 ordered_sources = source_frame_ids(
-                    normalized_inputs.get("source", []), limit=32
+                    normalized_inputs.get("source", []),
+                    limit=240 if action_id == "normal.generate" else 32,
                 )
             except ValueError as exc:
                 raise HTTPException(
@@ -1559,11 +1678,27 @@ def create_app(
                 ),
             )
         if not values.get("model") and descriptor.models:
-            binding = runtime_defaults(runtime, runtime_recipes).get(action_id)
+            normal_mode = (
+                "temporal" if compile_inputs.get("__source_kind") == ["FrameSeq"] else "single"
+            )
+            normal_action = action_id in {"normal.generate", "sprite.pixelize"}
+            binding = (
+                runtime_normal_estimators(runtime, runtime_recipes).get(normal_mode)
+                if normal_action
+                else runtime_defaults(runtime, runtime_recipes).get(action_id)
+            )
             has_flux_recipe = any(
                 recipe.family == "comfy.flux2-klein" and action_id in recipe.actions
                 for recipe in runtime_recipes
             )
+            if normal_action and not binding:
+                raise HTTPException(
+                    409,
+                    _detail(
+                        "normal_estimator_unconfigured",
+                        f"no compatible default {normal_mode} normal estimator is available on this runtime",
+                    ),
+                )
             if action_id == "image.generate" and has_flux_recipe and not binding:
                 raise HTTPException(
                     409,
@@ -1580,6 +1715,14 @@ def create_app(
                 ),
                 "",
             )
+            if binding and not preferred:
+                raise HTTPException(
+                    409,
+                    _detail(
+                        "default_model_incompatible",
+                        "the configured default model is not compatible with this Action input",
+                    ),
+                )
             values["model"] = next(
                 (item.id for item in descriptor.models if item.id == preferred),
                 descriptor.models[0].id,
@@ -1603,6 +1746,18 @@ def create_app(
                 _detail(
                     "recipe_incompatible",
                     "the selected model does not support these text/image inputs",
+                ),
+            )
+        if (
+            action_id == "normal.generate"
+            and source_sequence_count > 32
+            and selected_recipe.family != "cooksprite.normal-temporal"
+        ):
+            raise HTTPException(
+                422,
+                _detail(
+                    "temporal_model_required",
+                    "FrameSeq longer than 32 frames requires the NormalCrafter temporal estimator",
                 ),
             )
         # Re-materialize the small built-in adapter on each run.  Existing
@@ -2844,6 +2999,7 @@ def create_app(
         return {
             "runtime_id": runtime_id,
             "defaults": runtime_defaults(runtime, recipes),
+            "normal_estimators": runtime_normal_estimators(runtime, recipes),
             "model_bundles": bundles,
             "models": runtime_model_options(recipes),
             "recipes": [
@@ -2858,6 +3014,49 @@ def create_app(
             ],
         }
 
+    @app.put("/api/v1/runtimes/{runtime_id}/defaults/normal/{mode}")
+    def set_runtime_normal_estimator(
+        runtime_id: str,
+        mode: str,
+        body: RuntimeDefaultBinding,
+    ) -> dict[str, Any]:
+        if mode not in {"single", "temporal"}:
+            raise HTTPException(
+                422,
+                _detail("normal_estimator_mode_invalid", "normal estimator mode must be single or temporal"),
+            )
+        runtime = runtime_or_404(runtime_id)
+        recipes = recipes_from_runtime(runtime)
+        inputs = {"__source_kind": ["FrameSeq"]} if mode == "temporal" else {}
+        compatible = [
+            recipe
+            for recipe in recipes
+            if supports(recipe, "normal.generate", inputs)
+            and (
+                recipe.family == "cooksprite.normal"
+                if mode == "single"
+                else recipe.family in {"cooksprite.normal", "cooksprite.normal-temporal"}
+            )
+            and str(recipe.checkpoint or recipe.id) == body.model_id
+        ]
+        if not compatible:
+            raise HTTPException(
+                422,
+                _detail(
+                    "default_model_incompatible",
+                    "the selected model is not compatible with this normal-estimation mode on this runtime",
+                ),
+            )
+        estimators = runtime_normal_estimators(runtime, recipes)
+        estimators[mode] = {"model_id": body.model_id}
+        save_runtime_defaults(
+            runtime,
+            runtime_defaults(runtime, recipes),
+            normal_estimators=estimators,
+        )
+        invalidate_runtime(runtime_id)
+        return {"runtime_id": runtime_id, "mode": mode, "default": estimators[mode]}
+
     @app.put("/api/v1/runtimes/{runtime_id}/defaults/{action_id}")
     def set_runtime_default(
         runtime_id: str, action_id: str, body: RuntimeDefaultBinding
@@ -2865,6 +3064,14 @@ def create_app(
         runtime = runtime_or_404(runtime_id)
         if action_id not in ACTION_IDS:
             raise HTTPException(404, _detail("action_not_found", "unknown Action"))
+        if action_id in {"normal.generate", "sprite.pixelize"}:
+            raise HTTPException(
+                422,
+                _detail(
+                    "normal_estimator_mode_required",
+                    "choose the single-image or temporal normal-estimation default explicitly",
+                ),
+            )
         recipes = recipes_from_runtime(runtime)
         compatible = [
             recipe

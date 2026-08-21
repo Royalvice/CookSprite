@@ -271,26 +271,92 @@ def _normal_pixel_plan_workflow(runtime_id: str, recipe: Recipe) -> WorkflowDefi
     )
 
 
-def _sprite_pixel_workflow(runtime_id: str, recipe: Recipe) -> WorkflowDefinition:
+def _normal_temporal_workflow(runtime_id: str, recipe: Recipe) -> WorkflowDefinition:
+    """Lower the typed FrameSeq directly into the streamed NormalCrafter node."""
+
     return WorkflowDefinition(
-        id=f"{recipe.id}.sprite.pixelize",
-        title=f"{recipe.label} · sprite.pixelize",
+        id=f"{recipe.id}.normal.generate.temporal",
+        title=f"{recipe.label} · normal.generate · temporal",
         runtime_id=runtime_id,
         inputs={
-            "source": "ImageBatch",
+            "source": "FrameSeq",
+            "max_resolution": "Number",
+            "window_size": "Number",
+            "time_step_size": "Number",
+            "decode_chunk_size": "Number",
             "strength": "Number",
             "flip_y": "Boolean",
-            "target_size": "Number",
-            "palette_budget": "Number",
-            "outline": "Boolean",
-            "outline_color": "Text",
         },
         nodes=[
             ToolNode(
                 id="normal",
-                tool="cooksprite.normal_estimate",
-                inputs={"image": input_ref("source")},
-                params={"strength": input_ref("strength"), "flip_y": input_ref("flip_y")},
+                tool="cooksprite.normal_estimate_temporal",
+                inputs={"source": input_ref("source")},
+                params={
+                    "max_resolution": input_ref("max_resolution"),
+                    "window_size": input_ref("window_size"),
+                    "time_step_size": input_ref("time_step_size"),
+                    "decode_chunk_size": input_ref("decode_chunk_size"),
+                    "strength": input_ref("strength"),
+                    "flip_y": input_ref("flip_y"),
+                },
+            )
+        ],
+        outputs={"normal": output_ref("normal", "normal")},
+        output_sources={"normal": input_ref("source")},
+    )
+
+
+def _sprite_pixel_workflow(
+    runtime_id: str,
+    recipe: Recipe,
+    *,
+    temporal: bool = False,
+) -> WorkflowDefinition:
+    normal_inputs = {"image": input_ref("source")}
+    normal_params: dict[str, ValueRef] = {
+        "strength": input_ref("strength"),
+        "flip_y": input_ref("flip_y"),
+    }
+    inputs: dict[str, str] = {
+        "source": "ImageBatch",
+        "strength": "Number",
+        "flip_y": "Boolean",
+        "target_size": "Number",
+        "palette_budget": "Number",
+        "outline": "Boolean",
+        "outline_color": "Text",
+    }
+    normal_tool = "cooksprite.normal_estimate"
+    if temporal:
+        normal_tool = "cooksprite.normal_estimate_temporal_batch"
+        inputs.update(
+            {
+                "max_resolution": "Number",
+                "window_size": "Number",
+                "time_step_size": "Number",
+                "decode_chunk_size": "Number",
+            }
+        )
+        normal_params.update(
+            {
+                "max_resolution": input_ref("max_resolution"),
+                "window_size": input_ref("window_size"),
+                "time_step_size": input_ref("time_step_size"),
+                "decode_chunk_size": input_ref("decode_chunk_size"),
+            }
+        )
+    return WorkflowDefinition(
+        id=f"{recipe.id}.sprite.pixelize{'.temporal' if temporal else ''}",
+        title=f"{recipe.label} · sprite.pixelize",
+        runtime_id=runtime_id,
+        inputs=inputs,
+        nodes=[
+            ToolNode(
+                id="normal",
+                tool=normal_tool,
+                inputs=normal_inputs,
+                params=normal_params,
             ),
             ToolNode(
                 id="pixel",
@@ -512,14 +578,30 @@ def materialize_recipe_workflows(
             ),
         }
     elif recipe.family == "cooksprite.normal":
-        definitions = {"normal.generate:image-to-normal": _normal_workflow(runtime_id, recipe)}
+        normal = _normal_workflow(runtime_id, recipe)
+        definitions = {
+            "normal.generate:image-to-normal": normal,
+            "normal.generate:frames-to-normal": normal,
+        }
         if "image-to-pixel-normal" in recipe.modes:
             definitions["normal.generate:image-to-pixel-normal"] = _normal_pixel_plan_workflow(
                 runtime_id, recipe
             )
     elif recipe.family == "cooksprite.sprite":
+        sprite = _sprite_pixel_workflow(runtime_id, recipe)
         definitions = {
-            "sprite.pixelize:image-to-sprite-pair": _sprite_pixel_workflow(runtime_id, recipe)
+            "sprite.pixelize:image-to-sprite-pair": sprite,
+            "sprite.pixelize:frames-to-sprite-pair": sprite,
+        }
+    elif recipe.family == "cooksprite.normal-temporal":
+        definitions = {
+            "normal.generate:frames-to-normal": _normal_temporal_workflow(runtime_id, recipe)
+        }
+    elif recipe.family == "cooksprite.sprite-temporal":
+        definitions = {
+            "sprite.pixelize:frames-to-sprite-pair": _sprite_pixel_workflow(
+                runtime_id, recipe, temporal=True
+            )
         }
     elif recipe.family == "cooksprite.sheet":
         definitions = {"sheet.slice:sheet-to-frames": _sheet_workflow(runtime_id, recipe)}
@@ -713,7 +795,12 @@ def bind_action_task(
             "strength": max(
                 0.0,
                 min(
-                    float(values.get("strength", 1.0 if action_id in {"normal.generate", "sprite.pixelize"} else 0.65)),
+                    float(
+                        values.get(
+                            "strength",
+                            1.0 if action_id in {"normal.generate", "sprite.pixelize"} else 0.65,
+                        )
+                    ),
                     2.0 if action_id in {"normal.generate", "sprite.pixelize"} else 1.0,
                 ),
             ),
@@ -735,6 +822,13 @@ def bind_action_task(
             "outline_color": _outline_color(values.get("outline_color", "#000000")),
             "temporal_mode": str(values.get("temporal_mode", "auto")),
             "frame_index": int(values.get("frame_index", -1)),
+            # Workflow-specific NormalCrafter knobs deliberately travel via
+            # the reserved ``params`` map.  Defaults are still materialized
+            # here so the recipe remains a standalone runnable graph.
+            "max_resolution": int(params.get("max_resolution", 1024)),
+            "window_size": int(params.get("window_size", 14)),
+            "time_step_size": int(params.get("time_step_size", 10)),
+            "decode_chunk_size": int(params.get("decode_chunk_size", 7)),
         }
     )
 
@@ -759,7 +853,9 @@ def bind_action_task(
         for static_slot, artifact_id in static_artifact_slots:
             port_type = workflow.inputs.get(static_slot)
             if not port_type:
-                raise ValueError(f"Recipe {recipe.id} does not declare artifact input {static_slot}")
+                raise ValueError(
+                    f"Recipe {recipe.id} does not declare artifact input {static_slot}"
+                )
             task_inputs.setdefault(static_slot, port_type)
             run_inputs.setdefault(static_slot, ValueRef(artifact=artifact_id))
             call_inputs[static_slot] = input_ref(static_slot)

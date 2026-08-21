@@ -3761,22 +3761,31 @@
     },
     {
       "id": "normal",
-      "license": "Apache-2.0",
+      "license": "Apache-2.0 AND MIT",
       "lowerings": {
         "cooksprite.make_sprite_pair": "CS_MakeSpritePair",
+        "cooksprite.normal_estimate_temporal": "CS_NormalCrafterSequence",
+        "cooksprite.normal_estimate_temporal_batch": "CS_NormalCrafterBatch",
         "cooksprite.project_normal_to_pixel_plan": "CS_ProjectNormalToPixelPlan"
       },
       "node_classes": [
         "CS_LotusModelLoader",
         "CS_LotusNormalPrepare",
         "CS_LotusNormalFinalize",
+        "CS_NormalCrafterSequence",
+        "CS_NormalCrafterBatch",
         "CS_ProjectNormalToPixelPlan",
         "CS_MakeSpritePair"
       ],
       "recipes": [
-        "cooksprite.normal"
+        "cooksprite.normal",
+        "cooksprite.normal-temporal",
+        "cooksprite.sprite-temporal"
       ],
-      "requirements": [],
+      "requirements": [
+        "accelerate>=1.1,<2",
+        "diffusers>=0.35.1,<0.36"
+      ],
       "sealed_graphs": {
         "cooksprite.normal_estimate": {
           "output": [
@@ -3951,7 +3960,8 @@
         }
       },
       "tasks": [
-        "normal.generate"
+        "normal.generate",
+        "sprite.pixelize"
       ],
       "tools": [
         {
@@ -3996,6 +4006,126 @@
           "schema_hash": "beda126ed58d4c7cbdf6497db89fb92b4e4861cc938f14a1fdd76ec975d4b7c7",
           "source": "cooksprite",
           "title": "Estimate normal map",
+          "version": 1
+        },
+        {
+          "id": "cooksprite.normal_estimate_temporal",
+          "inputs": [
+            {
+              "name": "source",
+              "persistable": false,
+              "required": true,
+              "type": "FrameSeq"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "normal",
+              "persistable": true,
+              "required": true,
+              "type": "NormalMapSequence"
+            }
+          ],
+          "package_id": "normal",
+          "params_schema": {
+            "decode_chunk_size": {
+              "max": 32,
+              "min": 1,
+              "type": "integer"
+            },
+            "flip_y": {
+              "type": "boolean"
+            },
+            "max_resolution": {
+              "max": 1024,
+              "min": 256,
+              "type": "integer"
+            },
+            "strength": {
+              "max": 4,
+              "min": 0,
+              "type": "number"
+            },
+            "time_step_size": {
+              "max": 32,
+              "min": 1,
+              "type": "integer"
+            },
+            "window_size": {
+              "max": 32,
+              "min": 2,
+              "type": "integer"
+            }
+          },
+          "schema_hash": "64e75a93d4936da32483c99bc8a9fc37dba1a3bb96b601b0c0264e648f6b4898",
+          "source": "cooksprite",
+          "title": "Estimate temporally stable normal maps with NormalCrafter",
+          "version": 1
+        },
+        {
+          "id": "cooksprite.normal_estimate_temporal_batch",
+          "inputs": [
+            {
+              "name": "image",
+              "persistable": false,
+              "required": true,
+              "type": "ImageBatch"
+            },
+            {
+              "name": "mask",
+              "persistable": false,
+              "required": false,
+              "type": "Mask"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "normal",
+              "persistable": true,
+              "required": true,
+              "type": "NormalMap"
+            },
+            {
+              "name": "mask",
+              "persistable": false,
+              "required": true,
+              "type": "Mask"
+            }
+          ],
+          "package_id": "normal",
+          "params_schema": {
+            "decode_chunk_size": {
+              "max": 32,
+              "min": 1,
+              "type": "integer"
+            },
+            "flip_y": {
+              "type": "boolean"
+            },
+            "max_resolution": {
+              "max": 1024,
+              "min": 256,
+              "type": "integer"
+            },
+            "strength": {
+              "max": 4,
+              "min": 0,
+              "type": "number"
+            },
+            "time_step_size": {
+              "max": 32,
+              "min": 1,
+              "type": "integer"
+            },
+            "window_size": {
+              "max": 32,
+              "min": 2,
+              "type": "integer"
+            }
+          },
+          "schema_hash": "98dcfe7658fd14b92ce27b999c6e883f4bacefeaa48de6a5447c0f2eac3a3f12",
+          "source": "cooksprite",
+          "title": "Estimate a temporal normal batch with NormalCrafter",
           "version": 1
         },
         {
@@ -4091,10 +4221,12 @@
           "version": 1
         }
       ],
-      "version": "1.1.3",
+      "version": "1.2.0",
       "workflows": [
         "normal.generate:image-to-normal",
-        "normal.generate:image-to-pixel-normal"
+        "normal.generate:image-to-pixel-normal",
+        "normal.generate:frames-to-normal",
+        "sprite.pixelize:frames-to-sprite-pair"
       ]
     }
   ]

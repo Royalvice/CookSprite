@@ -119,7 +119,13 @@ def _sequence_progress_message(
     leaving the graph and raw Comfy event protocol untouched.
     """
 
-    if str(_node_spec(graph, node_id).get("class_type") or "") != "CS_PixelizeSequence":
+    class_type = str(_node_spec(graph, node_id).get("class_type") or "")
+    if class_type in {"CS_NormalCrafterSequence", "CS_NormalCrafterBatch"}:
+        half = max(1, round(maximum / 2.0))
+        if value <= half:
+            return f"Preparing temporal normal inference · {int(value)}/{half}"
+        return f"Inferring temporal normals · {int(value - half)}/{half}"
+    if class_type != "CS_PixelizeSequence":
         return None
     half = max(1, round(maximum / 2.0))
     if value <= half:
