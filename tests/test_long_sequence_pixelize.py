@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 import urllib.parse
+from pathlib import Path
 from typing import ClassVar
 
 import pytest
@@ -267,6 +268,18 @@ def test_runtime_progress_labels_the_two_long_sequence_phases():
         graph,
     )
     assert state["message"] == "Pixelizing sequence · 4/6"
+
+
+def test_sequence_node_never_uses_status_text_as_a_comfy_preview():
+    """A non-image preview crashes ComfyUI's WebSocket publish loop."""
+
+    source = (Path(__file__).parents[1] / "cooksprite" / "nodes" / "cooksprite_nodes.py").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "progress_bar.update_absolute(min(count * 2, offset + int(current)), count * 2)"
+        in source
+    )
 
 
 def test_long_sequence_pixelization_streams_plan_and_reuses_it_for_one_normal_keyframe(tmp_path):

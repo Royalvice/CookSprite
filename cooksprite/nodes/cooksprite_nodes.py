@@ -643,7 +643,10 @@ class CS_PixelizeSequence:
             if progress_bar is None:
                 return
             offset = 0 if stage == "分析全局几何与调色板" else count
-            progress_bar.update_absolute(min(count * 2, offset + int(current)), count * 2, stage)
+            # ComfyUI's third ``ProgressBar.update_absolute`` argument is an
+            # image preview, not a status string.  The API derives the two
+            # user-visible phases from this single standard progress range.
+            progress_bar.update_absolute(min(count * 2, offset + int(current)), count * 2)
 
         result = pixelize_sequence_reader(
             source,
