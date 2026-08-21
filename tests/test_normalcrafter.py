@@ -108,6 +108,11 @@ def test_normalcrafter_node_contract_and_complete_bundle_discovery():
     status = model_bundle_status(_report(), NORMALCRAFTER_BUNDLE_ID)
     assert status["ready"] is True
     assert status["files"][0]["path"] == "models/normalcrafter/normalcrafter-v1/model_index.json"
+    urls = [str(file["url"]) for file in NORMALCRAFTER_BUNDLE["files"]]
+    revision = "7e24d68d86ae008fe08ef50b4e51cd2fc2c8cf57"
+    assert urls[0].endswith(f"/resolve/{revision}/model_index.json")
+    assert urls[3].endswith(f"/resolve/{revision}/image_encoder/model.fp16.safetensors")
+    assert not any("/normalcrafter-v1/" in url for url in urls)
 
 
 def test_normalcrafter_temporal_graph_is_typed_and_exposes_only_declared_knobs():

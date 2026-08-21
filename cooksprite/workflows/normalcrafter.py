@@ -46,14 +46,27 @@ NORMALCRAFTER_PROVENANCE: dict[str, Any] = {
 }
 
 
-def _file(relative_path: str, name: str, size: int, sha256: str) -> dict[str, Any]:
+def _file(source_path: str, name: str, size: int, sha256: str) -> dict[str, Any]:
+    """Describe one pinned upstream file and its stable local layout.
+
+    The Diffusers snapshot keeps files at its repository root, while the
+    ComfyUI model category needs all members underneath one local model name.
+    Keep those two paths distinct: ``source_path`` is the Hugging Face path;
+    ``relative_path`` is only the local ComfyUI subdirectory.
+    """
+
+    normalized_source = source_path.strip("/")
+    relative_path = "/".join(
+        part for part in ("normalcrafter-v1", normalized_source) if part
+    )
+    source_file = "/".join(part for part in (normalized_source, name) if part)
     return {
         "folder": "normalcrafter",
         "relative_path": relative_path,
         "name": name,
         "url": (
             "https://huggingface.co/Yanrui95/NormalCrafter/resolve/"
-            f"{NORMALCRAFTER_REVISION}/{relative_path}/{name}"
+            f"{NORMALCRAFTER_REVISION}/{source_file}"
         ),
         "size": size,
         "sha256": sha256,
@@ -69,55 +82,55 @@ NORMALCRAFTER_BUNDLE: dict[str, Any] = {
     "provenance": NORMALCRAFTER_PROVENANCE,
     "files": [
         _file(
-            "normalcrafter-v1",
+            "",
             "model_index.json",
             496,
             "9119b8837600736ae38009c5dc80c76112307cb2d229a2cfb477d54c329ff53d",
         ),
         _file(
-            "normalcrafter-v1/feature_extractor",
+            "feature_extractor",
             "preprocessor_config.json",
             518,
             "4db495644e3e5bd8fcac52f70e7fc0b413c911086021acf73ac30e5911166e95",
         ),
         _file(
-            "normalcrafter-v1/image_encoder",
+            "image_encoder",
             "config.json",
             685,
             "65da4496f116d2b297fe864e0f31242fbc57e26a5d95b93310f2034e1e90d0ec",
         ),
         _file(
-            "normalcrafter-v1/image_encoder",
+            "image_encoder",
             "model.fp16.safetensors",
             1_264_217_240,
             "ae616c24393dd1854372b0639e5541666f7521cbe219669255e865cb7f89466a",
         ),
         _file(
-            "normalcrafter-v1/scheduler",
+            "scheduler",
             "scheduler_config.json",
             533,
             "59aa43afc33395efd40fe94c7369c0477b81698f4b65b63e3ae06f26269876d5",
         ),
         _file(
-            "normalcrafter-v1/unet",
+            "unet",
             "config.json",
             1_028,
             "d35dfa3b19a4c7dcd10a4f72176ebc4e5cd40e463cd16626a13815017e2b6ebc",
         ),
         _file(
-            "normalcrafter-v1/unet",
+            "unet",
             "diffusion_pytorch_model.safetensors",
             3_049_435_868,
             "03095971efc7c439767c3a42d78ded3bc0acb3f51acbfc588c9de76c59bb27cb",
         ),
         _file(
-            "normalcrafter-v1/vae",
+            "vae",
             "config.json",
             553,
             "64c66ac3376c18804b6362024e106660129ad8372f7a368a3a638e133c2b149d",
         ),
         _file(
-            "normalcrafter-v1/vae",
+            "vae",
             "diffusion_pytorch_model.safetensors",
             195_531_910,
             "d3f871a35fabb1522da6cc7a8507f6c53a503c4d535e820620d4341209536943",
