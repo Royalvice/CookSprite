@@ -398,7 +398,11 @@ async function normalRun() {
       control.id,
       normalPixelValues.value[control.id] ?? control.default,
     ]))
-    : { strength: 1, flip_y: false };
+    : {
+      strength: 1,
+      flip_y: false,
+      ...(normalPixelPlanId.value ? { frame_index: normalFrameIndex.value } : {}),
+    };
   const normalInputs: Record<string, string | string[]> = normalPixelize.value
     ? { source: sourceArtifact.value.id }
     : normalPixelPlanId.value

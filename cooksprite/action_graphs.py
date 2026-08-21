@@ -734,7 +734,7 @@ def bind_action_task(
             "outline": bool(values.get("outline", False)),
             "outline_color": _outline_color(values.get("outline_color", "#000000")),
             "temporal_mode": str(values.get("temporal_mode", "auto")),
-            "frame_index": int(values.get("frame_index", 0)),
+            "frame_index": int(values.get("frame_index", -1)),
         }
     )
 

@@ -2381,6 +2381,27 @@
           "options_range": null,
           "step": null,
           "type": "toggle"
+        },
+        {
+          "advanced": true,
+          "default": -1,
+          "i18n": {
+            "en": {
+              "description": "",
+              "name": "Selected sequence frame"
+            },
+            "zh-CN": {
+              "description": "",
+              "name": "选中序列帧"
+            }
+          },
+          "id": "frame_index",
+          "max": 239.0,
+          "min": -1.0,
+          "options": [],
+          "options_range": null,
+          "step": 1.0,
+          "type": "number"
         }
       ],
       "i18n": {

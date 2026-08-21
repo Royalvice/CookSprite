@@ -1139,7 +1139,11 @@ def create_app(
                     f"PixelGeometryPlan source frame {index + 1} canvas does not match the artifact"
                 )
 
-    def pixel_plan_frame_index(source_id: str, plan_id: str) -> int:
+    def pixel_plan_frame_index(
+        source_id: str,
+        plan_id: str,
+        requested_index: int | None = None,
+    ) -> int:
         """Verify one human-selected source against an immutable geometry plan."""
 
         source = store.artifact(source_id)
@@ -1151,16 +1155,31 @@ def create_app(
         except Exception as exc:
             raise ValueError("PixelGeometryPlan artifact is invalid") from exc
         validate_pixel_plan_integrity(plan)
-        matches = [
-            index
-            for index, frame in enumerate(plan.frames)
-            if frame.source_artifact == source_id and frame.source_sha256 == source.get("sha256")
-        ]
-        if len(matches) != 1:
-            raise ValueError(
-                "the selected source image is not an exact source frame of this PixelGeometryPlan"
+        def matches_source(index: int) -> bool:
+            return (
+                0 <= index < len(plan.frames)
+                and plan.frames[index].source_artifact == source_id
+                and plan.frames[index].source_sha256 == source.get("sha256")
             )
-        return matches[0]
+
+        if requested_index is not None and requested_index >= 0:
+            if not matches_source(requested_index):
+                raise ValueError(
+                    "the selected sequence frame index does not match this PixelGeometryPlan source"
+                )
+            return requested_index
+        matches = [index for index in range(len(plan.frames)) if matches_source(index)]
+        if len(matches) == 1:
+            return matches[0]
+        source_meta = json.loads(source.get("meta") or "{}")
+        latest_index = source_meta.get("latest_pixel_plan_frame_index")
+        if isinstance(latest_index, int) and matches_source(latest_index):
+            return latest_index
+        if matches:
+            raise ValueError(
+                "the selected source occurs more than once in this PixelGeometryPlan; select its frame index"
+            )
+        raise ValueError("the selected source image is not an exact source frame of this PixelGeometryPlan")
 
     def finalize_pixelize_sequence(
         run_id: str,
@@ -1233,6 +1252,7 @@ def create_app(
                 action_id="image.pixelize",
                 source_artifacts=[source_artifact],
                 frame_count=len(images),
+                pixel_frame_artifacts=images,
             )
             store.update_artifact_meta(plan_id, plan_meta)
         original = source_view.sequence
@@ -1284,7 +1304,16 @@ def create_app(
         source_meta = json.loads(source_row.get("meta") or "{}") if source_row else {}
         if source_meta.get("latest_pixel_plan_artifact") != plan_id:
             raise RuntimeError("PixelGeometryPlan is no longer the current pixel relation for this source frame")
-        diffuse_id = str(source_meta.get("latest_pixel_frame_artifact") or "")
+        plan_row = store.artifact(plan_id)
+        plan_meta = json.loads(plan_row.get("meta") or "{}") if plan_row else {}
+        frame_artifacts = plan_meta.get("pixel_frame_artifacts")
+        if (
+            not isinstance(frame_artifacts, list)
+            or not 0 <= frame_index < len(frame_artifacts)
+            or not isinstance(frame_artifacts[frame_index], str)
+        ):
+            raise RuntimeError("PixelGeometryPlan has no current diffuse for the selected frame index")
+        diffuse_id = frame_artifacts[frame_index]
         if not diffuse_id or not store.artifact(diffuse_id):
             raise RuntimeError("selected source frame has no current pixel diffuse paired with this plan")
         if normal_row:
@@ -1299,6 +1328,11 @@ def create_app(
         diffuse_row = store.artifact(diffuse_id)
         if diffuse_row:
             diffuse_meta = json.loads(diffuse_row.get("meta") or "{}")
+            if (
+                diffuse_meta.get("pixel_plan_artifact") != plan_id
+                or diffuse_meta.get("pixel_plan_frame_index") != frame_index
+            ):
+                raise RuntimeError("selected PixelGeometryPlan frame does not match its current diffuse")
             diffuse_meta.update(paired_normals=[normal_id])
             store.update_artifact_meta(diffuse_id, diffuse_meta)
         store.set_run_artifacts(run_id, [normal_id])
@@ -1497,10 +1531,15 @@ def create_app(
                     ),
                 )
             try:
+                requested_index = values.get("frame_index", -1)
+                if isinstance(requested_index, bool) or int(requested_index) != requested_index:
+                    raise ValueError("PixelGeometryPlan frame index must be an integer")
                 values["frame_index"] = pixel_plan_frame_index(
-                    normalized_inputs["source"][0], normalized_inputs["pixel_plan"][0]
+                    normalized_inputs["source"][0],
+                    normalized_inputs["pixel_plan"][0],
+                    int(requested_index) if int(requested_index) >= 0 else None,
                 )
-            except ValueError as exc:
+            except (TypeError, ValueError) as exc:
                 raise HTTPException(422, _detail("pixel_plan_source_invalid", str(exc))) from exc
         ordered_sources: list[str] = []
         if action_id in {"normal.generate", "sprite.pixelize"} and not normalized_inputs.get("pixel_plan"):

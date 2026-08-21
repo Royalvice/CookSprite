@@ -336,6 +336,51 @@ def test_long_sequence_pixelization_streams_plan_and_reuses_it_for_one_normal_ke
     assert normal_meta["paired_diffuses"] == [source_meta["latest_pixel_frame_artifact"]]
 
 
+def test_pixel_plan_pairs_a_repeated_source_with_the_selected_frame_index(tmp_path):
+    client = _client(tmp_path)
+    project = client.post("/api/v1/projects", json={"type": "character"}).json()
+    _, frames = _sequence(client, project["id"], count=1, fps=12.0)
+    store = client.app.state.store
+    duplicate = store.put_artifact(
+        FrameSequenceManifest(
+            frames=[frames[0]["id"], frames[0]["id"]],
+            temporal=FrameSequenceTemporal(source="sampled_video", sample_fps=12.0),
+        ).model_dump_json(by_alias=True, exclude_none=False).encode(),
+        "application/vnd.cooksprite.frame-sequence+json",
+        "FrameSeq",
+        {"role": "frame_sequence", "frame_count": 2},
+        project_id=project["id"],
+    )
+    pixel = client.post(
+        "/api/v1/actions/image.pixelize/runs",
+        json={
+            "project": project["id"],
+            "inputs": {"source": duplicate.id},
+            "values": {"temporal_mode": "flow"},
+        },
+    )
+    assert pixel.status_code == 202
+    pixel_result = _wait(client, pixel.json()["id"])
+    assert pixel_result["status"] == "succeeded"
+    pixel_sequence = pixel_result["artifacts"][0]
+    plan_id = pixel_sequence["meta"]["pixel_plan_artifact"]
+    output_frames = client.get(f"/api/v1/artifacts/{pixel_sequence['id']}/sequence").json()["frames"]
+    assert len(output_frames) == 2
+
+    normal = client.post(
+        "/api/v1/actions/normal.generate/runs",
+        json={
+            "project": project["id"],
+            "inputs": {"source": frames[0]["id"], "pixel_plan": plan_id},
+            "values": {"frame_index": 1},
+        },
+    )
+    assert normal.status_code == 202
+    normal_result = _wait(client, normal.json()["id"])
+    assert normal_result["status"] == "succeeded"
+    assert normal_result["artifacts"][0]["meta"]["paired_diffuses"] == [output_frames[1]["id"]]
+
+
 def test_long_sequence_rejects_more_than_240_frames_and_noncontinuous_forced_flow(tmp_path):
     client = _client(tmp_path)
     project = client.post("/api/v1/projects", json={"type": "character"}).json()
