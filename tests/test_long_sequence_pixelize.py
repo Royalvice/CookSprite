@@ -101,7 +101,13 @@ class LongSequenceComfy:
         return parsed.path, urllib.parse.parse_qs(parsed.query)
 
     def _put_image(self, *, run_id: str, project_id: str, kind: str, source: str, index: int) -> None:
-        payload = f"{kind}:{run_id}:{source}:{index}".encode()
+        # Sequence outputs use the production content-addressed path: repeated
+        # source frames can legitimately share one output artifact ID.
+        payload = (
+            f"{kind}:{source}".encode()
+            if kind == "Image" and source
+            else f"{kind}:{run_id}:{source}:{index}".encode()
+        )
         artifact = self.__class__.store.put_artifact(
             payload,
             "image/png",
@@ -366,6 +372,7 @@ def test_pixel_plan_pairs_a_repeated_source_with_the_selected_frame_index(tmp_pa
     plan_id = pixel_sequence["meta"]["pixel_plan_artifact"]
     output_frames = client.get(f"/api/v1/artifacts/{pixel_sequence['id']}/sequence").json()["frames"]
     assert len(output_frames) == 2
+    assert output_frames[0]["id"] == output_frames[1]["id"]
 
     normal = client.post(
         "/api/v1/actions/normal.generate/runs",
@@ -379,6 +386,7 @@ def test_pixel_plan_pairs_a_repeated_source_with_the_selected_frame_index(tmp_pa
     normal_result = _wait(client, normal.json()["id"])
     assert normal_result["status"] == "succeeded"
     assert normal_result["artifacts"][0]["meta"]["paired_diffuses"] == [output_frames[1]["id"]]
+    assert normal_result["artifacts"][0]["meta"]["pixel_plan_frame_index"] == 1
 
 
 def test_long_sequence_rejects_more_than_240_frames_and_noncontinuous_forced_flow(tmp_path):

@@ -1239,7 +1239,6 @@ def create_app(
                 image_meta.update(
                     source_artifacts=[source_id],
                     pixel_plan_artifact=plan_id,
-                    pixel_plan_frame_index=index,
                 )
                 store.update_artifact_meta(image_id, image_meta)
         plan_row = store.artifact(plan_id)
@@ -1328,11 +1327,6 @@ def create_app(
         diffuse_row = store.artifact(diffuse_id)
         if diffuse_row:
             diffuse_meta = json.loads(diffuse_row.get("meta") or "{}")
-            if (
-                diffuse_meta.get("pixel_plan_artifact") != plan_id
-                or diffuse_meta.get("pixel_plan_frame_index") != frame_index
-            ):
-                raise RuntimeError("selected PixelGeometryPlan frame does not match its current diffuse")
             diffuse_meta.update(paired_normals=[normal_id])
             store.update_artifact_meta(diffuse_id, diffuse_meta)
         store.set_run_artifacts(run_id, [normal_id])
