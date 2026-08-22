@@ -11,7 +11,6 @@ from typing import ClassVar
 from fastapi.testclient import TestClient
 
 from cooksprite.api.app import create_app
-from cooksprite.nodes.cooksprite_nodes import CS_CompilePromptPacket
 from cooksprite.prompting import (
     ImagePromptRequest,
     SpritePromptCompiler,
@@ -137,31 +136,6 @@ CORE_NODES = {
     "JoinImageWithAlpha": node(
         {"image": "IMAGE", "alpha": "MASK"},
         ["IMAGE"],
-    ),
-    "CS_CompilePromptPacket": node(
-        {
-            "action_id": "STRING",
-            "prompt": "STRING",
-            "category": "STRING",
-            "style": "STRING",
-            "animation": "STRING",
-            "view": "STRING",
-            "direction": "STRING",
-            "task": "STRING",
-            "mode": "STRING",
-            "caption": "STRING",
-            "action": "STRING",
-            "camera_preset": "STRING",
-            "orientation": "STRING",
-            "facing": "STRING",
-            "model": "STRING",
-            "width": "INT",
-            "height": "INT",
-            "background": "STRING",
-            "edit_instruction": "STRING",
-            "compile_prompt": "BOOLEAN",
-        },
-        ["STRING", "STRING", "STRING"],
     ),
     "CS_LotusModelLoader": node({"model_name": "COMBO"}, ["MODEL"]),
     "CS_LotusNormalPrepare": node(
@@ -604,8 +578,6 @@ def test_asset_type_and_style_are_compiled_by_api_without_implicit_postprocessin
     assert "Show the complete weapon horizontally" in pixel_prompt
     assert "Realistic PBR terrain surface" in smooth_prompt
     assert "seamless square top-down tile" in smooth_prompt
-    assert not any(node["class_type"] == "CS_CompilePromptPacket" for node in pixel_graph.values())
-    assert not any(node["class_type"] == "CS_CompilePromptPacket" for node in smooth_graph.values())
     assert not any(node["class_type"] == "CS_Pixelize" for node in pixel_graph.values())
     assert not any(node["class_type"] == "CS_IsolateOnGreen" for node in pixel_graph.values())
     assert not any(node["class_type"] == "CS_Pixelize" for node in smooth_graph.values())
@@ -725,7 +697,6 @@ def test_imported_image_recipe_requires_bridge_pixel_policy_and_receives_it(tmp_
     assert imported_sampler["inputs"]["negative_text"] == ""
     assert not any(node["class_type"] == "CS_Pixelize" for node in graph.values())
     assert imported_sampler["inputs"]["prompt"] == "raw imported prompt"
-    assert not any(node["class_type"] == "CS_CompilePromptPacket" for node in graph.values())
 
 
 def test_imported_recipe_params_flow_through_generic_assembler(tmp_path):
@@ -827,7 +798,6 @@ def test_action_request_compiles_to_real_comfy_graph_and_artifact_store(tmp_path
     )
     assert positive_prompt.startswith("a soup knight. Crisp pixel-art character sprite")
     assert "simple solid background" in positive_prompt
-    assert not any(node["class_type"] == "CS_CompilePromptPacket" for node in graph.values())
     empty_negative = next(
         node
         for node in graph.values()
@@ -1091,51 +1061,6 @@ def test_non_character_legacy_styles_map_to_each_category_packet():
     assert pixel.metadata["style"] == "terrain_pixel_art"
 
 
-def test_prompt_node_keeps_an_empty_legacy_port_without_negative_metadata():
-    node = CS_CompilePromptPacket()
-    prompt, negative, metadata = node.compile(
-        "image.generate",
-        "a soup knight",
-        "character",
-        "pixel",
-        "idle",
-        "level",
-        "s",
-        negative_terms="must be ignored for legacy callers",
-    )
-    assert prompt.startswith("a soup knight. Crisp pixel-art character sprite")
-    assert negative == ""
-    assert "simple solid background" in prompt
-    assert "2D game illustration" not in prompt
-    metadata_value = json.loads(metadata)
-    assert metadata_value["metadata"]["compiler_version"] == "sprite_prompt_package_v1.6"
-    assert "negative_prompt" not in metadata_value
-    assert CS_CompilePromptPacket.RETURN_TYPES == ("STRING", "STRING", "STRING")
-    assert CS_CompilePromptPacket.RETURN_NAMES == ("prompt", "negative_prompt", "metadata")
-
-
-def test_prompt_compiler_can_be_disabled_without_changing_user_text():
-    node = CS_CompilePromptPacket()
-    prompt, negative, metadata = node.compile(
-        "image.generate",
-        "一个枪手  with exact spacing",
-        "character",
-        "smooth",
-        "idle",
-        "level",
-        "s",
-        compile_prompt=False,
-    )
-    assert prompt == "一个枪手  with exact spacing"
-    assert negative == ""
-    assert json.loads(metadata) == {
-        "compiler_enabled": False,
-        "mode": "t2i",
-        "prompt": "一个枪手  with exact spacing",
-        "task": "image",
-    }
-
-
 def test_action_prompt_compiler_toggle_is_applied_before_comfy_graph(tmp_path):
     client = ready_client(tmp_path)
     project = client.post("/api/v1/projects", json={"type": "static"}).json()
@@ -1161,7 +1086,6 @@ def test_action_prompt_compiler_toggle_is_applied_before_comfy_graph(tmp_path):
         if node["class_type"] == "CLIPTextEncode" and node["inputs"]["text"]
     )
     assert positive_prompt == "raw user prompt"
-    assert not any(node["class_type"] == "CS_CompilePromptPacket" for node in graph.values())
 
 
 def test_runtime_defaults_select_the_configured_recipe_when_model_is_omitted(tmp_path):

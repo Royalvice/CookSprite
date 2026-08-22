@@ -1,10 +1,8 @@
-"""Clean-room, deterministic CookSprite prompt compiler.
+"""Pure, deterministic CookSprite API-side prompt compiler.
 
-This module is intentionally independent from every image/video model.  It is
-copied beside the installable ComfyUI node so the node can run without the
-CookSprite API or its browser.  The public request/result classes mirror the
-small ``sprite_prompt_package`` contract while accepting CookSprite's UI
-spelling (``pixel``, ``smooth``, ``level`` and ``top45``).
+The compiler is independent from image and video models.  It turns typed
+CookSprite Action values into final model text before a workflow is assembled;
+ComfyUI receives that final text and does not own prompt policy.
 """
 
 from __future__ import annotations

@@ -3,7 +3,6 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { PhArrowClockwise as Restart, PhCheck as Check, PhCloudSlash as CloudSlash, PhDatabase as Database, PhDownloadSimple as DownloadSimple, PhFolderOpen as FolderOpen, PhGauge as Gauge, PhPlay as Play, PhPlus as Plus, PhScan as Radar, PhSpinner as Spinner, PhSpeakerHigh as SpeakerHigh, PhSpeakerSlash as SpeakerSlash, PhTrash as Trash, PhWrench as Wrench } from "@phosphor-icons/vue";
 import { api, type ComfyProbeView, type LocalSetupView, type ModelBundleView, type ModelDownloadView, type RuntimeCapabilities, type RuntimeDefaultsView, type RuntimeView } from "../api/generated";
-import NormalEstimatorControls, { type NormalEstimatorOption } from "../components/NormalEstimatorControls.vue";
 import { useStudioStore } from "../stores/studio";
 
 const store = useStudioStore();
@@ -19,9 +18,7 @@ const defaults = ref<RuntimeDefaultsView | null>(null);
 const defaultAction = ref("image.generate");
 const defaultModel = ref("");
 const defaultBusy = ref(false);
-const normalSingleModel = ref("");
-const normalTemporalModel = ref("");
-const normalDefaultBusy = ref<"" | "single" | "temporal">("");
+const normalDefaultMode = ref<"single" | "temporal">("single");
 const modelDownload = ref<ModelDownloadView | null>(null);
 const modelDownloadBusy = ref("");
 const endpointUrl = ref("http://127.0.0.1:8188");
@@ -52,9 +49,7 @@ async function refreshRuntimes() {
 }
 async function refreshDefaults(id: string) {
   defaults.value = await api.runtimeDefaults(id).catch(() => null);
-  const binding = defaults.value?.defaults[defaultAction.value];
-  defaultModel.value = binding?.model_id || "";
-  syncNormalDefaultModels();
+  syncDefaultModel();
 }
 const modelBundles = computed<ModelBundleView[]>(() => defaults.value?.model_bundles || []);
 function stopModelDownloadPolling() {
@@ -110,34 +105,34 @@ onBeforeUnmount(() => { if (setupTimer) window.clearTimeout(setupTimer); stopMod
 watch(() => store.currentProject?.id, (id) => { selectedProjectId.value = id || ""; });
 watch(() => store.activeRuntimeId, (id) => { if (id) { void api.runtimeCapabilities(id).then((value) => { capabilities.value = value; }).catch(() => { capabilities.value = null; }); void refreshDefaults(id); } });
 watch(defaultAction, () => {
-  const binding = defaults.value?.defaults[defaultAction.value];
-  defaultModel.value = binding?.model_id || "";
+  syncDefaultModel();
 });
-const defaultModels = computed(() => (defaults.value?.models || []).filter((model) => model.actions.includes(defaultAction.value)));
+watch(normalDefaultMode, () => { syncDefaultModel(); });
+const isNormalDefaultAction = computed(() => defaultAction.value === "normal.generate");
+const defaultModels = computed(() => {
+  if (isNormalDefaultAction.value) return normalEstimatorOptions(normalDefaultMode.value);
+  return (defaults.value?.models || []).filter((model) => model.actions.includes(defaultAction.value));
+});
 const defaultActions = computed(() => Array.from(new Set((defaults.value?.models || []).flatMap((model) => model.actions)))
-  .filter((action) => !["normal.generate", "sprite.pixelize"].includes(action)));
-function normalEstimatorOptions(mode: "single" | "temporal"): NormalEstimatorOption[] {
+  .filter((action) => action !== "sprite.pixelize"));
+function normalEstimatorOptions(mode: "single" | "temporal") {
   const requiredMode = mode === "single" ? "image-to-normal" : "frames-to-normal";
-  const options = new Map<string, NormalEstimatorOption>();
+  const options = new Map<string, { id: string; label: string }>();
   for (const recipe of defaults.value?.recipes || []) {
     if (!recipe.actions.includes("normal.generate") || !recipe.modes.includes(requiredMode)) continue;
     options.set(recipe.model_id, {
       id: recipe.model_id,
-      modelId: recipe.model_id,
       label: recipe.label,
     });
   }
   return [...options.values()];
 }
-const normalSingleOptions = computed(() => normalEstimatorOptions("single"));
-const normalTemporalOptions = computed(() => normalEstimatorOptions("temporal"));
-function syncNormalDefaultModels() {
-  const single = defaults.value?.normal_estimators.single?.model_id;
-  const temporal = defaults.value?.normal_estimators.temporal?.model_id;
-  normalSingleModel.value = normalSingleOptions.value.find((item) => item.modelId === single)?.id
-    || normalSingleOptions.value[0]?.id || "";
-  normalTemporalModel.value = normalTemporalOptions.value.find((item) => item.modelId === temporal)?.id
-    || normalTemporalOptions.value[0]?.id || "";
+function syncDefaultModel() {
+  const binding = isNormalDefaultAction.value
+    ? defaults.value?.normal_estimators[normalDefaultMode.value]
+    : defaults.value?.defaults[defaultAction.value];
+  defaultModel.value = defaultModels.value.find((model) => model.id === binding?.model_id)?.id
+    || defaultModels.value[0]?.id || "";
 }
 watch(defaultActions, (actions) => {
   if (actions.length && !actions.includes(defaultAction.value)) defaultAction.value = actions[0];
@@ -145,21 +140,17 @@ watch(defaultActions, (actions) => {
 async function saveDefault() {
   if (!store.activeRuntimeId || !defaultModel.value) return;
   defaultBusy.value = true;
-  try { await api.setRuntimeDefault(store.activeRuntimeId, defaultAction.value, { model_id: defaultModel.value }); await refreshDefaults(store.activeRuntimeId); runtimeMessage.value = t("settings.defaultSaved"); }
+  try {
+    if (isNormalDefaultAction.value) {
+      await api.setRuntimeNormalEstimator(store.activeRuntimeId, normalDefaultMode.value, { model_id: defaultModel.value });
+    } else {
+      await api.setRuntimeDefault(store.activeRuntimeId, defaultAction.value, { model_id: defaultModel.value });
+    }
+    await refreshDefaults(store.activeRuntimeId);
+    runtimeMessage.value = t("settings.defaultSaved");
+  }
   catch (error) { runtimeMessage.value = error instanceof Error ? error.message : String(error); }
   finally { defaultBusy.value = false; }
-}
-async function saveNormalEstimator(mode: "single" | "temporal") {
-  if (!store.activeRuntimeId) return;
-  const modelId = mode === "single" ? normalSingleModel.value : normalTemporalModel.value;
-  if (!modelId) return;
-  normalDefaultBusy.value = mode;
-  try {
-    await api.setRuntimeNormalEstimator(store.activeRuntimeId, mode, { model_id: modelId });
-    await refreshDefaults(store.activeRuntimeId);
-    runtimeMessage.value = t("normal.saved");
-  } catch (error) { runtimeMessage.value = error instanceof Error ? error.message : String(error); }
-  finally { normalDefaultBusy.value = ""; }
 }
 function setTheme(value: string) { theme.value = value; document.documentElement.dataset.theme = value; localStorage.setItem("cooksprite.theme", value); }
 function setLanguage(value: string) { locale.value = value; document.documentElement.lang = value; localStorage.setItem("cooksprite.language", value); }
@@ -347,37 +338,13 @@ async function installLocal() {
       <div v-if="activeRuntime && capabilities" class="capability-summary"><header><strong>{{ $t("settings.capabilities") }} · {{ activeRuntime.label }}</strong><span>{{ capabilities.system.comfyui_version || "ComfyUI" }}</span></header><div class="capability-grid"><article v-for="(category, key) in capabilities.categories" :key="key"><strong>{{ $t(categoryLabels[key] || key) }}</strong><span>{{ category.models.length }} {{ $t("settings.models") }} · {{ category.workflows.length }} {{ $t("settings.workflows") }} · {{ category.tools.length }} {{ $t("settings.tools") }}</span><details v-if="category.models.length || category.workflows.length || category.tools.length"><summary>{{ $t("settings.viewDetails") }}</summary><div class="capability-items"><div v-for="item in category.models.slice(0, 20)" :key="`model-${String(item.id)}`"><b>{{ capabilityLabel(item) }}</b><small>{{ capabilitySource(item) }}</small></div><div v-for="item in category.workflows.slice(0, 20)" :key="`workflow-${String(item.id)}`"><b>{{ capabilityLabel(item) }}</b><small>{{ capabilitySource(item) }}</small></div><div v-for="item in category.tools.slice(0, 20)" :key="`tool-${String(item.id)}`"><b>{{ capabilityLabel(item) }}</b><small>{{ capabilitySource(item) }}</small></div></div></details></article></div></div>
       <div v-if="activeRuntime && defaults" class="runtime-defaults">
         <h3>{{ $t("settings.defaults") }}</h3>
-        <div class="runtime-default-form">
+        <div class="runtime-default-form" :class="{ 'with-normal-mode': isNormalDefaultAction }">
           <label><span>{{ $t("settings.defaultAction") }}</span><select v-model="defaultAction"><option v-for="actionId in defaultActions" :key="actionId" :value="actionId">{{ actionId }}</option></select></label>
+          <label v-if="isNormalDefaultAction"><span>{{ $t("normal.inputMode") }}</span><select v-model="normalDefaultMode"><option value="single">{{ $t("normal.single") }}</option><option value="temporal">{{ $t("normal.temporal") }}</option></select></label>
           <label><span>{{ $t("settings.defaultModel") }}</span><select v-model="defaultModel" :disabled="!defaultModels.length"><option value="" disabled>{{ $t("settings.noCompatibleModel") }}</option><option v-for="model in defaultModels" :key="model.id" :value="model.id">{{ model.label }}</option></select></label>
           <button class="arcade-button primary" :disabled="defaultBusy || !defaultModel" @click="saveDefault">{{ $t("settings.saveDefault") }}</button>
         </div>
       </div>
-      <section v-if="activeRuntime && defaults" class="runtime-defaults normal-defaults">
-        <h3>{{ $t("normal.defaults") }}</h3>
-        <div class="normal-default-grid">
-          <div>
-            <strong>{{ $t("normal.single") }}</strong>
-            <NormalEstimatorControls
-              :options="normalSingleOptions"
-              :model="normalSingleModel"
-              :disabled="normalDefaultBusy !== ''"
-              @update:model="normalSingleModel = $event"
-            />
-            <button class="arcade-button primary" :disabled="normalDefaultBusy !== '' || !normalSingleModel" @click="saveNormalEstimator('single')">{{ $t("settings.saveDefault") }}</button>
-          </div>
-          <div>
-            <strong>{{ $t("normal.temporal") }}</strong>
-            <NormalEstimatorControls
-              :options="normalTemporalOptions"
-              :model="normalTemporalModel"
-              :disabled="normalDefaultBusy !== ''"
-              @update:model="normalTemporalModel = $event"
-            />
-            <button class="arcade-button primary" :disabled="normalDefaultBusy !== '' || !normalTemporalModel" @click="saveNormalEstimator('temporal')">{{ $t("settings.saveDefault") }}</button>
-          </div>
-        </div>
-      </section>
       <div v-if="activeRuntime && defaults && modelBundles.length" class="runtime-model-bundles">
         <h3>{{ $t("settings.modelBundles") }}</h3>
         <article v-for="bundle in modelBundles" :key="bundle.id" class="model-bundle-card" :class="{ ready: bundle.ready }">

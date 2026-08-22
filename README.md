@@ -55,6 +55,10 @@ cspr start
 development frontend. Open `http://127.0.0.1:5173`; the frontend proxies
 CookSprite API requests to port `8000`. If any requested port is occupied,
 CookSprite selects the next available port and prints the actual URLs.
+All server entry points use the same data directory from
+`~/.cooksprite/config.toml` (default `~/.cooksprite/data`). Passing
+`--data-dir <path>` once makes that path the default for later `start` and
+`serve` commands, preventing separate databases or artifact stores.
 
 To browse the workbench without starting a local ComfyUI, start the API and
 frontend only:

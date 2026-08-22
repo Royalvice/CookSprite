@@ -23,14 +23,6 @@ try:  # Prompt Tool tests and API tooling do not need the compute-only torch dep
 except ImportError:  # pragma: no cover - ComfyUI always supplies torch at node runtime.
     torch = None
 
-from .prompting import (
-    DEFAULT_GREEN_SCREEN_BACKGROUND,
-    ImagePromptRequest,
-    ModelFamily,
-    SpritePromptCompiler,
-    VideoPromptRequest,
-)
-
 
 def _tensor(image: Image.Image):
     if torch is None:
@@ -328,136 +320,6 @@ class CS_StoreArtifact:
             )
             refs.append(json.loads(body.decode())["id"])
         return (json.dumps(refs),)
-
-
-class CS_CompilePromptPacket:
-    """Compile a model-neutral CookSprite prompt packet inside ComfyUI.
-
-    The seven required fields are the original node contract.  The optional
-    scalar fields extend it without invalidating already-saved Comfy graphs.
-    No model, CLIP encoder, or API call is touched here.
-    """
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "action_id": ("STRING", {"default": "image.generate"}),
-                "prompt": ("STRING", {"default": "", "multiline": True}),
-                "category": ("STRING", {"default": "character"}),
-                "style": ("STRING", {"default": "2d_action_game"}),
-                "animation": ("STRING", {"default": "idle"}),
-                "view": ("STRING", {"default": "level"}),
-                "direction": ("STRING", {"default": "s"}),
-            },
-            "optional": {
-                "task": ("STRING", {"default": "image"}),
-                "mode": ("STRING", {"default": "t2i"}),
-                "caption": ("STRING", {"default": "", "multiline": True}),
-                "action": ("STRING", {"default": "idle"}),
-                "camera_option": ("STRING", {"default": "front_eye_level"}),
-                "camera_preset": ("STRING", {"default": "eye_level"}),
-                "orientation": ("STRING", {"default": "front"}),
-                "facing": ("STRING", {"default": "right"}),
-                "model": ("STRING", {"default": "generic"}),
-                "width": ("INT", {"default": 512, "min": 1, "max": 8192}),
-                "height": ("INT", {"default": 512, "min": 1, "max": 8192}),
-                "background": ("STRING", {"default": DEFAULT_GREEN_SCREEN_BACKGROUND}),
-                "edit_instruction": ("STRING", {"default": "", "multiline": True}),
-                "compile_prompt": ("BOOLEAN", {"default": True}),
-            },
-        }
-
-    RETURN_TYPES = ("STRING", "STRING", "STRING")
-    RETURN_NAMES = ("prompt", "negative_prompt", "metadata")
-    FUNCTION = "compile"
-    CATEGORY = "CookSprite/Prompt"
-
-    def compile(
-        self,
-        action_id,
-        prompt,
-        category,
-        style,
-        animation,
-        view,
-        direction,
-        task="image",
-        mode="t2i",
-        caption="",
-        action="",
-        camera_option="front_eye_level",
-        camera_preset="eye_level",
-        orientation="front",
-        facing="right",
-        model="generic",
-        width=512,
-        height=512,
-        background=DEFAULT_GREEN_SCREEN_BACKGROUND,
-        edit_instruction="",
-        compile_prompt=True,
-        **_legacy,
-    ):
-        if not compile_prompt:
-            raw_prompt = str(prompt if prompt is not None else caption or "")
-            metadata = json.dumps(
-                {
-                    "compiler_enabled": False,
-                    "task": str(task or "image").strip().lower(),
-                    "mode": str(mode or "t2i").strip().lower(),
-                    "prompt": raw_prompt,
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-            )
-            return (raw_prompt, "", metadata)
-        compiler = SpritePromptCompiler()
-        task_value = str(task or "").strip().lower()
-        action_value = str(action or animation or "idle").strip().lower()
-        caption_value = str(caption or prompt or category or "game sprite asset").strip()
-        if task_value == "video" or str(action_id).startswith("animation"):
-            result = compiler.compile_video(
-                VideoPromptRequest(
-                    caption=caption_value,
-                    action=action_value,
-                    mode=mode or "i2v",
-                    orientation=orientation or "front",
-                    facing=facing or "right",
-                    camera_preset=camera_preset or ("top45" if view == "top45" else "level"),
-                    direction={
-                        "n": "away_from_camera",
-                        "s": "in_place",
-                    }.get(str(direction), "in_place"),
-                    model=model or ModelFamily.GENERIC.value,
-                    resolution=(int(width), int(height)),
-                    background=background or DEFAULT_GREEN_SCREEN_BACKGROUND,
-                )
-            )
-        else:
-            result = compiler.compile_image(
-                ImagePromptRequest(
-                    caption=caption_value,
-                    mode=mode or "t2i",
-                    style=style or "pixel",
-                    category=category or "character",
-                    # Image generation has one product camera contract. The
-                    # optional legacy camera inputs remain in the node schema
-                    # so saved graphs still load, but cannot change output.
-                    camera_option="front_eye_level",
-                    camera_preset="eye_level",
-                    orientation="front",
-                    facing="right",
-                    resolution=(int(width), int(height)),
-                    background=background or DEFAULT_GREEN_SCREEN_BACKGROUND,
-                    edit_instruction=edit_instruction or None,
-                )
-            )
-        metadata = json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True)
-        return (result.prompt, "", metadata)
-
-
-# Semantic development alias.  It is intentionally not a second Comfy node.
-CS_PromptEnhance = CS_CompilePromptPacket
 
 
 class CS_Pixelize:
@@ -1155,7 +1017,6 @@ class CS_MakeSpritePair:
 NODE_CLASSES = [
     CS_LoadArtifact,
     CS_StoreArtifact,
-    CS_CompilePromptPacket,
     CS_IsolateOnGreen,
     CS_Pixelize,
     CS_PixelizePair,

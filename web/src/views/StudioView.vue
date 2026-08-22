@@ -5,6 +5,7 @@ import { useRoute, useRouter } from "vue-router";
 import { PhArrowRight as ArrowRight, PhCaretDown as CaretDown, PhCheck as Check, PhCircleNotch as CircleNotch, PhDownloadSimple as DownloadSimple, PhFilmStrip as FilmStrip, PhFloppyDisk as FloppyDisk, PhImageSquare as ImageSquare, PhMagicWand as MagicWand, PhPackage as Package, PhPlus as Plus, PhSlidersHorizontal as SlidersHorizontal, PhSparkle as Sparkle, PhUploadSimple as UploadSimple, PhWarning as Warning } from "@phosphor-icons/vue";
 import ArtifactCard from "../components/ArtifactCard.vue";
 import ArtifactVisual from "../components/ArtifactVisual.vue";
+import AnimationLaunchpad, { type AnimationTask } from "../components/AnimationLaunchpad.vue";
 import DropTarget from "../components/DropTarget.vue";
 import FrameStudio from "../components/FrameStudio.vue";
 import ImageStyleCameraControls from "../components/ImageStyleCameraControls.vue";
@@ -25,6 +26,7 @@ type StudioStage = "create" | "animate" | "normal" | "export";
 const stage = ref<StudioStage>("create");
 const imageValues = ref<Record<string, unknown>>({});
 const animationValues = ref<Record<string, unknown>>({});
+const animationTask = ref<AnimationTask>("walk");
 const inputs = ref<Record<string, string | string[]>>({});
 const selectedArtifact = ref<ArtifactRef | null>(null);
 const transientPreview = ref<ArtifactRef | null>(null);
@@ -55,6 +57,7 @@ const normalParams = ref<Record<string, unknown>>({});
 
 const imageAction = computed(() => store.actions.find((item) => item.id === "image.generate"));
 const animationAction = computed(() => store.actions.find((item) => item.id === "animation.generate"));
+const viewsAction = computed(() => store.actions.find((item) => item.id === "image.views"));
 const normalAction = computed(() => store.actions.find((item) => item.id === "normal.generate"));
 const spritePixelAction = computed(() => store.actions.find((item) => item.id === "sprite.pixelize"));
 const activeAction = computed(() => stage.value === "animate" ? animationAction.value : imageAction.value);
@@ -65,6 +68,12 @@ const createArtifacts = computed(() => store.artifacts.filter((item) => (
   && !["animation.generate", "sheet.slice", "video.sample", "normal.generate"].includes(String(item.meta.action_id || ""))
 )));
 const sequences = computed(() => store.artifacts.filter((item) => item.kind === "FrameSeq"));
+const viewResults = computed(() => {
+  const live = store.lastOutputsByAction["image.views"] || [];
+  if (live.length) return live;
+  const latestRun = store.artifacts.find((item) => item.meta.action_id === "image.views")?.meta.run_id;
+  return latestRun ? store.artifacts.filter((item) => item.meta.run_id === latestRun) : [];
+});
 const recentCreateOutputs = computed(() => {
   const live = store.lastOutputsByAction["image.generate"] || [];
   if (live.length) return live;
@@ -154,12 +163,15 @@ const imageCanRun = computed(() => {
 });
 const animationModel = computed(() => animationAction.value?.models.find((item) => item.id === animationValues.value.model));
 const animationCanRun = computed(() => {
-  if (!animationAction.value?.available || !animationModel.value || running.value) return false;
+  if (!character.value || !animationAction.value?.available || !animationModel.value || running.value) return false;
   const modes = new Set(animationModel.value.modes || []);
-  return inputs.value.character
-    ? modes.has("i2v") || modes.has("i2i-sequence")
-    : modes.has("t2v") || modes.has("t2i-sequence");
+  return modes.has("i2v") || modes.has("i2i-sequence");
 });
+const viewsCanRun = computed(() => Boolean(character.value && viewsAction.value?.available && !running.value));
+const animationTaskReady = computed(() => animationTask.value === "views"
+  ? Boolean(viewsAction.value?.available)
+  : Boolean(animationAction.value?.available && animationModel.value));
+const animationTaskCanRun = computed(() => animationTask.value === "views" ? viewsCanRun.value : animationCanRun.value);
 const normalRunAction = computed(() => normalPixelize.value ? spritePixelAction.value : normalAction.value);
 const normalInputMode = computed<"single" | "temporal">(() => (
   sourceArtifact.value?.kind === "FrameSeq" ? "temporal" : "single"
@@ -331,7 +343,7 @@ function readArtifactDimensions(artifact: ArtifactRef | null) {
 
 watch(() => activeArtifact.value?.id, () => readArtifactDimensions(activeArtifact.value || null), { immediate: true });
 
-watch([stage, imageValues, animationValues, normalPixelize, normalPixelValues, inputs, canvasCleared, fitToCanvas, () => selectedArtifact.value?.id, () => store.activeSequence?.artifact.id], persistWorkspace, { deep: true });
+watch([stage, imageValues, animationValues, animationTask, normalPixelize, normalPixelValues, normalModel, normalParams, inputs, canvasCleared, fitToCanvas, () => selectedArtifact.value?.id, () => store.activeSequence?.artifact.id], persistWorkspace, { deep: true });
 
 onMounted(async () => {
   const projectId = route.params.projectId as string | undefined;
@@ -352,7 +364,6 @@ function toggleImageControl(id: string) {
   imageValues.value[id] = imageValues.value[id] !== true;
   if (id === "prompt_compile" && imageValues.value[id] !== true) hideHoverPreview(true);
 }
-function toggleAnimationControl(id: string) { animationValues.value[id] = animationValues.value[id] !== true; }
 function forwardInspectorWheel(event: WheelEvent) {
   const target = event.target as HTMLElement | null;
   if (target?.closest("button, input, select, textarea, [contenteditable='true']")) return;
@@ -425,10 +436,31 @@ async function runCreate() {
   try { await store.runAction("image.generate", referenceIds.value.length ? { reference: referenceIds.value } : {}, imageValues.value); }
   finally { window.setTimeout(() => { reveal.value = false; }, 500); }
 }
+function selectAnimationTask(task: AnimationTask) {
+  animationTask.value = task;
+  if (task !== "views") animationValues.value.action = task;
+}
+function clearAnimationSource() { delete inputs.value.character; }
 async function runAnimation() {
-  if (!animationAction.value || !animationCanRun.value) return;
+  if (!character.value || !animationTaskCanRun.value) return;
   reveal.value = true;
-  try { await store.runAction("animation.generate", inputs.value.character ? { character: inputs.value.character } : {}, animationValues.value); }
+  try {
+    if (animationTask.value === "views") {
+      await store.runAction("image.views", { source: character.value.id }, {});
+      return;
+    }
+    if (!animationAction.value) return;
+    const values = {
+      ...animationValues.value,
+      action: animationTask.value,
+      prompt: "",
+      prompt_compile: false,
+      view: "level",
+      direction: "s",
+      count: 8,
+    };
+    await store.runAction("animation.generate", { character: character.value.id }, values);
+  }
   finally { window.setTimeout(() => { reveal.value = false; }, 500); }
 }
 async function normalRun() {
@@ -508,8 +540,11 @@ function persistWorkspace() {
     stage: stage.value,
     imageValues: imageValues.value,
     animationValues: animationValues.value,
+    animationTask: animationTask.value,
     normalPixelize: normalPixelize.value,
     normalPixelValues: normalPixelValues.value,
+    normalModel: normalModel.value,
+    normalParams: normalParams.value,
     inputs: inputs.value,
     canvasCleared: canvasCleared.value,
     fitToCanvas: fitToCanvas.value,
@@ -525,8 +560,12 @@ async function restoreWorkspace() {
   if (["create", "animate", "normal", "export"].includes(String(state.stage))) stage.value = state.stage as StudioStage;
   if (state.imageValues && typeof state.imageValues === "object") Object.assign(imageValues.value, state.imageValues);
   if (state.animationValues && typeof state.animationValues === "object") Object.assign(animationValues.value, state.animationValues);
+  const savedAnimationTask = String(state.animationTask || animationValues.value.action || "walk");
+  if (["views", "idle", "walk", "run", "jump", "death"].includes(savedAnimationTask)) animationTask.value = savedAnimationTask as AnimationTask;
   normalPixelize.value = state.normalPixelize === true;
   if (state.normalPixelValues && typeof state.normalPixelValues === "object") Object.assign(normalPixelValues.value, state.normalPixelValues);
+  if (typeof state.normalModel === "string") normalModel.value = state.normalModel;
+  if (state.normalParams && typeof state.normalParams === "object") Object.assign(normalParams.value, state.normalParams);
   canvasCleared.value = state.canvasCleared === true;
   fitToCanvas.value = state.fitToCanvas === true;
   const storedInputs = state.inputs && typeof state.inputs === "object" ? state.inputs as Record<string, string | string[]> : {};
@@ -653,10 +692,27 @@ function downloadPack(artifact: ArtifactRef) { const anchor = document.createEle
         </template>
 
         <template v-else-if="stage === 'animate'">
-          <section v-if="animationAction" class="creation-deck animation-generator"><div class="creation-layout"><div class="creation-fields"><div class="action-heading"><span class="eyebrow">ACTION · ANIMATION.GENERATE</span><h1>{{ animationAction.i18n[locale as Locale].name }}</h1><p>{{ animationAction.i18n[locale as Locale].description }}</p></div><div class="prompt-field compact-prompt"><label for="animation-prompt">{{ controlCopy(animationAction.controls.find(item => item.id === 'prompt')!).name }}</label><textarea id="animation-prompt" :value="String(animationValues.prompt || '')" :placeholder="controlCopy(animationAction.controls.find(item => item.id === 'prompt')!).description" rows="2" @input="animationValues.prompt = ($event.target as HTMLTextAreaElement).value"></textarea></div><button v-if="animationAction.controls.find(item => item.id === 'prompt_compile')" type="button" class="prompt-compiler-toggle" :class="{ active: animationValues.prompt_compile === true }" :aria-pressed="animationValues.prompt_compile === true" @click="toggleAnimationControl('prompt_compile')"><span class="toggle-track" aria-hidden="true"><i></i></span><span class="control-copy"><b>{{ controlCopy(animationAction.controls.find(item => item.id === 'prompt_compile')!).name }}</b><small>{{ controlCopy(animationAction.controls.find(item => item.id === 'prompt_compile')!).description }}</small></span></button><div class="action-grid"><button v-for="option in animationAction.controls.find(item => item.id === 'action')?.options" :key="option.id" :class="{ active: animationValues.action === option.id }" @mouseenter="showHoverPreview($event, option.example, option.i18n[locale as Locale].name, option.i18n[locale as Locale].description, option.id)" @focus="showHoverPreview($event, option.example, option.i18n[locale as Locale].name, option.i18n[locale as Locale].description, option.id)" @mouseleave="hideHoverPreview()" @blur="hideHoverPreview()" @click="animationValues.action = option.id">{{ option.i18n[locale as Locale].name }}</button></div><div class="control-stack"><template v-for="control in animationAction.controls.filter(item => ['view','direction'].includes(item.id))" :key="control.id"><div class="segmented-control"><span>{{ controlCopy(control).name }}</span><div><button v-for="option in control.options" :key="option.id" :class="{ active: animationValues[control.id] === option.id }" @click="animationValues[control.id] = option.id">{{ option.i18n[locale as Locale].name }}</button></div></div></template><label class="inline-control"><span>{{ controlCopy(animationAction.controls.find(item => item.id === 'count')!).name }}</span><input v-model.number="animationValues.count" type="number" min="1" max="16" /></label></div><div class="model-row"><label>{{ $t("studio.model") }}<select v-model="animationValues.model" :disabled="!animationAction.models.length"><option v-if="!animationAction.models.length" value="">{{ $t("studio.noModel") }}</option><option v-for="model in animationAction.models" :key="model.id" :value="model.id">{{ model.label }}</option></select></label></div></div>
-              <aside class="artifact-input-panel"><DropTarget :accepts="acceptedKinds(animationAction, 'character')" :artifact="character" :label="character ? character.title || character.id || $t('studio.selectedCharacter') : $t('studio.characterDrop')" :reason="$t('studio.characterReason')" @artifact="acceptArtifact('character', $event)" @files="importFiles($event, 'character')" /></aside></div>
-            <footer class="draw-bar"><div><FilmStrip :size="20" /><span><strong>{{ $t("studio.drawFrames", { action: String(animationValues.action || 'walk').toUpperCase() }) }}</strong><small>{{ String(animationValues.view || 'level').toUpperCase() }} · {{ String(animationValues.direction || 's').toUpperCase() }} · {{ $t('studio.animationSequence') }}</small></span></div><button class="draw-button" :disabled="!animationCanRun" @click="runAnimation"><CircleNotch v-if="running" class="spin" :size="20" /><Sparkle v-else :size="20" weight="fill" />{{ $t("common.run") }} · {{ animationValues.count || 8 }}<ArrowRight :size="18" /></button></footer><div v-if="reveal" class="card-reveal" aria-hidden="true"><i></i><span>{{ $t("studio.cooking") }}</span><i></i></div></section>
-          <section class="animation-preview-row"><div class="animation-preview checker"><ArtifactVisual v-if="activeArtifact?.kind === 'Image'" :artifact="activeArtifact" /><span v-else>{{ $t('studio.previewFrameHint') }}</span></div><div class="sequence-dock"><span class="eyebrow">{{ $t('studio.reusableAnimations') }}</span><div><ArtifactCard v-for="sequence in sequences" :key="sequence.id" :artifact="sequence" :selected="store.activeSequence?.artifact.id === sequence.id" compact @select="selectArtifact" @preview="previewArtifact" /></div></div></section>
+          <AnimationLaunchpad
+            :source="character"
+            :task="animationTask"
+            :running="running"
+            :can-run="animationTaskCanRun"
+            :action-ready="animationTaskReady"
+            @artifact="acceptArtifact('character', $event)"
+            @files="importFiles($event, 'character')"
+            @clear="clearAnimationSource"
+            @select-task="selectAnimationTask"
+            @run="runAnimation"
+          />
+          <div v-if="reveal" class="card-reveal animation-reveal" aria-hidden="true"><i></i><span>{{ $t("studio.cooking") }}</span><i></i></div>
+          <section v-if="viewResults.length" class="animation-view-results panel">
+            <header><div><span class="eyebrow">IMAGE.VIEWS</span><strong>{{ $t("animation.viewResults") }}</strong><small>{{ $t("animation.viewResultsHint") }}</small></div><b>{{ viewResults.length }}</b></header>
+            <div class="animation-view-grid"><ArtifactCard v-for="artifact in viewResults" :key="artifact.id" :artifact="artifact" :selected="selectedArtifact?.id === artifact.id" @select="selectArtifact" @preview="previewArtifact" /></div>
+          </section>
+          <section v-if="sequences.length" class="animation-sequence-library panel">
+            <header><div><span class="eyebrow">FRAMESEQ</span><strong>{{ $t("animation.savedSequences") }}</strong><small>{{ $t("animation.savedSequencesHint") }}</small></div></header>
+            <div class="artifact-strip"><ArtifactCard v-for="sequence in sequences" :key="sequence.id" :artifact="sequence" :selected="store.activeSequence?.artifact.id === sequence.id" compact @select="selectArtifact" @preview="previewArtifact" /></div>
+          </section>
           <FrameStudio :sequence="store.activeSequence" @preview="previewArtifact" @use-normal="useForNormal" />
         </template>
 

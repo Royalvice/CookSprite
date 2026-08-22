@@ -1,16 +1,14 @@
 """CookSprite control-plane prompt compilation.
 
-Action clients send user intent.  The API deterministically compiles that
-intent once, then every ComfyUI workflow receives only the final model prompt.
-The legacy ComfyUI prompt node imports the same pure implementation so old
-saved graphs keep loading, but new product workflows never depend on it.
+Action clients send user intent. The API deterministically compiles that intent
+once, then every ComfyUI workflow receives only the final model prompt.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from .nodes.prompting import *
+from .prompt_compiler import *
 
 
 def compile_action_values(

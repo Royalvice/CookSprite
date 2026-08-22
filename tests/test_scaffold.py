@@ -6,7 +6,12 @@ from typing import ClassVar
 
 from fastapi.testclient import TestClient
 
-from cli.__main__ import _runtime_registration_payload, parser
+from cli.__main__ import (
+    _runtime_registration_payload,
+    _start_frontend,
+    _stop_frontend,
+    parser,
+)
 from cooksprite.api.app import create_app
 from cooksprite.comfy.client import ComfyError
 from cooksprite.dev import check_generated, check_tool_packages
@@ -201,6 +206,7 @@ def test_cli_start_defaults_to_api_frontend_and_managed_comfy():
     assert start.no_frontend is False
     assert start.port == 8000
     assert start.frontend_port == 5173
+    assert start.data_dir is None
     assert start.runtime is None
     payload = _runtime_registration_payload(
         start,
@@ -222,6 +228,49 @@ def test_cli_start_defaults_to_api_frontend_and_managed_comfy():
     no_comfy = root.parse_args(["start", "--no-comfy", "--frontend-port", "5174"])
     assert no_comfy.no_comfy is True
     assert no_comfy.frontend_port == 5174
+
+
+def test_frontend_remains_in_start_supervisor_process_group(monkeypatch, tmp_path):
+    web = tmp_path / "web"
+    web.mkdir()
+    (web / "package.json").write_text("{}", encoding="utf-8")
+    args = parser().parse_args(
+        ["start", "--no-comfy", "--frontend-dir", str(web), "--npm", "npm"]
+    )
+    captured = {}
+
+    class Process:
+        terminated = False
+
+        @staticmethod
+        def poll():
+            return None
+
+        def terminate(self):
+            self.terminated = True
+
+        @staticmethod
+        def wait(timeout):
+            assert timeout == 5
+
+        @staticmethod
+        def kill():
+            raise AssertionError("graceful frontend shutdown should succeed")
+
+    process = Process()
+
+    def popen(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return process
+
+    monkeypatch.setattr("cli.__main__.shutil.which", lambda _name: "/usr/bin/npm")
+    monkeypatch.setattr("cli.__main__.subprocess.Popen", popen)
+
+    assert _start_frontend(args, frontend_port=5173, api_port=8000) is process
+    assert "start_new_session" not in captured["kwargs"]
+    _stop_frontend(process)
+    assert process.terminated is True
 
 
 def test_cli_exposes_two_environment_lock_and_sync_commands():

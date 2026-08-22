@@ -3,22 +3,14 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Any
 
 import httpx
 from typing_extensions import Self
 
-try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility.
-    import tomli as tomllib
+from .config import config_path, read_config
 
 DEFAULT_API_URL = "http://127.0.0.1:8000"
-
-
-def config_path() -> Path:
-    return Path(os.environ.get("COOKSPRITE_CONFIG", "~/.cooksprite/config.toml")).expanduser()
 
 
 def api_url(explicit: str | None = None) -> str:
@@ -26,14 +18,9 @@ def api_url(explicit: str | None = None) -> str:
         return explicit.rstrip("/")
     if value := os.environ.get("COOKSPRITE_API_URL"):
         return value.rstrip("/")
-    path = config_path()
-    if path.is_file():
-        try:
-            configured = tomllib.loads(path.read_text(encoding="utf-8")).get("api_url")
-            if configured:
-                return str(configured).rstrip("/")
-        except (OSError, tomllib.TOMLDecodeError):
-            pass
+    configured = read_config().get("api_url")
+    if configured:
+        return str(configured).rstrip("/")
     return DEFAULT_API_URL
 
 

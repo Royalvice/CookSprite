@@ -36,6 +36,7 @@ from ..comfy.managed import (
 from ..comfy.managed import launch as launch_managed_comfy
 from ..comfy.models import ModelDownloadError, download_bundle_file
 from ..compiler import CompileError, Compiler
+from ..config import resolve_data_dir
 from ..domain import (
     ActionDescriptor,
     ActionRunCreate,
@@ -150,11 +151,6 @@ class ComfyProbeCreate(BaseModel):
     base_url: str = "http://127.0.0.1:8188"
 
 
-# Kept as an import-level compatibility alias for clients that used the old
-# local-only name before probing was made location-neutral.
-LocalProbeCreate = ComfyProbeCreate
-
-
 class LocalStartCreate(BaseModel):
     base_url: str = "http://127.0.0.1:8188"
     directory: str | None = None
@@ -239,7 +235,7 @@ def _dynamic_tools(raw: list[tuple[str, dict[str, Any]]]) -> list[ToolDescriptor
 
 
 def create_app(
-    data_dir: str | Path = "data",
+    data_dir: str | Path | None = None,
     comfy_factory: type[ComfyClient] = ComfyClient,
     registry_path: str | Path | None = None,
     allow_test_runtime: bool | None = None,
@@ -250,7 +246,7 @@ def create_app(
         openapi_url="/api/v1/openapi.json",
         docs_url="/api/v1/docs",
     )
-    data_path = Path(data_dir).expanduser().resolve()
+    data_path = resolve_data_dir(data_dir)
     store = Store(data_path)
     registry = CookSpriteRegistry(registry_path)
     registry.set_examples(register_action_examples(store))
@@ -2681,7 +2677,6 @@ def create_app(
         return local_setup_status()
 
     @app.post("/api/v1/comfyui/probe")
-    @app.post("/api/v1/local/probe", include_in_schema=False)
     def probe_comfyui(request: ComfyProbeCreate | None = None) -> dict[str, Any]:
         """Probe the explicitly supplied ComfyUI URL, local or remote.
 
@@ -3719,4 +3714,4 @@ def create_app(
     return app
 
 
-app = create_app(os.environ.get("COOKSPRITE_DATA_DIR", "data"))
+app = create_app()

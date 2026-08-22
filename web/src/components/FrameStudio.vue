@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { PhArrowsClockwise as ArrowsClockwise, PhCheck as Check, PhCopy as Copy, PhDotsSixVertical as DotsSixVertical, PhEye as Eye, PhFileArrowDown as FileArrowDown, PhKeyboard as Keyboard, PhMagicWand as MagicWand, PhPause as Pause, PhPlay as Play, PhPlus as Plus, PhSkipBack as SkipBack, PhSkipForward as SkipForward, PhTrash as Trash, PhWarning as Warning, PhX as X } from "@phosphor-icons/vue";
+import { PhArrowsClockwise as ArrowsClockwise, PhCaretLeft as CaretLeft, PhCaretRight as CaretRight, PhCheck as Check, PhCopy as Copy, PhDotsSixVertical as DotsSixVertical, PhEye as Eye, PhFileArrowDown as FileArrowDown, PhKeyboard as Keyboard, PhMagicWand as MagicWand, PhPause as Pause, PhPlay as Play, PhPlus as Plus, PhSkipBack as SkipBack, PhSkipForward as SkipForward, PhTrash as Trash, PhWarning as Warning, PhX as X } from "@phosphor-icons/vue";
 import type { ArtifactRef, FrameRef, FrameSequenceView } from "../api/generated";
 import ArtifactCard from "./ArtifactCard.vue";
 import ArtifactVisual from "./ArtifactVisual.vue";
@@ -15,8 +15,11 @@ const store = useStudioStore();
 const { t } = useI18n();
 const selected = ref<number[]>([]);
 const focusedCandidate = ref(0);
+const hoveredCandidate = ref<number | null>(null);
 const playing = ref(false);
 const playIndex = ref(0);
+const playDirection = ref(1);
+const timelineIndex = ref(0);
 const clipFps = ref(10);
 const loop = ref<"none" | "linear" | "pingpong">("linear");
 const onion = ref(false);
@@ -24,8 +27,7 @@ const pixelDiff = ref(false);
 const compare = ref(false);
 const shortcuts = ref(false);
 const sourceTools = ref(false);
-const viewport = ref<HTMLElement | null>(null);
-const scrollLeft = ref(0);
+const candidatePage = ref(0);
 const commitState = ref<"idle" | "saving" | "saved" | "error">("idle");
 const commitMessage = ref("");
 const addedFrames = ref<string[]>([]);
@@ -37,25 +39,31 @@ const candidates = computed(() => props.sequence?.frames || []);
 const target = computed(() => props.sequence?.sequence);
 const targetReady = computed(() => Boolean(target.value?.action && target.value?.view && target.value?.direction));
 const targetLabel = computed(() => targetReady.value
-  ? `${target.value!.action!.toUpperCase()} · ${target.value!.view!.toUpperCase()} · ${target.value!.direction!.toUpperCase()}`
+  ? [target.value!.action, target.value!.view, target.value!.direction].filter(Boolean).join(" · ").toUpperCase()
   : t("frames.notLoaded"));
 const clip = computed(() => store.document?.character?.clips.find((item) => item.action === target.value?.action));
 const view = computed(() => clip.value?.views.find((item) => item.id === target.value?.view));
 const track = computed(() => view.value?.tracks.find((item) => item.direction === target.value?.direction));
 const timeline = computed(() => track.value?.frames || []);
 const artifactMap = computed(() => store.artifactById);
-const activeFrame = computed(() => timeline.value[playIndex.value]);
-const redrawArtifact = computed(() => artifactMap.value.get(activeFrame.value?.artifact || "") || candidates.value[focusedCandidate.value]);
+const activeFrame = computed(() => timeline.value[timelineIndex.value]);
+const selectedCandidates = computed(() => selected.value.slice().sort((a, b) => a - b).map((index) => candidates.value[index]).filter((item): item is ArtifactRef => Boolean(item)));
+const playbackArtifacts = computed(() => selectedCandidates.value.length ? selectedCandidates.value : candidates.value);
+const playerArtifact = computed(() => playbackArtifacts.value[Math.min(playIndex.value, Math.max(0, playbackArtifacts.value.length - 1))]);
+const hoverArtifact = computed(() => candidates.value[hoveredCandidate.value ?? focusedCandidate.value] || playerArtifact.value);
+const hoverPosition = computed(() => Math.min((hoveredCandidate.value ?? focusedCandidate.value) + 1, candidates.value.length));
+const playerPosition = computed(() => Math.min(playIndex.value + 1, playbackArtifacts.value.length));
+const redrawArtifact = computed(() => artifactMap.value.get(activeFrame.value?.artifact || "") || playerArtifact.value);
 const compareArtifacts = computed(() => {
   const ids = selected.value.length >= 2
     ? selected.value.slice(-2).map((index) => candidates.value[index]?.id)
-    : timeline.value.slice(Math.max(0, playIndex.value - 1), playIndex.value + 1).map((item) => item.artifact);
+    : timeline.value.slice(Math.max(0, timelineIndex.value - 1), timelineIndex.value + 1).map((item) => item.artifact);
   return ids.map((id) => artifactMap.value.get(id || "") || candidates.value.find((item) => item.id === id)).filter((item): item is ArtifactRef => Boolean(item));
 });
-const cardWidth = 106;
-const visibleCount = computed(() => Math.ceil((viewport.value?.clientWidth || 900) / cardWidth) + 6);
-const start = computed(() => Math.max(0, Math.floor(scrollLeft.value / cardWidth) - 3));
-const visibleCandidates = computed(() => candidates.value.slice(start.value, start.value + visibleCount.value));
+const candidatePageSize = 50;
+const candidatePageCount = computed(() => Math.max(1, Math.ceil(candidates.value.length / candidatePageSize)));
+const candidatePageStart = computed(() => candidatePage.value * candidatePageSize);
+const pageCandidates = computed(() => candidates.value.slice(candidatePageStart.value, candidatePageStart.value + candidatePageSize));
 const redrawVariants = computed(() => store.lastOutputsByAction["frame.redraw"] || []);
 const redrawPending = computed(() => store.activeRun?.action_id === "frame.redraw" && ["queued", "running"].includes(store.activeRun.status));
 const curatedSequence = computed(() => {
@@ -69,8 +77,8 @@ const curatedSequence = computed(() => {
 });
 
 function selectCandidate(artifact: ArtifactRef, eventOrRange?: MouseEvent | boolean) {
-  const index = Math.max(0, candidates.value.findIndex((item, candidateIndex) => item.id === artifact.id && candidateIndex >= focusedCandidate.value));
-  const actualIndex = index >= 0 ? index : candidates.value.findIndex((item) => item.id === artifact.id);
+  const actualIndex = candidates.value.findIndex((item) => item.id === artifact.id);
+  if (actualIndex < 0) return;
   const range = typeof eventOrRange === "boolean" ? eventOrRange : Boolean(eventOrRange?.shiftKey);
   if (range && selected.value.length) {
     const anchor = selected.value[selected.value.length - 1];
@@ -80,7 +88,41 @@ function selectCandidate(artifact: ArtifactRef, eventOrRange?: MouseEvent | bool
   focusedCandidate.value = actualIndex;
   emit("preview", artifact);
 }
-
+function previewCandidate(artifact: ArtifactRef | null, index: number) {
+  // Artifact cards emit a null preview while the pointer crosses their small
+  // visual gaps. Retain the last candidate instead of falling back to a
+  // selected frame, so inspection never flickers or jumps between cards.
+  if (!artifact) return;
+  hoveredCandidate.value = index;
+  emit("preview", artifact);
+}
+function selectAllCandidates() {
+  selected.value = candidates.value.map((_, index) => index);
+  focusedCandidate.value = 0;
+  hoveredCandidate.value = null;
+  playIndex.value = 0;
+  playDirection.value = 1;
+}
+function clearCandidateSelection() {
+  selected.value = [];
+  playIndex.value = 0;
+  playDirection.value = 1;
+}
+function moveCandidatePage(delta: number) {
+  const next = Math.max(0, Math.min(candidatePageCount.value - 1, candidatePage.value + delta));
+  if (next === candidatePage.value) return;
+  candidatePage.value = next;
+  const nextIndex = Math.min(candidatePageStart.value, Math.max(0, candidates.value.length - 1));
+  focusedCandidate.value = nextIndex;
+  hoveredCandidate.value = null;
+  const candidate = candidates.value[nextIndex];
+  if (candidate) emit("preview", candidate);
+}
+function stepPlayback(delta: number) {
+  playing.value = false;
+  playIndex.value = Math.max(0, Math.min(playbackArtifacts.value.length - 1, playIndex.value + delta));
+  playDirection.value = delta >= 0 ? 1 : -1;
+}
 async function openSequence(payload: { artifact_id: string }) {
   try {
     await store.loadSequence(payload.artifact_id);
@@ -187,7 +229,7 @@ function updateFrame(frame: FrameRef, patch: Partial<FrameRef>, operation = "fra
 }
 function removeFrame(frame: FrameRef) {
   store.mutateDocument((document) => { const destination = ensureTrack(document); destination.frames = destination.frames.filter((item) => item.id !== frame.id); }, "frame_delete");
-  playIndex.value = Math.max(0, Math.min(playIndex.value, timeline.value.length - 2));
+  timelineIndex.value = Math.max(0, Math.min(timelineIndex.value, timeline.value.length - 2));
 }
 function duplicateFrame(frame: FrameRef) {
   store.mutateDocument((document) => { const destination = ensureTrack(document); const index = destination.frames.findIndex((item) => item.id === frame.id); destination.frames.splice(index + 1, 0, { ...JSON.parse(JSON.stringify(frame)), id: crypto.randomUUID() }); }, "frame_duplicate");
@@ -211,14 +253,31 @@ function applyFps() {
   store.mutateDocument((document) => { ensureTrack(document).frames.forEach((frame) => frame.duration_ms = Math.round(1000 / clipFps.value)); }, "clip_fps");
 }
 function updateDuration(frame: FrameRef, value: number) { updateFrame(frame, { duration_ms: Math.max(16, Math.min(60000, Number(value) || 16)) }, "frame_duration"); }
-function activateFrame(index: number, artifactId: string) { playIndex.value = index; const artifact = artifactMap.value.get(artifactId); if (artifact) emit("preview", artifact); }
+function activateFrame(index: number, artifactId: string) { timelineIndex.value = index; const artifact = artifactMap.value.get(artifactId); if (artifact) emit("preview", artifact); }
 function changeLoop() { if (targetReady.value && store.document) store.mutateDocument((document) => { const item = document.character?.clips.find((entry) => entry.action === target.value!.action); if (item) item.loop = loop.value; }, "clip_loop"); }
 function togglePlay() { playing.value = !playing.value; scheduleFrame(); }
+function advancePlayback() {
+  const count = playbackArtifacts.value.length;
+  if (!count) return;
+  if (loop.value === "none") {
+    if (playIndex.value >= count - 1) { playing.value = false; return; }
+    playIndex.value += 1;
+    return;
+  }
+  if (loop.value === "pingpong" && count > 1) {
+    const next = playIndex.value + playDirection.value;
+    if (next >= count) { playDirection.value = -1; playIndex.value = count - 2; return; }
+    if (next < 0) { playDirection.value = 1; playIndex.value = 1; return; }
+    playIndex.value = next;
+    return;
+  }
+  playIndex.value = (playIndex.value + 1) % count;
+}
 function scheduleFrame() {
   window.clearTimeout(playTimer);
-  if (!playing.value || !timeline.value.length) return;
-  const duration = timeline.value[playIndex.value]?.duration_ms || 100;
-  playTimer = window.setTimeout(() => { playIndex.value = (playIndex.value + 1) % timeline.value.length; scheduleFrame(); }, duration);
+  if (!playing.value || !playbackArtifacts.value.length) return;
+  const duration = Math.round(1000 / clipFps.value);
+  playTimer = window.setTimeout(() => { advancePlayback(); scheduleFrame(); }, duration);
 }
 function candidateKey(event: KeyboardEvent) {
   if (event.key === "Escape") { shortcuts.value = false; sourceTools.value = false; return; }
@@ -226,18 +285,41 @@ function candidateKey(event: KeyboardEvent) {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "y") { event.preventDefault(); store.redo(); return; }
   if (event.key === " ") { event.preventDefault(); togglePlay(); return; }
   if (event.key === "?") { shortcuts.value = !shortcuts.value; return; }
-  if (event.key === "ArrowRight") focusedCandidate.value = Math.min(candidates.value.length - 1, focusedCandidate.value + 1);
-  if (event.key === "ArrowLeft") focusedCandidate.value = Math.max(0, focusedCandidate.value - 1);
+  if (event.key === "ArrowRight" && candidates.value.length) focusedCandidate.value = Math.min(candidates.value.length - 1, focusedCandidate.value + 1);
+  if (event.key === "ArrowLeft" && candidates.value.length) focusedCandidate.value = Math.max(0, focusedCandidate.value - 1);
+  if ((event.key === "ArrowRight" || event.key === "ArrowLeft") && candidates.value.length) candidatePage.value = Math.floor(focusedCandidate.value / candidatePageSize);
   if (event.key === "Enter" && candidates.value[focusedCandidate.value]) selectCandidate(candidates.value[focusedCandidate.value], event.shiftKey);
   if (event.key === "Delete" && activeFrame.value) removeFrame(activeFrame.value);
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "d" && activeFrame.value) { event.preventDefault(); duplicateFrame(activeFrame.value); }
   const candidate = candidates.value[focusedCandidate.value]; if (candidate) emit("preview", candidate);
 }
 
-watch([playing, () => timeline.value.length], scheduleFrame);
-watch(() => props.sequence?.artifact.id, () => { selected.value = []; focusedCandidate.value = 0; playIndex.value = 0; commitState.value = "idle"; });
-watch(playIndex, () => { const artifact = artifactMap.value.get(activeFrame.value?.artifact || ""); if (artifact) emit("preview", artifact); });
-onMounted(() => window.addEventListener("keydown", candidateKey));
+function editorStateKey() { return `cooksprite.frame-editor.${store.currentProject?.id || "default"}`; }
+function restoreEditorState() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(editorStateKey()) || "{}");
+    if ([6, 8, 10, 12, 15, 20, 24].includes(Number(saved.fps))) clipFps.value = Number(saved.fps);
+    if (["none", "linear", "pingpong"].includes(String(saved.loop))) loop.value = saved.loop;
+    onion.value = saved.onion === true;
+    pixelDiff.value = saved.pixelDiff === true;
+    compare.value = saved.compare === true;
+  } catch { /* Ignore stale presentation state. */ }
+}
+function persistEditorState() {
+  localStorage.setItem(editorStateKey(), JSON.stringify({ fps: clipFps.value, loop: loop.value, onion: onion.value, pixelDiff: pixelDiff.value, compare: compare.value }));
+}
+
+watch([playing, () => playbackArtifacts.value.length, clipFps], scheduleFrame);
+watch(() => playbackArtifacts.value.length, (length) => {
+  if (playIndex.value >= length) playIndex.value = Math.max(0, length - 1);
+  if (length < 2) playDirection.value = 1;
+});
+watch(() => timeline.value.length, (length) => { if (timelineIndex.value >= length) timelineIndex.value = Math.max(0, length - 1); });
+watch(candidatePageCount, (count) => { candidatePage.value = Math.min(candidatePage.value, Math.max(0, count - 1)); });
+watch(() => props.sequence?.artifact.id, () => { selected.value = []; candidatePage.value = 0; focusedCandidate.value = 0; hoveredCandidate.value = null; playIndex.value = 0; timelineIndex.value = 0; playDirection.value = 1; commitState.value = "idle"; });
+watch(() => playerArtifact.value?.id, () => { if (playerArtifact.value) emit("preview", playerArtifact.value); });
+watch([clipFps, loop, onion, pixelDiff, compare], persistEditorState);
+onMounted(() => { restoreEditorState(); window.addEventListener("keydown", candidateKey); });
 onBeforeUnmount(() => { window.removeEventListener("keydown", candidateKey); window.clearTimeout(playTimer); });
 </script>
 
@@ -253,11 +335,53 @@ onBeforeUnmount(() => { window.removeEventListener("keydown", candidateKey); win
       <span>{{ $t('frames.characterAbove') }}</span>
       <button class="arcade-button" type="button" @click="sourceTools = true"><FileArrowDown :size="16" />{{ $t("frames.importSource") }}</button>
     </div>
-    <header v-if="sequence" class="frame-toolbar">
-      <div class="playback-controls"><button class="icon-button" :aria-label="$t('frames.first')" @click="playIndex = 0"><SkipBack :size="18" /></button><button class="icon-button primary-icon" :aria-label="$t(playing ? 'frames.pause' : 'frames.play')" @click="togglePlay"><Pause v-if="playing" :size="18" weight="fill" /><Play v-else :size="18" weight="fill" /></button><button class="icon-button" :aria-label="$t('frames.next')" @click="playIndex = Math.min(timeline.length - 1, playIndex + 1)"><SkipForward :size="18" /></button></div>
+    <section v-if="sequence" class="frame-player-workspace">
+      <section class="frame-preview-panel frame-hover-preview">
+        <header class="frame-preview-heading"><div><span class="eyebrow">{{ $t("frames.hoverPreview") }}</span><strong>{{ targetLabel }}</strong><small>{{ $t("frames.hoverPreviewHint") }}</small></div><b v-if="candidates.length">F{{ String(hoverPosition).padStart(2, "0") }} / {{ candidates.length }}</b></header>
+        <div class="frame-player checker" data-testid="hover-preview">
+          <ArtifactVisual v-if="hoverArtifact" :artifact="hoverArtifact" :draggable="false" />
+          <span v-else>{{ $t("frames.previewEmpty") }}</span>
+        </div>
+      </section>
+      <section class="frame-preview-panel frame-playback-preview">
+        <header class="frame-preview-heading"><div><span class="eyebrow">{{ $t("frames.player") }}</span><strong>{{ targetLabel }}</strong><small>{{ selected.length ? $t("frames.playingSelected", { count: selected.length }) : $t("frames.playingCandidates") }}</small></div><b v-if="playbackArtifacts.length">{{ playerPosition }} / {{ playbackArtifacts.length }}</b></header>
+        <div class="frame-player checker" data-testid="animation-preview" aria-live="off">
+          <ArtifactVisual v-if="playerArtifact" :artifact="playerArtifact" :draggable="false" />
+          <span v-else>{{ $t("frames.previewEmpty") }}</span>
+        </div>
+        <div class="frame-player-panel">
+          <div class="playback-controls frame-player-controls">
+            <button class="icon-button" :aria-label="$t('frames.first')" @click="playing = false; playIndex = 0; playDirection = 1"><SkipBack :size="18" /></button>
+            <button class="icon-button" :aria-label="$t('frames.previous')" @click="stepPlayback(-1)"><CaretLeft :size="19" /></button>
+            <button class="icon-button primary-icon" :aria-label="$t(playing ? 'frames.pause' : 'frames.play')" :disabled="!playbackArtifacts.length" @click="togglePlay"><Pause v-if="playing" :size="18" weight="fill" /><Play v-else :size="18" weight="fill" /></button>
+            <button class="icon-button" :aria-label="$t('frames.next')" @click="stepPlayback(1)"><CaretRight :size="19" /></button>
+            <button class="icon-button" :aria-label="$t('frames.last')" @click="playing = false; playIndex = Math.max(0, playbackArtifacts.length - 1); playDirection = -1"><SkipForward :size="18" /></button>
+          </div>
+          <div class="frame-player-settings">
+            <label class="mini-field">FPS <select v-model.number="clipFps" @change="applyFps"><option v-for="fps in [6, 8, 10, 12, 15, 20, 24]" :key="fps" :value="fps">{{ fps }}</option></select></label>
+            <label class="mini-field">LOOP <select v-model="loop" @change="changeLoop"><option value="none">NONE</option><option value="linear">LINEAR</option><option value="pingpong">PINGPONG</option></select></label>
+          </div>
+          <div class="playback-frame-dots" role="list" :aria-label="$t('frames.playbackDots', { current: playerPosition, total: playbackArtifacts.length })" data-testid="playback-dots">
+            <span v-for="(_, index) in playbackArtifacts" :key="`playback-dot-${index}`" class="playback-frame-dot" :class="{ active: index === playIndex }" role="listitem" :aria-current="index === playIndex ? 'step' : undefined" :aria-label="$t('frames.playbackFrame', { current: index + 1, total: playbackArtifacts.length })" :title="$t('frames.playbackFrame', { current: index + 1, total: playbackArtifacts.length })" data-testid="playback-dot"></span>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <section v-if="sequence" class="candidate-workspace" data-testid="candidate-row" :data-candidate-count="candidates.length">
+      <header class="candidate-heading">
+        <div><span class="eyebrow">{{ $t("frames.currentCandidates") }}</span><strong>{{ $t("frames.pickBestFrames") }}</strong><small>{{ $t("frames.pickHelp") }}</small></div>
+        <div class="candidate-heading-actions"><b>{{ selected.length }} / {{ candidates.length }}</b><nav v-if="candidatePageCount > 1" class="candidate-pager" :aria-label="$t('frames.candidatePages')"><button class="icon-button" type="button" :aria-label="$t('frames.previousPage')" :disabled="candidatePage === 0" @click="moveCandidatePage(-1)"><CaretLeft :size="17" /></button><span>{{ $t('frames.candidatePage', { current: candidatePage + 1, total: candidatePageCount }) }}</span><button class="icon-button" type="button" :aria-label="$t('frames.nextPage')" :disabled="candidatePage >= candidatePageCount - 1" @click="moveCandidatePage(1)"><CaretRight :size="17" /></button></nav><button class="text-button" type="button" @click="selectAllCandidates">{{ $t("frames.selectAll") }}</button><button class="text-button" type="button" :disabled="!selected.length" @click="clearCandidateSelection">{{ $t("frames.clearSelection") }}</button></div>
+      </header>
+      <div class="candidate-row">
+        <div class="candidate-viewport" data-testid="candidate-grid" :data-page-size="candidatePageSize" :data-page-count="candidatePageCount"><div class="candidate-grid" role="list"><div v-for="(artifact, index) in pageCandidates" :key="`${artifact.id}:${candidatePageStart + index}`" class="candidate-frame" :class="{ selected: selected.includes(candidatePageStart + index) }" role="listitem"><ArtifactCard :artifact="artifact" :selected="selected.includes(candidatePageStart + index)" compact @select="(item, event) => { focusedCandidate = candidatePageStart + index; selectCandidate(item, event); }" @preview="previewCandidate($event, candidatePageStart + index)" /><span>F{{ String(candidatePageStart + index + 1).padStart(2, "0") }}</span><b v-if="selected.includes(candidatePageStart + index)">{{ selected.indexOf(candidatePageStart + index) + 1 }}</b></div></div></div>
+        <div class="candidate-commit-actions"><button class="arcade-button primary confirm-selection" :disabled="!selected.length || !targetReady || commitState === 'saving'" @click="commitSelection('replace')"><Check :size="17" weight="bold" />{{ $t('frames.replaceFinal', { count: selected.length || '' }) }}</button><button class="text-button" :disabled="!selected.length || !targetReady || commitState === 'saving'" @click="commitSelection('append')"><Plus :size="15" />{{ $t('frames.appendTrack') }}</button></div>
+        <p v-if="commitMessage" class="commit-feedback" :class="commitState" role="status"><Check v-if="commitState === 'saved'" :size="15" /><Warning v-else-if="commitState === 'error'" :size="15" />{{ commitMessage }}</p>
+      </div>
+    </section>
+
+    <header v-if="sequence" class="frame-toolbar frame-edit-toolbar">
       <span class="target-badge" :class="{ missing: !targetReady }">{{ targetLabel }}</span>
-      <label class="mini-field">FPS <input v-model.number="clipFps" type="number" min="1" max="60" @change="applyFps" /></label>
-      <label class="mini-field">LOOP <select v-model="loop" @change="changeLoop"><option value="none">NONE</option><option value="linear">LINEAR</option><option value="pingpong">PINGPONG</option></select></label>
       <button class="toggle-icon" :class="{ active: onion }" :aria-pressed="onion" @click="onion = !onion"><Eye :size="17" />{{ $t("frames.onion") }}</button>
       <button class="toggle-icon" :class="{ active: pixelDiff }" :aria-pressed="pixelDiff" @click="pixelDiff = !pixelDiff"><ArrowsClockwise :size="17" />{{ $t("frames.diff") }}</button>
       <button class="toggle-icon" :class="{ active: compare }" :aria-pressed="compare" @click="compare = !compare">A/B</button>
@@ -266,15 +390,9 @@ onBeforeUnmount(() => { window.removeEventListener("keydown", candidateKey); win
       <button class="icon-button" :aria-label="$t('frames.shortcuts')" @click="shortcuts = !shortcuts"><Keyboard :size="19" /></button>
     </header>
 
-    <div v-if="sequence" class="candidate-row" data-testid="candidate-row" :data-candidate-count="candidates.length">
-      <div ref="viewport" class="candidate-viewport" tabindex="0" @scroll="scrollLeft = ($event.target as HTMLElement).scrollLeft"><div class="virtual-track" :style="{ width: `${candidates.length * cardWidth}px` }"><ArtifactCard v-for="(artifact, index) in visibleCandidates" :key="`${artifact.id}:${start + index}`" class="virtual-card" :style="{ left: `${(start + index) * cardWidth}px` }" :artifact="artifact" :selected="selected.includes(start + index)" compact @select="(item, event) => { focusedCandidate = start + index; selectCandidate(item, event); }" @preview="emit('preview', $event)" /></div></div>
-      <div class="candidate-commit-actions"><button class="arcade-button primary confirm-selection" :disabled="!selected.length || !targetReady || commitState === 'saving'" @click="commitSelection('replace')"><Check :size="17" weight="bold" />{{ $t('frames.replaceFinal', { count: selected.length || '' }) }}</button><button class="text-button" :disabled="!selected.length || !targetReady || commitState === 'saving'" @click="commitSelection('append')"><Plus :size="15" />{{ $t('frames.appendTrack') }}</button></div>
-      <p v-if="commitMessage" class="commit-feedback" :class="commitState" role="status"><Check v-if="commitState === 'saved'" :size="15" /><Warning v-else-if="commitState === 'error'" :size="15" />{{ commitMessage }}</p>
-    </div>
-
     <div v-if="sequence" class="timeline-row" :class="{ onion, 'pixel-diff': pixelDiff }">
       <div v-if="!timeline.length" class="empty-timeline">{{ $t("frames.empty") }}</div>
-      <article v-for="(frame, index) in timeline" :key="frame.id" class="timeline-frame" :class="{ active: playIndex === index, added: addedFrames.includes(frame.id) }" @dragover.prevent @drop="dropFrame($event, index)" @click="activateFrame(index, frame.artifact)">
+      <article v-for="(frame, index) in timeline" :key="frame.id" class="timeline-frame" :class="{ active: timelineIndex === index, added: addedFrames.includes(frame.id) }" @dragover.prevent @drop="dropFrame($event, index)" @click="activateFrame(index, frame.artifact)">
         <span class="frame-index">F{{ String(index + 1).padStart(2, "0") }}</span><button class="frame-drag-handle" draggable="true" :aria-label="$t('frames.dragSort')" @dragstart.stop="startFrameReorder($event, index)"><DotsSixVertical :size="15" /></button><span class="frame-image checker"><ArtifactVisual v-if="artifactMap.get(frame.artifact)" :artifact="artifactMap.get(frame.artifact)!" /></span><label><input :value="frame.duration_ms" type="number" min="16" max="60000" :aria-label="$t('frames.duration')" @change="updateDuration(frame, Number(($event.target as HTMLInputElement).value))" />ms</label><div class="offsets"><label>X<input :value="frame.offset_x" type="number" @change="updateFrame(frame, { offset_x: Number(($event.target as HTMLInputElement).value) }, 'frame_offset')" /></label><label>Y<input :value="frame.offset_y" type="number" @change="updateFrame(frame, { offset_y: Number(($event.target as HTMLInputElement).value) }, 'frame_offset')" /></label></div><div class="frame-actions"><button :aria-label="$t('frames.duplicate')" @click.stop="duplicateFrame(frame)"><Copy :size="14" /></button><button :aria-label="$t('frames.delete')" @click.stop="removeFrame(frame)"><Trash :size="14" /></button></div>
       </article>
     </div>

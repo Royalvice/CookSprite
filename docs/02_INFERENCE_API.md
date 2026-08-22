@@ -160,21 +160,19 @@ co-located on another Linux machine; the browser still calls only `/api/v1`.
 
 ## Prompt Packet policy
 
-Clients submit stable option IDs, never hidden prompt fragments. For
-`image.generate`, CookSprite currently compiles them as follows:
+Clients submit stable option IDs and user text. The CookSprite API owns prompt
+policy and deterministically produces final model text before it assembles a
+Recipe; ComfyUI receives only that final text. Prompt policy is not a ComfyUI
+node, and changing a template never requires reinstalling the CookSprite node
+pack on a Runtime.
 
-| Control | API value | CookSprite policy |
-|---|---|---|
-| Asset type | `character`, `weapon`, `prop`, `terrain`, `scene`, `vfx` | Adds a server-owned composition phrase such as complete silhouette, fully visible single object, or seamless orthographic tile. `terrain` also converts a new/static project to `tileset`. |
-| Style | `pixel` | Adds pixel-art intent and applies `CS_Pixelize` after the selected Recipe output. A Recipe is not advertised as compatible unless that node exists. |
-| Style | `smooth` | Adds clean game-concept-art intent and skips pixel post-processing. |
-
-Both styles use the same current green-background/isolation policy. A Recipe
-may replace the private graph, checkpoint, or input mechanism, but it receives
-the same compiled text and must satisfy the same typed output/bridge contract.
-Changing a runtime from localhost to another Linux device therefore changes
-only the selected Runtime/Recipe; it does not change the Web, CLI, or Skill
-request shape.
+Each asset category selects its own concise composition and style packet. A
+Recipe may replace the private graph, checkpoint, or input mechanism, but it
+receives the same final text and must satisfy the same typed output/bridge
+contract. Image generation never silently applies pixelization or cutout:
+those are explicit Actions. Changing a Runtime from localhost to another Linux
+device therefore changes only the selected Runtime/Recipe; it does not change
+the Web, CLI, or Skill request shape.
 
 Project-shape changes are enforced at this same API boundary, not by Web-only
 logic. `animation.generate` converts a non-character project to `character`;

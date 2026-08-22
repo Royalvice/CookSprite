@@ -63,7 +63,6 @@ class FakeComfy:
                     "ImageScale",
                     "CS_LoadArtifact",
                     "CS_StoreArtifact",
-                    "CS_CompilePromptPacket",
                     "CS_IsolateOnGreen",
                 )
             },
@@ -142,11 +141,6 @@ def test_comfy_probe_accepts_a_single_explicit_local_or_remote_url(tmp_path):
     assert body["candidates"][0]["base_url"] == "http://gpu.example:8188"
     assert body["candidates"][0]["models"] == 1
     assert body["candidates"][0]["managed"] is False
-
-    # Keep the pre-existing endpoint available to older CLI clients.
-    legacy = client.post("/api/v1/local/probe", json={"base_url": "http://gpu.example:8188"})
-    assert legacy.status_code == 200
-    assert legacy.json()["candidates"][0]["base_url"] == "http://gpu.example:8188"
 
 
 def test_comfy_probe_keeps_unreachable_remote_endpoints_location_neutral(tmp_path):

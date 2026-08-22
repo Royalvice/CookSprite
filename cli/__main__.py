@@ -7,7 +7,6 @@ import json
 import mimetypes
 import os
 import shutil
-import signal
 import socket
 import subprocess
 import sys
@@ -28,6 +27,7 @@ from cooksprite.comfy.managed import (
     sync_dependencies,
     wait_until_ready,
 )
+from cooksprite.config import resolve_data_dir, save_data_dir
 from cooksprite.dev import (
     check_generated,
     check_tool_packages,
@@ -434,7 +434,6 @@ def _start_frontend(
         command,
         cwd=frontend_root,
         env=environment,
-        start_new_session=os.name != "nt",
     )
 
 
@@ -442,10 +441,7 @@ def _stop_frontend(process: subprocess.Popen[bytes] | None) -> None:
     if not process or process.poll() is not None:
         return
     try:
-        if os.name != "nt":
-            os.killpg(process.pid, signal.SIGTERM)
-        else:
-            process.terminate()
+        process.terminate()
         process.wait(timeout=5)
     except (OSError, subprocess.TimeoutExpired):
         process.kill()
@@ -485,6 +481,7 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     from cooksprite.api.app import create_app
 
+    data_dir = save_data_dir(args.data_dir) if args.data_dir else resolve_data_dir()
     api_port = _next_available_port(args.host, args.port)
     frontend_port = None
     if not args.no_frontend:
@@ -532,21 +529,53 @@ def cmd_start(args: argparse.Namespace) -> int:
             except (httpx.HTTPError, OSError):
                 time.sleep(0.25)
 
-    frontend_process = None
-    try:
-        if comfy_url:
-            threading.Thread(target=register_runtime, daemon=True).start()
-        if not args.no_frontend:
-            frontend_process = _start_frontend(
+    frontend_process: subprocess.Popen[bytes] | None = None
+    frontend_lock = threading.Lock()
+    frontend_stop = threading.Event()
+    frontend_thread: threading.Thread | None = None
+
+    def start_frontend_when_api_is_ready() -> None:
+        nonlocal frontend_process
+        deadline = time.monotonic() + args.timeout
+        while time.monotonic() < deadline:
+            if frontend_stop.wait(0.05):
+                return
+            if _port_is_listening(args.host, api_port):
+                break
+        else:
+            print("CookSprite frontend was not started because the API did not become ready", file=sys.stderr)
+            return
+        try:
+            process = _start_frontend(
                 args,
                 frontend_port=frontend_port,
                 api_port=api_port,
             )
+        except (OSError, RuntimeError) as exc:
+            print(f"CookSprite frontend failed to start: {exc}", file=sys.stderr)
+            return
+        with frontend_lock:
+            if frontend_stop.is_set():
+                _stop_frontend(process)
+            else:
+                frontend_process = process
+
+    try:
+        if comfy_url:
+            threading.Thread(target=register_runtime, daemon=True).start()
+        if not args.no_frontend:
+            frontend_thread = threading.Thread(
+                target=start_frontend_when_api_is_ready,
+                daemon=True,
+                name="cooksprite-frontend-start",
+            )
+            frontend_thread.start()
+        print(f"Using CookSprite data at {data_dir}", file=sys.stderr)
         print(f"Starting CookSprite API at {api_base}", file=sys.stderr)
         previous_public_api_url = os.environ.get("COOKSPRITE_PUBLIC_API_URL")
         os.environ["COOKSPRITE_PUBLIC_API_URL"] = f"{api_base}/api/v1"
         try:
-            uvicorn.run(create_app(args.data_dir), host=args.host, port=api_port)
+            uvicorn.run(create_app(data_dir), host=args.host, port=api_port)
         finally:
             if previous_public_api_url is None:
                 os.environ.pop("COOKSPRITE_PUBLIC_API_URL", None)
@@ -554,7 +583,11 @@ def cmd_start(args: argparse.Namespace) -> int:
                 os.environ["COOKSPRITE_PUBLIC_API_URL"] = previous_public_api_url
         return 0
     finally:
-        _stop_frontend(frontend_process)
+        frontend_stop.set()
+        if frontend_thread:
+            frontend_thread.join(timeout=5)
+        with frontend_lock:
+            _stop_frontend(frontend_process)
 
 
 def cmd_list(args: argparse.Namespace) -> int:
@@ -583,6 +616,9 @@ def cmd_contributor_run(args: argparse.Namespace) -> int:
 def cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
+    data_dir = save_data_dir(args.data_dir) if args.data_dir else resolve_data_dir()
+    os.environ["COOKSPRITE_DATA_DIR"] = str(data_dir)
+    print(f"Using CookSprite data at {data_dir}", file=sys.stderr)
     uvicorn.run("cooksprite.api.app:app", host=args.host, port=args.port, reload=args.reload)
     return 0
 
@@ -833,6 +869,7 @@ def parser() -> argparse.ArgumentParser:
     serve = commands.add_parser("serve")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument("--data-dir")
     serve.add_argument("--reload", action="store_true")
     serve.set_defaults(func=cmd_serve)
 
@@ -957,7 +994,10 @@ def parser() -> argparse.ArgumentParser:
         help="start the API and frontend, plus a managed or existing ComfyUI runtime",
     )
     start.add_argument("--dir", default="~/.cooksprite/runtime")
-    start.add_argument("--data-dir", default="~/.cooksprite/data")
+    start.add_argument(
+        "--data-dir",
+        help="artifact store; an explicit value becomes the default for later starts",
+    )
     start.add_argument("--host", default="127.0.0.1")
     start.add_argument("--port", type=int, default=8000)
     comfy_start = start.add_mutually_exclusive_group()

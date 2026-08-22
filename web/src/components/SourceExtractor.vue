@@ -19,12 +19,18 @@ const accepts = computed<ArtifactKind[]>(() => {
   const declared = action.value?.accepts[slot.value]?.type;
   return declared ? (Array.isArray(declared) ? declared : [declared]) : [];
 });
+const visibleControls = computed(() => (action.value?.controls || []).filter((control) => !["prompt", "prompt_compile", "view", "direction"].includes(control.id)));
+const motionActions = new Set(["idle", "walk", "run", "jump", "death"]);
+function optionsFor(control: ActionControl) {
+  return control.id === "action" ? control.options.filter((option) => motionActions.has(option.id)) : control.options;
+}
 
 watch(action, (next) => {
   values.value = Object.fromEntries((next?.controls || []).map((control) => [control.id, JSON.parse(JSON.stringify(control.default))]));
   if (props.initialAction) values.value.action = props.initialAction;
-  if (props.initialView) values.value.view = props.initialView;
-  if (props.initialDirection) values.value.direction = props.initialDirection;
+  values.value.view = props.initialView || "level";
+  values.value.direction = props.initialDirection || "s";
+  if (!motionActions.has(String(values.value.action || ""))) values.value.action = "walk";
 }, { immediate: true });
 
 function copy(control: ActionControl) { return control.i18n[locale.value as Locale]; }
@@ -51,7 +57,11 @@ async function suggestGrid() {
 }
 async function extract() {
   if (!source.value || !action.value) return;
-  await store.runAction(action.value.id, { [slot.value]: source.value.id }, values.value);
+  const actionValues = Object.fromEntries(action.value.controls.map((control) => [
+    control.id,
+    values.value[control.id] ?? control.default,
+  ]));
+  await store.runAction(action.value.id, { [slot.value]: source.value.id }, actionValues);
   emit("close");
 }
 </script>
@@ -69,8 +79,8 @@ async function extract() {
     <div class="extractor-body">
       <DropTarget :accepts="accepts" :artifact="source" :label="source ? source.title || source.id : $t(mode === 'sheet.slice' ? 'frames.dropSheet' : 'frames.dropVideo')" @artifact="acceptArtifact" @files="importFiles" />
       <div v-if="action" class="extractor-controls">
-        <template v-for="control in action.controls" :key="control.id">
-          <label v-if="control.type === 'select'"><span>{{ copy(control).name }}</span><select v-model="values[control.id]"><option v-for="option in control.options" :key="option.id" :value="option.id">{{ option.i18n[locale as Locale].name }}</option></select></label>
+        <template v-for="control in visibleControls" :key="control.id">
+          <label v-if="control.type === 'select'"><span>{{ copy(control).name }}</span><select v-model="values[control.id]"><option v-for="option in optionsFor(control)" :key="option.id" :value="option.id">{{ option.i18n[locale as Locale].name }}</option></select></label>
           <label v-else-if="control.type === 'number' || control.type === 'range'"><span>{{ copy(control).name }}</span><input v-model.number="values[control.id]" type="number" :min="control.min" :max="control.max" :step="control.step" /></label>
           <label v-else-if="control.type === 'toggle'" class="check-field"><input v-model="values[control.id]" type="checkbox" /><span>{{ copy(control).name }}</span></label>
         </template>

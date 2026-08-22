@@ -385,8 +385,6 @@ export const api = {
   installLocal: (body: { directory?: string; host?: string; port?: number }) => json<LocalSetupView>("/setup/local", { method: "POST", ...jsonBody(body) }),
   startLocal: (body: { base_url?: string; directory?: string; host?: string; port?: number }) => json<LocalSetupView>("/local/start", { method: "POST", ...jsonBody(body) }),
   probeComfy: (baseUrl?: string) => json<ComfyProbeView>("/comfyui/probe", { method: "POST", ...(baseUrl ? jsonBody({ base_url: baseUrl }) : {}) }),
-  /** @deprecated Use probeComfy. */
-  probeLocal: (baseUrl?: string) => json<ComfyProbeView>("/local/probe", { method: "POST", ...(baseUrl ? jsonBody({ base_url: baseUrl }) : {}) }),
 };
 
 export function subscribeRun(id: string, update: (run: RunView) => void, fail: (error: Error) => void): () => void {
