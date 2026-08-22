@@ -23,6 +23,47 @@ The browser never talks to ComfyUI and never contains inference logic. The API
 validates a registered Action, compiles its private graph, tracks the run, and
 stores only declared outputs. ComfyUI is the sole media execution runtime.
 
+## Mac control plane + H20 compute worker
+
+The production two-machine topology is deliberately asymmetric:
+
+```text
+Mac: CookSprite Web + API + CLI + Project/Artifact Store
+                         │ typed Run + scoped bridge URLs
+                         ▼
+H20: one Git clone + one managed ComfyUI runtime + nodes + models + GPU
+                         │ CS_StoreArtifact
+                         ▼
+Mac: immutable SHA-256 artifacts and export packages
+```
+
+The API host owns every Project, SQLite record, and final artifact. The H20
+host owns GPU compute only; it does not run the CookSprite product API or keep
+a second artifact database. The two machines synchronize source only through
+the shared Git remote (`git push` and `git pull --ff-only`), never through
+directory copies or ad-hoc deployment scripts.
+
+On H20, run the compute worker from the single Git clone:
+
+```bash
+cspr worker init --runtime-dir ../runtime --cuda-device 0
+cspr worker install --runtime-dir ../runtime
+cspr worker sync --runtime-dir ../runtime
+cspr worker start --runtime-dir ../runtime
+cspr worker doctor --runtime-dir ../runtime --json
+```
+
+`cspr worker` is the only supported H20 lifecycle interface. It records a
+non-secret worker/runtime identity, requires a clean Git source, fast-forwards
+from the configured remote branch, and refuses to alter a running or unknown
+ComfyUI listener. Model downloads remain explicit and are not part of worker
+startup.
+
+On Mac, register H20 as a remote Runtime with an explicit callback URL that
+H20 can reach. The callback is where the artifact bridge reads source inputs
+and writes final output bytes; no H20 Comfy output directory is a product
+artifact store.
+
 ## Included in v0.1
 
 - Vue 3 + TypeScript workbench with image, same-page animation curation, normal

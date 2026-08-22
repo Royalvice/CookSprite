@@ -12,6 +12,18 @@ Human / Agent → cspr CLI ───────┼→ CookSprite /api/v1 → Co
 Contributor graph clients ─────┘
 ```
 
+For the standard two-machine deployment, the Mac is the only CookSprite
+control plane: it runs Web/API/CLI and owns Projects, SQLite metadata,
+Artifacts, and exports. H20 is a compute-only worker: it runs one managed
+ComfyUI runtime, CookSprite Custom Nodes, models, and GPU cache. H20 does not
+run a product API or own final CookSprite material.
+
+Mac and H20 use ordinary clones of the same Git remote. Source synchronization
+is exclusively `git push` and `git pull --ff-only` through that remote; never
+copy source with `scp`, `rsync`, archive files, patches, or shared directories.
+Installing the node pack from the H20 local clone into its H20 local ComfyUI
+runtime is a local deployment derivation, not cross-machine source transfer.
+
 CookSprite API is the control plane. It validates typed requests, versions and
 compiles graphs, schedules runs, tracks state/provenance, and persists declared
 artifacts. It never runs AI inference or performs image, mask, audio, video, 3D,
@@ -125,6 +137,20 @@ Adding a capability is incomplete until the same change provides:
 Agents invoke `cspr`; they do not call internal Python classes or ComfyUI.
 Humans may use either Web or `cspr`. Every principal product workflow must be
 completable by CLI against `/api/v1`, without starting a frontend or browser.
+
+## H20 worker contract
+
+Use `cspr worker`, from the H20 source clone, for every H20 lifecycle action:
+`init`, `install`, `sync`, `start`, `stop`, `restart`, `status`, and `doctor`.
+It owns exactly one non-Git runtime sibling and never creates a product data
+directory. `sync` rejects source edits, uses `git pull --ff-only`, refuses a
+running ComfyUI listener, and then synchronizes the locked local node/runtime
+deployment. Do not replace it with agent scripts or a second worker HTTP API.
+
+Remote Runtime registration belongs to the Mac API. It must have an explicit
+Mac-reachable callback URL for `CS_LoadArtifact`/`CS_StoreArtifact`; a remote
+runtime may not silently inherit a loopback callback. H20 outputs return over
+that scoped artifact bridge and do not become public files in ComfyUI output.
 
 ## Distribution and installation
 

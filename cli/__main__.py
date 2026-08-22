@@ -35,6 +35,19 @@ from cooksprite.dev import (
     sync_node_requirements,
 )
 from cooksprite.environment import check_project, lock_project, sync_project
+from cooksprite.worker import (
+    WorkerConfig,
+    WorkerError,
+    default_runtime_dir,
+    doctor_worker,
+    initialize_worker,
+    install_worker,
+    restart_worker,
+    start_worker,
+    stop_worker,
+    sync_worker,
+    worker_status,
+)
 
 TERMINAL = {"succeeded", "failed", "cancelled"}
 
@@ -342,6 +355,68 @@ def cmd_env(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     return 2
+
+
+def _worker_runtime_dir(args: argparse.Namespace) -> Path:
+    """Resolve the sibling runtime by default when running from a source clone."""
+
+    if args.runtime_dir:
+        return Path(args.runtime_dir).expanduser().resolve()
+    source = Path(getattr(args, "source_dir", None) or ".").expanduser().resolve()
+    return default_runtime_dir(source)
+
+
+def cmd_worker(args: argparse.Namespace) -> int:
+    """Operate the H20 compute-only worker without starting a product API."""
+
+    try:
+        runtime_dir = _worker_runtime_dir(args)
+        if args.action == "init":
+            config = initialize_worker(
+                args.source_dir,
+                runtime_dir=runtime_dir,
+                host=args.host,
+                port=args.port,
+                cuda_device=args.cuda_device,
+                branch=args.branch,
+                force=args.force,
+            )
+            result: dict[str, Any] = {"initialized": True, "config": config.__dict__}
+        else:
+            config = WorkerConfig.load(runtime_dir)
+            if args.action == "install":
+                result = install_worker(config, python_executable=args.python)
+            elif args.action == "sync":
+                result = sync_worker(
+                    config,
+                    pull=not args.no_pull,
+                    dependencies=not args.no_dependencies,
+                )
+            elif args.action == "start":
+                result = start_worker(config, timeout=args.timeout)
+            elif args.action == "stop":
+                result = stop_worker(config)
+            elif args.action == "restart":
+                result = restart_worker(config, timeout=args.timeout)
+            elif args.action == "status":
+                result = worker_status(config)
+            elif args.action == "doctor":
+                result = doctor_worker(config)
+                if not result["ok"]:
+                    print(json.dumps(result, ensure_ascii=False, indent=2))
+                    return 1
+            else:  # pragma: no cover - argparse constrains every action.
+                raise WorkerError(f"unsupported worker action: {args.action}")
+    except (OSError, RuntimeError, WorkerError) as exc:
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
+        return 2
+    if args.json or args.action in {"init", "install", "sync", "status", "doctor"}:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.action == "start":
+        print(f"CookSprite worker ready at {result.get('runtime_identity', {}).get('comfy_url', '')}")
+    else:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
 
 
 def cmd_install(args: argparse.Namespace) -> int:
@@ -981,6 +1056,48 @@ def parser() -> argparse.ArgumentParser:
     env_sync.add_argument("--comfy-dir", default="~/.cooksprite/runtime")
     env_sync.add_argument("--update-lock", action="store_true")
     env_sync.set_defaults(func=cmd_env)
+
+    worker = commands.add_parser(
+        "worker",
+        help="manage one compute-only ComfyUI worker; it never starts the product API",
+    )
+    worker_commands = worker.add_subparsers(dest="action", required=True)
+
+    worker_init = worker_commands.add_parser("init", help="write one non-secret worker manifest")
+    worker_init.add_argument("--source-dir", default=".", help="CookSprite Git worktree root")
+    worker_init.add_argument("--runtime-dir", help="managed ComfyUI runtime; defaults to ../runtime")
+    worker_init.add_argument("--branch", help="must equal the checked-out Git branch")
+    worker_init.add_argument("--host", default="127.0.0.1")
+    worker_init.add_argument("--port", type=int, default=8188)
+    worker_init.add_argument("--cuda-device", type=int)
+    worker_init.add_argument("--force", action="store_true")
+    worker_init.add_argument("--json", action="store_true")
+    worker_init.set_defaults(func=cmd_worker)
+
+    for name, help_text in (
+        ("install", "explicitly install the managed ComfyUI runtime without models"),
+        ("sync", "Git fast-forward and atomically synchronize a stopped worker"),
+        ("start", "start the configured ComfyUI worker"),
+        ("stop", "stop only the configured ComfyUI worker"),
+        ("restart", "restart only an idle configured worker"),
+        ("status", "show read-only worker state"),
+        ("doctor", "validate source, runtime identity, node pack, and ComfyUI"),
+    ):
+        command = worker_commands.add_parser(name, help=help_text)
+        command.add_argument("--runtime-dir", help="managed runtime; defaults to ../runtime")
+        command.add_argument("--json", action="store_true")
+        if name == "install":
+            command.add_argument("--python")
+        if name == "sync":
+            command.add_argument("--no-pull", action="store_true", help="do not run git pull --ff-only")
+            command.add_argument(
+                "--no-dependencies",
+                action="store_true",
+                help="copy the node pack without synchronizing the locked ComfyUI environment",
+            )
+        if name in {"start", "restart"}:
+            command.add_argument("--timeout", type=float, default=180)
+        command.set_defaults(func=cmd_worker)
 
     install_command = commands.add_parser(
         "install", help="install isolated ComfyUI and CookSprite nodes"
