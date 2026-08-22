@@ -73,9 +73,27 @@ def test_worker_sync_pulls_only_via_fast_forward_git(tmp_path: Path, monkeypatch
 
     nodes = runtime / "ComfyUI" / "custom_nodes" / "cooksprite"
 
-    def fake_nodes(root: Path, *, install_dependencies: bool = True) -> Path:
+    def fake_nodes(
+        root: Path,
+        *,
+        install_dependencies: bool = True,
+        runtime_identity: dict | None = None,
+    ) -> Path:
         nodes.mkdir(parents=True)
         (nodes / "VERSION").write_text(worker.NODE_PACK_VERSION + "\n", encoding="utf-8")
+        (nodes / "RUNTIME.json").write_text(
+            json.dumps(
+                {
+                    "schema": worker.RUNTIME_SCHEMA,
+                    "source_branch": runtime_identity["source_branch"],
+                    "source_revision": runtime_identity["source_revision"],
+                    "node_pack_version": worker.NODE_PACK_VERSION,
+                    "dependency_lock_sha256": runtime_identity["dependency_lock_sha256"],
+                    "comfy_url": runtime_identity["comfy_url"],
+                }
+            ),
+            encoding="utf-8",
+        )
         return nodes
 
     monkeypatch.setattr(worker, "_git", fake_git)
@@ -89,6 +107,8 @@ def test_worker_sync_pulls_only_via_fast_forward_git(tmp_path: Path, monkeypatch
     assert result["runtime_identity"]["source_revision"] == worker.source_identity(source)["revision"]
     persisted = json.loads(worker.runtime_identity_path(runtime).read_text(encoding="utf-8"))
     assert persisted["node_pack_version"] == worker.NODE_PACK_VERSION
+    deployed = json.loads((nodes / "RUNTIME.json").read_text(encoding="utf-8"))
+    assert deployed["source_revision"] == persisted["source_revision"]
 
 
 def test_worker_stop_refuses_unknown_process(tmp_path: Path) -> None:

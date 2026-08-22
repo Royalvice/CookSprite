@@ -145,7 +145,11 @@ Use `cspr worker`, from the H20 source clone, for every H20 lifecycle action:
 It owns exactly one non-Git runtime sibling and never creates a product data
 directory. `sync` rejects source edits, uses `git pull --ff-only`, refuses a
 running ComfyUI listener, and then synchronizes the locked local node/runtime
-deployment. Do not replace it with agent scripts or a second worker HTTP API.
+deployment through an atomic node-pack swap. The active node pack contains a
+minimal `RUNTIME.json` identity and serves it read-only at
+`/cooksprite/runtime-info`; a worker-managed runtime must match its source
+revision, node version, and dependency lock before it can start. Do not replace
+this with agent scripts or a second worker HTTP API.
 
 Remote Runtime registration belongs to the Mac API. It must have an explicit
 Mac-reachable callback URL for `CS_LoadArtifact`/`CS_StoreArtifact`; a remote

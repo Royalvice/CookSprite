@@ -13,7 +13,6 @@ import json
 import os
 import socket
 import subprocess
-import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +24,7 @@ from .comfy.managed import (
     install as install_managed_comfy,
     install_node_pack,
     launch_with_preference,
+    read_node_pack_runtime_info,
     stop_with_preference,
     sync_dependencies,
     wait_until_ready,
@@ -277,13 +277,25 @@ def _node_version(config: WorkerConfig) -> str | None:
         return None
 
 
-def _write_runtime_identity(
+_RUNTIME_IDENTITY_FIELDS = (
+    "schema",
+    "source_branch",
+    "source_revision",
+    "node_pack_version",
+    "dependency_lock_sha256",
+    "comfy_url",
+)
+
+
+def _runtime_identity_payload(
     config: WorkerConfig,
     identity: dict[str, Any],
     *,
     launch: dict[str, Any] | None = None,
     stopped: bool = False,
 ) -> dict[str, Any]:
+    """Build the private worker manifest; node deployment projects it safely."""
+
     previous = _read_runtime_identity(config) or {}
     payload: dict[str, Any] = {
         "schema": RUNTIME_SCHEMA,
@@ -305,8 +317,36 @@ def _write_runtime_identity(
     if stopped:
         payload["pid"] = None
         payload["stopped_at"] = _now()
+    return payload
+
+
+def _write_runtime_identity(
+    config: WorkerConfig,
+    identity: dict[str, Any],
+    *,
+    launch: dict[str, Any] | None = None,
+    stopped: bool = False,
+) -> dict[str, Any]:
+    payload = _runtime_identity_payload(config, identity, launch=launch, stopped=stopped)
     _write_json(runtime_identity_path(config.runtime_dir), payload)
     return payload
+
+
+def _runtime_identity_errors(
+    actual: object,
+    expected: dict[str, Any],
+    *,
+    subject: str,
+) -> list[str]:
+    """Return exact incompatibilities instead of silently accepting stale nodes."""
+
+    if not isinstance(actual, dict):
+        return [f"{subject} is missing or invalid"]
+    errors: list[str] = []
+    for field in _RUNTIME_IDENTITY_FIELDS:
+        if actual.get(field) != expected.get(field):
+            errors.append(f"{subject} {field} differs from the worker source")
+    return errors
 
 
 def initialize_worker(
@@ -430,7 +470,12 @@ def sync_worker(
     runtime = _require_installed_runtime(config)
     if dependencies:
         sync_dependencies(runtime)
-    nodes = install_node_pack(runtime, install_dependencies=False)
+    expected_runtime_identity = _runtime_identity_payload(config, identity)
+    nodes = install_node_pack(
+        runtime,
+        install_dependencies=False,
+        runtime_identity=expected_runtime_identity,
+    )
     runtime_identity = _write_runtime_identity(config, identity)
     return {
         "config": asdict(config),
@@ -451,8 +496,13 @@ def install_worker(
     _require_port_idle(config)
     identity = _require_clean_source(config.source_dir)
     runtime = Path(config.runtime_dir)
-    comfy = install_managed_comfy(runtime, python_executable=python_executable)
     config = _refresh_config(config, identity)
+    expected_runtime_identity = _runtime_identity_payload(config, identity)
+    comfy = install_managed_comfy(
+        runtime,
+        python_executable=python_executable,
+        node_runtime_identity=expected_runtime_identity,
+    )
     runtime_identity = _write_runtime_identity(config, identity)
     return {
         "config": asdict(config),
@@ -469,8 +519,18 @@ def _runtime_is_current(config: WorkerConfig, identity: dict[str, Any]) -> None:
         raise WorkerError("worker runtime source revision is stale; run `cspr worker sync` first")
     if runtime_identity.get("node_pack_version") != NODE_PACK_VERSION:
         raise WorkerError("worker runtime node pack is stale; run `cspr worker sync` first")
+    if runtime_identity.get("dependency_lock_sha256") != _lock_digest(Path(identity["source_dir"])):
+        raise WorkerError("worker runtime dependency lock is stale; run `cspr worker sync` first")
     if _node_version(config) != NODE_PACK_VERSION:
         raise WorkerError("installed CookSprite node pack is stale; run `cspr worker sync` first")
+    expected = _runtime_identity_payload(config, identity)
+    errors = _runtime_identity_errors(
+        read_node_pack_runtime_info(config.runtime_dir),
+        expected,
+        subject="installed node-pack runtime identity",
+    )
+    if errors:
+        raise WorkerError("; ".join(errors) + "; run `cspr worker sync` first")
 
 
 def start_worker(config: WorkerConfig, *, timeout: float = 180) -> dict[str, Any]:
@@ -495,7 +555,22 @@ def start_worker(config: WorkerConfig, *, timeout: float = 180) -> dict[str, Any
         port=config.port,
         cuda_device=config.cuda_device,
     )
-    report = wait_until_ready(worker_url(config), timeout=timeout)
+    try:
+        report = wait_until_ready(worker_url(config), timeout=timeout)
+        expected = _runtime_identity_payload(config, identity)
+        errors = _runtime_identity_errors(
+            report.get("runtime_info"),
+            expected,
+            subject="live ComfyUI runtime identity",
+        )
+        if errors:
+            raise WorkerError("; ".join(errors))
+    except Exception:
+        # This process was just created by this worker.  Do not leave an
+        # unverified runtime listening after an import or identity failure.
+        stop_with_preference(runtime, port=config.port)
+        _write_runtime_identity(config, identity, stopped=True)
+        raise
     runtime_identity = _write_runtime_identity(
         config,
         identity,
@@ -573,6 +648,7 @@ def worker_status(config: WorkerConfig) -> dict[str, Any]:
             "installed": (runtime / "ComfyUI" / "main.py").is_file(),
             "listening": port_open(config.host, config.port),
             "node_pack_version": _node_version(config),
+            "node_runtime_info": read_node_pack_runtime_info(config.runtime_dir),
             "identity": runtime_identity,
             "owned_pid": pid if command and expected in command else None,
         },
@@ -602,6 +678,14 @@ def doctor_worker(config: WorkerConfig) -> dict[str, Any]:
         errors.append("runtime identity source revision differs from worker source")
     if identity.get("node_pack_version") != NODE_PACK_VERSION:
         errors.append("runtime identity node-pack version differs from source")
+    expected_identity = _runtime_identity_payload(config, source)
+    errors.extend(
+        _runtime_identity_errors(
+            runtime.get("node_runtime_info"),
+            expected_identity,
+            subject="installed node-pack runtime identity",
+        )
+    )
     comfy: dict[str, Any] | None = None
     if runtime["listening"]:
         try:
@@ -613,6 +697,14 @@ def doctor_worker(config: WorkerConfig) -> dict[str, Any]:
             missing_nodes = sorted(expected_nodes.difference(present_nodes))
             if missing_nodes:
                 errors.append(f"ComfyUI is missing CookSprite nodes: {', '.join(missing_nodes)}")
+            live_identity = report.get("runtime_info")
+            errors.extend(
+                _runtime_identity_errors(
+                    live_identity,
+                    expected_identity,
+                    subject="live ComfyUI runtime identity",
+                )
+            )
             system = (report.get("system_stats") or {}).get("system") or {}
             comfy = {
                 "comfyui_version": system.get("comfyui_version"),
@@ -620,6 +712,7 @@ def doctor_worker(config: WorkerConfig) -> dict[str, Any]:
                 "device_count": len((report.get("system_stats") or {}).get("devices") or []),
                 "node_count": len(present_nodes),
                 "missing_nodes": missing_nodes,
+                "runtime_identity": live_identity,
             }
         except Exception as exc:  # noqa: BLE001 - doctor is an external boundary.
             errors.append(f"ComfyUI doctor failed: {exc}")

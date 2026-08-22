@@ -12,6 +12,7 @@ import tempfile
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 from PIL import Image
@@ -22,6 +23,55 @@ try:  # Prompt Tool tests and API tooling do not need the compute-only torch dep
     import torch
 except ImportError:  # pragma: no cover - ComfyUI always supplies torch at node runtime.
     torch = None
+
+
+RUNTIME_INFO_NAME = "RUNTIME.json"
+_RUNTIME_INFO_ROUTE_REGISTERED = False
+
+
+def runtime_info_payload(path: str | Path | None = None) -> dict | None:
+    """Read the deployment identity placed beside the installed node package.
+
+    The installer writes this file before its atomic directory swap.  The
+    source checkout intentionally has no such file, so importing nodes for
+    tests or tooling never invents a runtime identity.
+    """
+
+    target = Path(path) if path is not None else Path(__file__).with_name(RUNTIME_INFO_NAME)
+    try:
+        value = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _register_runtime_info_route() -> None:
+    """Add one read-only identity endpoint when imported by a ComfyUI server."""
+
+    global _RUNTIME_INFO_ROUTE_REGISTERED
+    if _RUNTIME_INFO_ROUTE_REGISTERED:
+        return
+    try:
+        from aiohttp import web
+        from server import PromptServer
+
+        routes = PromptServer.instance.routes
+    except (ImportError, AttributeError):
+        # Unit tests and API-only tooling deliberately do not depend on
+        # ComfyUI/aiohttp.  A managed worker rejects the missing endpoint at
+        # doctor/start time instead of silently accepting it.
+        return
+
+    @routes.get("/cooksprite/runtime-info")
+    async def cooksprite_runtime_info(_request):
+        payload = runtime_info_payload()
+        if payload is None:
+            return web.json_response(
+                {"error": "CookSprite runtime identity is unavailable"}, status=503
+            )
+        return web.json_response(payload, headers={"Cache-Control": "no-store"})
+
+    _RUNTIME_INFO_ROUTE_REGISTERED = True
 
 
 def _tensor(image: Image.Image):
@@ -1037,3 +1087,8 @@ NODE_CLASS_MAPPINGS = {node.__name__: node for node in NODE_CLASSES}
 NODE_DISPLAY_NAME_MAPPINGS = {
     key: key.replace("CS_", "CookSprite: ") for key in NODE_CLASS_MAPPINGS
 }
+
+# ComfyUI imports a custom-node package once during startup.  Register after
+# all module definitions so the endpoint cannot expose an incompletely loaded
+# package if a later node import fails.
+_register_runtime_info_route()

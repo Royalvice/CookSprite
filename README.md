@@ -56,8 +56,10 @@ cspr worker doctor --runtime-dir ../runtime --json
 `cspr worker` is the only supported H20 lifecycle interface. It records a
 non-secret worker/runtime identity, requires a clean Git source, fast-forwards
 from the configured remote branch, and refuses to alter a running or unknown
-ComfyUI listener. Model downloads remain explicit and are not part of worker
-startup.
+ComfyUI listener. Node deployment is staged and atomically renamed while the
+worker is stopped; the loaded node pack exposes its safe source/lock/version
+identity at `/cooksprite/runtime-info`, which worker start/doctor verify.
+Model downloads remain explicit and are not part of worker startup.
 
 On Mac, register H20 as a remote Runtime with an explicit callback URL that
 H20 can reach. The callback is where the artifact bridge reads source inputs

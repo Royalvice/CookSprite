@@ -51,12 +51,21 @@ class ComfyClient:
             features = c.get(self.base_url + "/features")
             folders = c.get(self.base_url + "/models")
             workflow_templates = c.get(self.base_url + "/workflow_templates")
+            runtime_info_response = c.get(self.base_url + "/cooksprite/runtime-info")
             models: dict[str, list[str]] = {}
             if folders.is_success and isinstance(folders.json(), list):
                 for folder in folders.json():
                     response = c.get(self.base_url + f"/models/{folder}")
                     if response.is_success and isinstance(response.json(), list):
                         models[str(folder)] = response.json()
+            runtime_info: dict[str, Any] | None = None
+            if runtime_info_response.is_success:
+                try:
+                    candidate = runtime_info_response.json()
+                except ValueError:
+                    candidate = None
+                if isinstance(candidate, dict):
+                    runtime_info = candidate
         return {
             "object_info": nodes.json(),
             "system_stats": system.json(),
@@ -65,6 +74,10 @@ class ComfyClient:
             "workflow_templates": workflow_templates.json()
             if workflow_templates.is_success
             else {},
+            # This endpoint is optional for external/user-owned ComfyUI.  A
+            # worker-managed H20 runtime validates it explicitly at a higher
+            # layer rather than treating an absent endpoint as an HTTP failure.
+            "runtime_info": runtime_info,
         }
 
     def submit(self, graph: dict[str, Any], client_id: str | None = None) -> str:

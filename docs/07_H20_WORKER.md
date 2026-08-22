@@ -14,6 +14,9 @@ and exports. H20 owns ComfyUI, models, Custom Nodes, and GPU execution only.
 │   ├── worker.json
 │   ├── cooksprite-runtime.json
 │   ├── ComfyUI/
+│   │   └── custom_nodes/cooksprite/
+│   │       ├── VERSION
+│   │       └── RUNTIME.json
 │   └── .venv/
 └── models/                 # optional local model data, never Git source
 ```
@@ -41,6 +44,16 @@ synchronizes the locked local ComfyUI environment and node pack. It rejects
 dirty source, a running worker, an occupied listener, and a runtime outside the
 configured source/runtime pair. `stop` only acts on the PID recorded for this
 runtime and refuses to touch an unknown ComfyUI process.
+
+The complete node tree is assembled in a staging directory and renamed into
+place only after its files are flushed. The previous pack is moved outside
+`custom_nodes` during the swap, then removed, so ComfyUI can never discover a
+second or partly copied package. `RUNTIME.json` is a deliberately public,
+minimal projection of the worker identity: source branch/revision, node-pack
+version, dependency-lock hash, and Comfy URL. It never contains a source path,
+remote credentials, PID, or launch command. The custom node exposes this exact
+file at `GET /cooksprite/runtime-info`; `cspr worker start` and `doctor` reject
+a running runtime whose reported identity differs from the installed source.
 
 Use `restart` only after the ComfyUI queue is empty. Models are explicit data:
 they are never downloaded at worker startup and never committed to Git.

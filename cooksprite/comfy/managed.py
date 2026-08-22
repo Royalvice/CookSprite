@@ -10,7 +10,8 @@ import signal
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+import uuid
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,6 +23,17 @@ COMFY_PYTHON_VERSION = "3.11"
 COMFY_REQUIREMENTS_INPUT = Path(__file__).with_name("requirements.in")
 COMFY_NODE_REQUIREMENTS = Path(__file__).parents[1] / "nodes" / "requirements.txt"
 COMFY_REQUIREMENTS_LOCK = Path(__file__).with_name("requirements.lock")
+NODE_RUNTIME_INFO_NAME = "RUNTIME.json"
+NODE_RUNTIME_INFO_SCHEMA = "cooksprite.node-pack-runtime/v1"
+_NODE_RUNTIME_INFO_FIELDS = (
+    "schema",
+    "source_branch",
+    "source_revision",
+    "node_pack_version",
+    "dependency_lock_sha256",
+    "comfy_url",
+    "updated_at",
+)
 
 Progress = Callable[[str, float], None]
 REQUIRED_COMFY_PATHS = (
@@ -436,11 +448,91 @@ def sync_dependencies(
     return python
 
 
-def install_node_pack(root: str | Path, *, install_dependencies: bool = True) -> Path:
-    root = Path(root).expanduser().resolve()
-    comfy = root / "ComfyUI" if (root / "ComfyUI").exists() else root
-    nodes = comfy / "custom_nodes" / "cooksprite"
-    nodes.mkdir(parents=True, exist_ok=True)
+def _node_pack_comfy_root(root: str | Path) -> Path:
+    """Resolve a managed workspace or a direct checkout before it is complete."""
+
+    candidate = Path(root).expanduser().resolve()
+    nested = candidate / "ComfyUI"
+    return nested if nested.is_dir() else candidate
+
+
+def node_pack_path(root: str | Path) -> Path:
+    """Return the active CookSprite custom-node directory for a runtime."""
+
+    return _node_pack_comfy_root(root) / "custom_nodes" / "cooksprite"
+
+
+def node_pack_runtime_info_path(root: str | Path) -> Path:
+    """Return the installed public runtime identity file path."""
+
+    return node_pack_path(root) / NODE_RUNTIME_INFO_NAME
+
+
+def read_node_pack_runtime_info(root: str | Path) -> dict[str, object] | None:
+    """Read the non-secret identity exposed by an installed CookSprite node pack."""
+
+    try:
+        value = json.loads(node_pack_runtime_info_path(root).read_text(encoding="utf-8"))
+    except (OSError, RuntimeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _node_runtime_info(runtime_identity: Mapping[str, object] | None) -> dict[str, str]:
+    """Project a private worker manifest to the safe node HTTP response shape."""
+
+    if runtime_identity is None:
+        return {
+            "schema": NODE_RUNTIME_INFO_SCHEMA,
+            "node_pack_version": NODE_PACK_VERSION,
+        }
+    payload: dict[str, str] = {}
+    for field in _NODE_RUNTIME_INFO_FIELDS:
+        value = runtime_identity.get(field)
+        if value is not None:
+            payload[field] = str(value)
+    payload.setdefault("schema", NODE_RUNTIME_INFO_SCHEMA)
+    # The installed source is authoritative; a caller may not claim a version
+    # different from the bytes that were actually copied into the runtime.
+    payload["node_pack_version"] = NODE_PACK_VERSION
+    return payload
+
+
+def _fsync_file(path: Path) -> None:
+    """Flush one staged payload before it is made visible through a rename."""
+
+    if os.name == "nt":
+        return
+    with path.open("rb") as handle:
+        os.fsync(handle.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    """Persist directory-entry changes on POSIX; Windows has no directory fd API."""
+
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _write_staged_json(path: Path, value: Mapping[str, str]) -> None:
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(value, handle, ensure_ascii=False, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        if os.name != "nt":
+            os.fsync(handle.fileno())
+
+
+def _populate_node_pack(
+    staging: Path, runtime_identity: Mapping[str, object] | None
+) -> None:
+    """Build a complete, not-yet-visible custom-node package in ``staging``."""
+
     source = Path(__file__).parents[1] / "nodes"
     # Keep the installed package extensible: copy the complete node tree,
     # including algorithm subpackages and non-Python provenance/preset files.
@@ -452,14 +544,82 @@ def install_node_pack(root: str | Path, *, install_dependencies: bool = True) ->
         if relative == Path("__init__.py"):
             continue
         target_relative = Path("__init__.py") if relative == Path("cooksprite_nodes.py") else relative
-        target = nodes / target_relative
+        target = staging / target_relative
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source_file, target)
-    shutil.copyfile(source / "requirements.txt", nodes / "requirements.txt")
-    (nodes / "VERSION").write_text(NODE_PACK_VERSION + "\n", encoding="utf-8")
+        shutil.copy2(source_file, target)
+    shutil.copy2(source / "requirements.txt", staging / "requirements.txt")
+    (staging / "VERSION").write_text(NODE_PACK_VERSION + "\n", encoding="utf-8")
+    _write_staged_json(staging / NODE_RUNTIME_INFO_NAME, _node_runtime_info(runtime_identity))
+
+    # The next operation swaps the directory name.  Flush every regular file
+    # and directory first, so a power failure cannot expose a half-copied pack.
+    paths = list(staging.rglob("*"))
+    for path in paths:
+        if path.is_file():
+            _fsync_file(path)
+    for path in sorted((path for path in paths if path.is_dir()), key=lambda item: len(item.parts), reverse=True):
+        _fsync_directory(path)
+    _fsync_directory(staging)
+
+
+def _activate_node_pack(parent: Path, staging: Path, active: Path, backup: Path) -> None:
+    """Replace ``active`` with ``staging`` and roll back if the second rename fails."""
+
+    moved_active = False
+    try:
+        if active.exists() or active.is_symlink():
+            active.replace(backup)
+            moved_active = True
+            _fsync_directory(parent)
+        staging.replace(active)
+        _fsync_directory(parent)
+    except Exception:
+        if moved_active and backup.exists() and not active.exists():
+            backup.replace(active)
+            _fsync_directory(parent)
+        raise
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+
+    if backup.exists():
+        # Keep backups outside custom_nodes, so even a cleanup failure can
+        # never result in ComfyUI loading a second, stale node package.
+        shutil.rmtree(backup)
+        _fsync_directory(backup.parent)
+
+
+def install_node_pack(
+    root: str | Path,
+    *,
+    install_dependencies: bool = True,
+    runtime_identity: Mapping[str, object] | None = None,
+) -> Path:
+    """Atomically install the complete CookSprite node pack into stopped ComfyUI.
+
+    Callers that manage a live runtime must first stop it (the H20 worker
+    enforces this before calling here).  Dependencies are synchronized before
+    the swap, so a failed dependency resolution leaves the active pack intact.
+    """
+
+    comfy = _node_pack_comfy_root(root)
     if install_dependencies:
         sync_dependencies(comfy.parent)
-    return nodes
+    parent = comfy / "custom_nodes"
+    parent.mkdir(parents=True, exist_ok=True)
+    active = parent / "cooksprite"
+    token = uuid.uuid4().hex
+    staging = parent / f".cooksprite-staging-{token}"
+    backup = comfy.parent / f".cooksprite-node-pack-backup-{token}"
+    try:
+        staging.mkdir()
+        _populate_node_pack(staging, runtime_identity)
+        _activate_node_pack(parent, staging, active, backup)
+    except Exception:
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return active
 
 
 def install(
@@ -468,6 +628,7 @@ def install(
     *,
     python_executable: str | None = None,
     progress: Progress | None = None,
+    node_runtime_identity: Mapping[str, object] | None = None,
 ) -> Path:
     """Install an isolated, pinned ComfyUI and CookSprite node pack.
 
@@ -507,7 +668,11 @@ def install(
         progress=progress,
     )
     _progress(progress, "installing CookSprite nodes", 0.85)
-    install_node_pack(root, install_dependencies=False)
+    install_node_pack(
+        root,
+        install_dependencies=False,
+        runtime_identity=node_runtime_identity,
+    )
     metadata = {
         "schema": "cooksprite.managed-comfy/v2",
         "comfy_ref": PINNED_COMFY_REF,
