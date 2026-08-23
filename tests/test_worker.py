@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-import cooksprite.worker as worker
+from cooksprite import worker
 
 
 @pytest.mark.parametrize(
@@ -84,26 +84,42 @@ def test_worker_init_and_status_are_compute_only(tmp_path: Path) -> None:
     assert not (runtime / "cooksprite.sqlite3").exists()
 
 
-def test_worker_default_runtime_is_dedicated_sibling(tmp_path: Path) -> None:
+def test_worker_default_runtime_is_user_level(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     source = _source(tmp_path)
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
 
-    assert worker.default_runtime_dir(source) == tmp_path / "worker-runtime"
+    assert worker.default_runtime_dir(source) == home / ".cooksprite" / "runtime"
     config = worker.initialize_worker(source)
 
-    assert Path(config.runtime_dir) == tmp_path / "worker-runtime"
+    assert Path(config.runtime_dir) == home / ".cooksprite" / "runtime"
     assert config.port == worker.DEFAULT_WORKER_PORT
 
 
-def test_worker_init_refuses_to_adopt_nonempty_runtime(tmp_path: Path) -> None:
+def test_worker_init_adopts_explicit_existing_comfy_runtime(tmp_path: Path) -> None:
     source = _source(tmp_path)
-    legacy = tmp_path / "runtime"
-    (legacy / "ComfyUI").mkdir(parents=True)
-    (legacy / "ComfyUI" / "main.py").write_text("# legacy fixture\n", encoding="utf-8")
+    runtime = tmp_path / "runtime"
+    (runtime / "ComfyUI").mkdir(parents=True)
+    (runtime / "ComfyUI" / "main.py").write_text("# existing fixture\n", encoding="utf-8")
 
-    with pytest.raises(worker.WorkerError, match="never adopts an existing ComfyUI"):
-        worker.initialize_worker(source, runtime_dir=legacy)
+    config = worker.initialize_worker(source, runtime_dir=runtime)
 
-    assert not worker.worker_config_path(legacy).exists()
+    assert Path(config.runtime_dir) == runtime
+    assert worker.worker_config_path(runtime).is_file()
+
+
+def test_worker_init_rejects_unrecognized_nonempty_runtime(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "unrelated.txt").write_text("not ComfyUI\n", encoding="utf-8")
+
+    with pytest.raises(worker.WorkerError, match="does not contain ComfyUI/main.py"):
+        worker.initialize_worker(source, runtime_dir=runtime)
+
+    assert not worker.worker_config_path(runtime).exists()
 
 
 def test_worker_resource_guard_refuses_a_foreign_compute_process(

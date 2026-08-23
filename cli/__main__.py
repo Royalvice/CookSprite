@@ -365,7 +365,7 @@ def cmd_dev(args: argparse.Namespace) -> int:
 
 
 def _worker_runtime_dir(args: argparse.Namespace) -> Path:
-    """Resolve the dedicated worker-runtime sibling from a source clone."""
+    """Resolve the one managed Runtime root on this host."""
 
     if args.runtime_dir:
         return Path(args.runtime_dir).expanduser().resolve()
@@ -761,7 +761,7 @@ def parser() -> argparse.ArgumentParser:
     worker_init.add_argument("--source-dir", default=".", help="CookSprite Git worktree root")
     worker_init.add_argument(
         "--runtime-dir",
-        help=f"managed ComfyUI runtime; defaults to ../{DEFAULT_RUNTIME_DIR_NAME}",
+        help=f"managed ComfyUI runtime root; defaults to ~/.cooksprite/{DEFAULT_RUNTIME_DIR_NAME}",
     )
     worker_init.add_argument("--branch", help="must equal the checked-out Git branch")
     worker_init.add_argument("--host", default="127.0.0.1")
@@ -797,7 +797,7 @@ def parser() -> argparse.ArgumentParser:
         command = worker_commands.add_parser(name, help=help_text)
         command.add_argument(
             "--runtime-dir",
-            help=f"managed runtime; defaults to ../{DEFAULT_RUNTIME_DIR_NAME}",
+            help=f"managed runtime root; defaults to ~/.cooksprite/{DEFAULT_RUNTIME_DIR_NAME}",
         )
         command.add_argument("--json", action="store_true")
         if name == "install":

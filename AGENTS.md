@@ -142,9 +142,10 @@ completable by CLI against `/api/v1`, without starting a frontend or browser.
 Use `cspr comfy worker`, from the ComfyUI host's source clone, for every managed
 runtime lifecycle action:
 `init`, `install`, `sync`, `start`, `stop`, `restart`, `status`, and `doctor`.
-It owns exactly one non-Git `worker-runtime` sibling and never creates a product
-data directory. An existing `runtime/` directory is user-owned and is never a
-valid default or adoption target. `install` and `sync` pin the
+It owns exactly one non-Git Runtime root and never creates a product data
+directory. The default is `~/.cooksprite/runtime`; a server may pass one
+explicit persistent Runtime root. A valid existing `runtime/ComfyUI` is reused
+in place instead of creating a second ComfyUI. `install` and `sync` pin the
 configured credential-redacted `origin`, use `git pull --ff-only`, require
 `HEAD` to equal that pull's `FETCH_HEAD`, refuse source edits and a running
 ComfyUI listener, then synchronize the locked local environment and node

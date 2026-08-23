@@ -24,6 +24,8 @@ from urllib.parse import urlsplit, urlunsplit
 from .comfy.client import ComfyClient
 from .comfy.managed import (
     install as install_managed_comfy,
+)
+from .comfy.managed import (
     install_node_pack,
     launch_with_preference,
     read_node_pack_runtime_info,
@@ -34,12 +36,11 @@ from .comfy.managed import (
 from .tool_packages import tool_packages
 from .version import NODE_PACK_VERSION
 
-
 WORKER_SCHEMA = "cooksprite.worker/v2"
 RUNTIME_SCHEMA = "cooksprite.worker-runtime/v1"
 WORKER_CONFIG_NAME = "worker.json"
 RUNTIME_IDENTITY_NAME = "cooksprite-runtime.json"
-DEFAULT_RUNTIME_DIR_NAME = "worker-runtime"
+DEFAULT_RUNTIME_DIR_NAME = "runtime"
 DEFAULT_WORKER_PORT = 8288
 
 
@@ -197,14 +198,15 @@ def runtime_identity_path(runtime_dir: str | Path) -> Path:
 
 
 def default_runtime_dir(source_dir: str | Path) -> Path:
-    """Return the dedicated worker-runtime sibling for a source clone.
+    """Return the one user-level managed Runtime used on this host.
 
-    ``runtime`` is deliberately not the default name.  It is a common legacy
-    ComfyUI location, so using it would make an otherwise harmless worker
-    command capable of targeting a pre-existing deployment by accident.
+    A server with a persistent shared location passes ``--runtime-dir``
+    explicitly.  The source path remains accepted for API compatibility, but
+    Runtime data never depends on where a Git clone happens to live.
     """
 
-    return Path(source_dir).expanduser().resolve().parent / DEFAULT_RUNTIME_DIR_NAME
+    del source_dir
+    return (Path.home() / ".cooksprite" / DEFAULT_RUNTIME_DIR_NAME).resolve()
 
 
 def _is_empty_directory(path: Path) -> bool:
@@ -219,23 +221,23 @@ def _require_initializable_runtime(
     *,
     force: bool,
 ) -> None:
-    """Refuse to adopt an arbitrary pre-existing ComfyUI directory.
+    """Accept an empty root or an explicitly selected existing ComfyUI root.
 
-    A worker can create a new empty directory, or reconfigure its own stopped
-    runtime with ``--force``.  It must never plant a worker manifest inside an
-    existing legacy or user-owned runtime: doing so would make later lifecycle
-    commands appear to own a process they did not create.
+    The caller already selected ``runtime`` on the host where this command is
+    running.  Reusing a valid ``runtime/ComfyUI`` keeps models, custom nodes and
+    caches in place; lifecycle ownership still begins only after CookSprite
+    starts and records its own process.
     """
 
     config_path = worker_config_path(runtime)
     if not config_path.exists():
-        if not _is_empty_directory(runtime):
-            raise WorkerError(
-                "refusing to initialize a non-empty runtime directory; "
-                "cspr comfy worker never adopts an existing ComfyUI deployment. "
-                "Choose a new empty worker-runtime directory instead"
-            )
-        return
+        if _is_empty_directory(runtime):
+            return
+        if (runtime / "ComfyUI" / "main.py").is_file():
+            return
+        raise WorkerError(
+            "runtime directory is non-empty but does not contain ComfyUI/main.py"
+        )
     if not force:
         raise WorkerError(f"worker is already initialized at {runtime}; use --force only to replace its manifest")
 
@@ -725,7 +727,7 @@ def _require_port_idle(config: WorkerConfig) -> None:
         return
     try:
         queue = ComfyClient(worker_url(config)).queue()
-    except Exception as exc:  # noqa: BLE001 - the listener may not be this worker.
+    except Exception as exc:
         raise WorkerError(
             f"{worker_url(config)} is already listening but cannot be identified as an idle worker: {exc}"
         ) from exc
@@ -936,7 +938,7 @@ def restart_worker(config: WorkerConfig, *, timeout: float = 180) -> dict[str, A
     if port_open(config.host, config.port):
         try:
             queue = ComfyClient(worker_url(config)).queue()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise WorkerError(f"cannot inspect ComfyUI queue before restart: {exc}") from exc
         if queue.get("queue_running") or queue.get("queue_pending"):
             raise WorkerError("cannot restart worker while ComfyUI queue has work")
@@ -1054,10 +1056,10 @@ def doctor_worker(config: WorkerConfig) -> dict[str, Any]:
 
 
 __all__ = [
-    "RUNTIME_IDENTITY_NAME",
-    "RUNTIME_SCHEMA",
     "DEFAULT_RUNTIME_DIR_NAME",
     "DEFAULT_WORKER_PORT",
+    "RUNTIME_IDENTITY_NAME",
+    "RUNTIME_SCHEMA",
     "WORKER_CONFIG_NAME",
     "WORKER_SCHEMA",
     "DeviceSpec",
@@ -1065,11 +1067,11 @@ __all__ = [
     "WorkerError",
     "default_runtime_dir",
     "doctor_worker",
-    "resource_status",
     "initialize_worker",
     "install_worker",
     "port_open",
     "pull_source",
+    "resource_status",
     "restart_worker",
     "runtime_identity_path",
     "source_identity",

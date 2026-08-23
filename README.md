@@ -52,20 +52,22 @@ uv run cspr comfy connect select --runtime <runtime-id>
 
 For a remote Runtime, use `--location remote` and provide `--callback-url`.
 
-CookSprite can optionally create and manage a dedicated ComfyUI Runtime:
+CookSprite can create or manage one ComfyUI Runtime on the current host. The
+default is `~/.cooksprite/runtime`; pass `--runtime-dir` to reuse an existing
+persistent Runtime root such as `/srv/cooksprite/runtime`:
 
 ```bash
-uv run cspr comfy worker init --runtime-dir ../worker-runtime --device auto
-uv run cspr comfy worker install --runtime-dir ../worker-runtime
-uv run cspr comfy worker start --runtime-dir ../worker-runtime
-uv run cspr comfy worker doctor --runtime-dir ../worker-runtime --json
+uv run cspr comfy worker init --device auto
+uv run cspr comfy worker install
+uv run cspr comfy worker start
+uv run cspr comfy worker doctor --json
 ```
 
 The default device policy is shared. Optional CUDA exclusivity is explicit:
 
 ```bash
 uv run cspr comfy worker init \
-  --runtime-dir ../worker-runtime \
+  --runtime-dir /srv/cooksprite/runtime \
   --device cuda:0 \
   --exclusive
 ```

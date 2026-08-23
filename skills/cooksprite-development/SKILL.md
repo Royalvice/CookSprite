@@ -45,7 +45,7 @@ cspr dev check
 
 Do not install an unpinned package with bare `pip` into either environment.
 Commit/push through the authoritative Git remote, then run
-`cspr comfy worker sync --runtime-dir ../worker-runtime` on the managed ComfyUI host
+`cspr comfy worker sync --runtime-dir <runtime-root>` on the managed ComfyUI host
 while its runtime is stopped. Worker synchronization pins its configured remote, requires
 its `HEAD` to match that pull's `FETCH_HEAD`, and always refreshes the locked
 environment before atomically replacing the node pack. Remote or user-owned

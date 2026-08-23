@@ -354,7 +354,7 @@ async function deleteRuntime(runtime: RuntimeView) {
 
       <div class="worker-command-card">
         <div><strong>{{ $t("worker.lifecycle") }}</strong><span>{{ $t("worker.lifecycleHelp") }}</span></div>
-        <code>cspr comfy worker sync --runtime-dir ../worker-runtime · cspr comfy worker start --runtime-dir ../worker-runtime · cspr comfy worker doctor --runtime-dir ../worker-runtime --json</code>
+        <code>cspr comfy worker sync --runtime-dir &lt;runtime-root&gt; · cspr comfy worker start --runtime-dir &lt;runtime-root&gt; · cspr comfy worker doctor --runtime-dir &lt;runtime-root&gt; --json</code>
       </div>
 
       <h3>{{ $t("settings.connectedRuntimes") }}</h3>

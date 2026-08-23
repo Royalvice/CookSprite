@@ -9,7 +9,7 @@ Product or source development clone
   CookSprite API · CLI · compiler · development checks
 
 Managed ComfyUI worker runtime
-  ../worker-runtime/.venv
+  ~/.cooksprite/runtime/.venv or <explicit-runtime-root>/.venv
   ComfyUI · PyTorch/accelerator · Custom Node dependencies
 ```
 
@@ -48,8 +48,8 @@ downloaded as a worker startup side effect.
 5. On the managed ComfyUI host, with no running managed listener, run:
 
    ```bash
-   cspr comfy worker sync --runtime-dir ../worker-runtime
-   cspr comfy worker doctor --runtime-dir ../worker-runtime --json
+   cspr comfy worker sync --runtime-dir <runtime-root>
+   cspr comfy worker doctor --runtime-dir <runtime-root> --json
    ```
 
 `comfy worker install` and `comfy worker sync` fast-forward the configured source branch,

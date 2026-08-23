@@ -6,10 +6,10 @@ It does not restrict what else that CookSprite clone can run.
 ## Layout
 
 ```text
-<worker-root>/
+<host>/
 ├── source/                 # ordinary CookSprite Git clone
 │   └── .git/
-├── worker-runtime/         # non-Git managed ComfyUI Runtime
+├── runtime/                # non-Git managed ComfyUI Runtime
 │   ├── worker.json
 │   ├── cooksprite-runtime.json
 │   ├── ComfyUI/
@@ -29,12 +29,12 @@ a source synchronization channel.
 Run from `source/`:
 
 ```bash
-cspr comfy worker init --runtime-dir ../worker-runtime --port 8288 --device auto
-cspr comfy worker install --runtime-dir ../worker-runtime
-cspr comfy worker sync --runtime-dir ../worker-runtime
-cspr comfy worker start --runtime-dir ../worker-runtime
-cspr comfy worker status --runtime-dir ../worker-runtime --json
-cspr comfy worker doctor --runtime-dir ../worker-runtime --json
+cspr comfy worker init --runtime-dir <runtime-root> --port 8288 --device auto
+cspr comfy worker install --runtime-dir <runtime-root>
+cspr comfy worker sync --runtime-dir <runtime-root>
+cspr comfy worker start --runtime-dir <runtime-root>
+cspr comfy worker status --runtime-dir <runtime-root> --json
+cspr comfy worker doctor --runtime-dir <runtime-root> --json
 ```
 
 `install` and `sync` perform
@@ -68,6 +68,7 @@ registered with an explicit API `/api/v1` callback URL reachable from ComfyUI.
 `CS_LoadArtifact` reads only signed Run inputs; `CS_StoreArtifact` returns only
 declared typed outputs to the API-owned Blob Store.
 
-`cspr comfy worker init` accepts only a new empty Runtime directory. It never adopts
-a legacy or user-owned ComfyUI directory. The default is `../worker-runtime`
-with listener `127.0.0.1:8288`.
+`cspr comfy worker init` accepts an empty Runtime root or an explicitly selected
+root containing a valid `ComfyUI/main.py`. Existing models, nodes and caches stay
+in place. The default is `~/.cooksprite/runtime` with listener
+`127.0.0.1:8288`.

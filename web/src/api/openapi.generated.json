@@ -327,7 +327,7 @@
         "title": "ActionRunCreate",
         "type": "object"
       },
-      "AnimationClip-Input": {
+      "AnimationClip": {
         "properties": {
           "action": {
             "enum": [
@@ -363,57 +363,7 @@
           },
           "views": {
             "items": {
-              "$ref": "#/components/schemas/ViewTrack-Input"
-            },
-            "title": "Views",
-            "type": "array"
-          }
-        },
-        "required": [
-          "id",
-          "name",
-          "action"
-        ],
-        "title": "AnimationClip",
-        "type": "object"
-      },
-      "AnimationClip-Output": {
-        "properties": {
-          "action": {
-            "enum": [
-              "idle",
-              "walk",
-              "run",
-              "attack",
-              "cast",
-              "hit",
-              "jump",
-              "death"
-            ],
-            "title": "Action",
-            "type": "string"
-          },
-          "id": {
-            "title": "Id",
-            "type": "string"
-          },
-          "loop": {
-            "default": "linear",
-            "enum": [
-              "none",
-              "linear",
-              "pingpong"
-            ],
-            "title": "Loop",
-            "type": "string"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "views": {
-            "items": {
-              "$ref": "#/components/schemas/ViewTrack-Output"
+              "$ref": "#/components/schemas/ViewTrack"
             },
             "title": "Views",
             "type": "array"
@@ -531,27 +481,11 @@
         "title": "ArtifactRef",
         "type": "object"
       },
-      "CharacterDocument-Input": {
+      "CharacterDocument": {
         "properties": {
           "clips": {
             "items": {
-              "$ref": "#/components/schemas/AnimationClip-Input"
-            },
-            "title": "Clips",
-            "type": "array"
-          },
-          "pivot": {
-            "$ref": "#/components/schemas/Pivot"
-          }
-        },
-        "title": "CharacterDocument",
-        "type": "object"
-      },
-      "CharacterDocument-Output": {
-        "properties": {
-          "clips": {
-            "items": {
-              "$ref": "#/components/schemas/AnimationClip-Output"
+              "$ref": "#/components/schemas/AnimationClip"
             },
             "title": "Clips",
             "type": "array"
@@ -609,7 +543,7 @@
       "DocumentView": {
         "properties": {
           "document": {
-            "$ref": "#/components/schemas/SpriteDocument-Output"
+            "$ref": "#/components/schemas/SpriteDocument"
           },
           "etag": {
             "title": "Etag",
@@ -1596,7 +1530,7 @@
         "title": "RuntimeNodeView",
         "type": "object"
       },
-      "SpriteDocument-Input": {
+      "SpriteDocument": {
         "properties": {
           "canvas": {
             "additionalProperties": {
@@ -1608,68 +1542,7 @@
           "character": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/CharacterDocument-Input"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "schema": {
-            "const": "cooksprite.sprite-document/v1",
-            "default": "cooksprite.sprite-document/v1",
-            "title": "Schema",
-            "type": "string"
-          },
-          "static": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/StaticDocument"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "tileset": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/TileSetDocument"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "type": {
-            "enum": [
-              "static",
-              "character",
-              "tileset"
-            ],
-            "title": "Type",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type"
-        ],
-        "title": "SpriteDocument",
-        "type": "object"
-      },
-      "SpriteDocument-Output": {
-        "properties": {
-          "canvas": {
-            "additionalProperties": {
-              "type": "integer"
-            },
-            "title": "Canvas",
-            "type": "object"
-          },
-          "character": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/CharacterDocument-Output"
+                "$ref": "#/components/schemas/CharacterDocument"
               },
               {
                 "type": "null"
@@ -1894,36 +1767,7 @@
         "title": "ValidationError",
         "type": "object"
       },
-      "ViewTrack-Input": {
-        "properties": {
-          "enabled": {
-            "default": true,
-            "title": "Enabled",
-            "type": "boolean"
-          },
-          "id": {
-            "enum": [
-              "level",
-              "top45"
-            ],
-            "title": "Id",
-            "type": "string"
-          },
-          "tracks": {
-            "items": {
-              "$ref": "#/components/schemas/DirectionTrack"
-            },
-            "title": "Tracks",
-            "type": "array"
-          }
-        },
-        "required": [
-          "id"
-        ],
-        "title": "ViewTrack",
-        "type": "object"
-      },
-      "ViewTrack-Output": {
+      "ViewTrack": {
         "properties": {
           "enabled": {
             "default": true,
@@ -3044,7 +2888,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SpriteDocument-Input"
+                "$ref": "#/components/schemas/SpriteDocument"
               }
             }
           },

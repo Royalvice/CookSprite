@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["build>=1.2", "pytest>=8.0", "ruff>=0.3", "Pillow>=10.0", "playwright>=1.55"]
+dev = ["build>=1.2", "pytest>=8.0", "ruff>=0.3", "Pillow>=10.0", "numpy>=1.26,<3", "playwright>=1.55"]
 
 [project.scripts]
 cspr = "cli.__main__:main"

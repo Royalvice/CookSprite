@@ -759,7 +759,7 @@ export interface components {
             };
         };
         /** AnimationClip */
-        "AnimationClip-Input": {
+        AnimationClip: {
             /**
              * Action
              * @enum {string}
@@ -776,27 +776,7 @@ export interface components {
             /** Name */
             name: string;
             /** Views */
-            views?: components["schemas"]["ViewTrack-Input"][];
-        };
-        /** AnimationClip */
-        "AnimationClip-Output": {
-            /**
-             * Action
-             * @enum {string}
-             */
-            action: "idle" | "walk" | "run" | "attack" | "cast" | "hit" | "jump" | "death";
-            /** Id */
-            id: string;
-            /**
-             * Loop
-             * @default linear
-             * @enum {string}
-             */
-            loop: "none" | "linear" | "pingpong";
-            /** Name */
-            name: string;
-            /** Views */
-            views?: components["schemas"]["ViewTrack-Output"][];
+            views?: components["schemas"]["ViewTrack"][];
         };
         /** ArtifactPatch */
         ArtifactPatch: {
@@ -857,15 +837,9 @@ export interface components {
             url: string;
         };
         /** CharacterDocument */
-        "CharacterDocument-Input": {
+        CharacterDocument: {
             /** Clips */
-            clips?: components["schemas"]["AnimationClip-Input"][];
-            pivot?: components["schemas"]["Pivot"];
-        };
-        /** CharacterDocument */
-        "CharacterDocument-Output": {
-            /** Clips */
-            clips?: components["schemas"]["AnimationClip-Output"][];
+            clips?: components["schemas"]["AnimationClip"][];
             pivot?: components["schemas"]["Pivot"];
         };
         /** ComfyProbeCreate */
@@ -885,7 +859,7 @@ export interface components {
         };
         /** DocumentView */
         DocumentView: {
-            document: components["schemas"]["SpriteDocument-Output"];
+            document: components["schemas"]["SpriteDocument"];
             /** Etag */
             etag: string;
             /** Revision */
@@ -1292,33 +1266,12 @@ export interface components {
             total?: number | null;
         };
         /** SpriteDocument */
-        "SpriteDocument-Input": {
+        SpriteDocument: {
             /** Canvas */
             canvas?: {
                 [key: string]: number;
             };
-            character?: components["schemas"]["CharacterDocument-Input"] | null;
-            /**
-             * Schema
-             * @default cooksprite.sprite-document/v1
-             * @constant
-             */
-            schema: "cooksprite.sprite-document/v1";
-            static?: components["schemas"]["StaticDocument"] | null;
-            tileset?: components["schemas"]["TileSetDocument"] | null;
-            /**
-             * Type
-             * @enum {string}
-             */
-            type: "static" | "character" | "tileset";
-        };
-        /** SpriteDocument */
-        "SpriteDocument-Output": {
-            /** Canvas */
-            canvas?: {
-                [key: string]: number;
-            };
-            character?: components["schemas"]["CharacterDocument-Output"] | null;
+            character?: components["schemas"]["CharacterDocument"] | null;
             /**
              * Schema
              * @default cooksprite.sprite-document/v1
@@ -1408,22 +1361,7 @@ export interface components {
             type: string;
         };
         /** ViewTrack */
-        "ViewTrack-Input": {
-            /**
-             * Enabled
-             * @default true
-             */
-            enabled: boolean;
-            /**
-             * Id
-             * @enum {string}
-             */
-            id: "level" | "top45";
-            /** Tracks */
-            tracks?: components["schemas"]["DirectionTrack"][];
-        };
-        /** ViewTrack */
-        "ViewTrack-Output": {
+        ViewTrack: {
             /**
              * Enabled
              * @default true
@@ -2159,7 +2097,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SpriteDocument-Input"];
+                "application/json": components["schemas"]["SpriteDocument"];
             };
         };
         responses: {

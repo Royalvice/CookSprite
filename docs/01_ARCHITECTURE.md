@@ -101,8 +101,8 @@ bounded chunks into a staged ZIP before atomically promoting that package.
 ## Managed Runtime lifecycle
 
 `cspr comfy worker init/install/sync/start/stop/restart/status/doctor` is the managed
-ComfyUI lifecycle contract. A worker owns one non-Git Runtime sibling of its
-source clone. It only stops PIDs recorded by that Runtime and only when the
+ComfyUI lifecycle contract. A worker owns one non-Git Runtime root on its host,
+independent of the source clone location. It only stops PIDs recorded by that Runtime and only when the
 command line proves ownership. `install` and `sync` reject dirty source, a
 changed pinned origin, local-only `HEAD`, a running listener, and
 non-fast-forward Git state; they synchronize the locked environment and
