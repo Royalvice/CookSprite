@@ -38,5 +38,5 @@ pydantic~=2.0
 pydantic-settings~=2.0
 
 # Tool package requirements are the only additional dependencies allowed in
-# the managed ComfyUI environment. Keep this include after `cspr dev sync`.
+# the managed ComfyUI environment. Keep this include after `cspr dev package sync`.
 -r ../nodes/requirements.txt

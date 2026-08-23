@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from .bridge import ArtifactBridge
-from .catalog import builtin_tools
 from .domain import PersistableType, TaskRevision, ToolDescriptor, ValueRef, WorkflowRevision
 from .execution import ExecutionPlan, PlanBuilder
 from .tool_packages import tool_packages
@@ -283,7 +282,3 @@ class Compiler(PlanBuilder):
                 )
             except ValueError as exc:
                 raise CompileError(str(exc)) from exc
-
-
-def all_tools(dynamic: list[ToolDescriptor] | None = None) -> list[ToolDescriptor]:
-    return builtin_tools() + list(dynamic or [])

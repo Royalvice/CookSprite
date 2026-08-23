@@ -1,4 +1,22 @@
 schema: cooksprite.actions/v1
+control_sets:
+  animation_target:
+    - {id: action, type: select, default: walk, i18n: {zh-CN: {name: 目标动作}, en: {name: Target action}}, options: [{id: idle, example_key: motion.idle, i18n: {zh-CN: {name: 待机}, en: {name: Idle}}}, {id: walk, example_key: motion.walk, i18n: {zh-CN: {name: 行走}, en: {name: Walk}}}, {id: run, example_key: motion.run, i18n: {zh-CN: {name: 奔跑}, en: {name: Run}}}, {id: attack, example_key: motion.attack, i18n: {zh-CN: {name: 攻击}, en: {name: Attack}}}, {id: cast, example_key: motion.cast, i18n: {zh-CN: {name: 施法}, en: {name: Cast}}}, {id: hit, example_key: motion.hit, i18n: {zh-CN: {name: 受击}, en: {name: Hit}}}, {id: jump, example_key: motion.jump, i18n: {zh-CN: {name: 跳跃}, en: {name: Jump}}}, {id: death, example_key: motion.death, i18n: {zh-CN: {name: 倒下}, en: {name: Death}}}]}
+    - {id: view, type: select, default: level, i18n: {zh-CN: {name: 目标视角}, en: {name: Target view}}, options: [{id: level, i18n: {zh-CN: {name: 平视正交}, en: {name: Level orthographic}}}, {id: top45, i18n: {zh-CN: {name: 45° 俯视}, en: {name: Top-45 orthographic}}}]}
+    - {id: direction, type: select, default: s, i18n: {zh-CN: {name: 目标方向}, en: {name: Target direction}}, options: [{id: n, i18n: {zh-CN: {name: 北}, en: {name: North}}}, {id: ne, i18n: {zh-CN: {name: 东北}, en: {name: North-east}}}, {id: e, i18n: {zh-CN: {name: 东}, en: {name: East}}}, {id: se, i18n: {zh-CN: {name: 东南}, en: {name: South-east}}}, {id: s, i18n: {zh-CN: {name: 南}, en: {name: South}}}, {id: sw, i18n: {zh-CN: {name: 西南}, en: {name: South-west}}}, {id: w, i18n: {zh-CN: {name: 西}, en: {name: West}}}, {id: nw, i18n: {zh-CN: {name: 西北}, en: {name: North-west}}}]}
+  palette_budget:
+    - id: palette_budget
+      type: select
+      default: "32"
+      i18n:
+        zh-CN: {name: 调色板, description: Oklab 调色板颜色数量}
+        en: {name: Palette, description: Number of colors in the Oklab palette}
+      options:
+        - {id: "8", i18n: {zh-CN: {name: 8 色}, en: {name: 8 colors}}}
+        - {id: "16", i18n: {zh-CN: {name: 16 色}, en: {name: 16 colors}}}
+        - {id: "32", i18n: {zh-CN: {name: 32 色}, en: {name: 32 colors}}}
+        - {id: "64", i18n: {zh-CN: {name: 64 色}, en: {name: 64 colors}}}
+        - {id: "128", i18n: {zh-CN: {name: 128 色}, en: {name: 128 colors}}}
 actions:
   - id: image.generate
     i18n:
@@ -7,6 +25,38 @@ actions:
     accepts:
       reference: {type: Image, required: false, max: 4}
     produces: [Image]
+    presentation: image-create
+    execution:
+      capability: image
+      project_type: static
+      pixel_enabled: false
+      artifact_binding:
+        expand_slot: reference
+        input_prefix: reference
+        index_start: 1
+      project_type_rules:
+        - {when: {category: terrain}, type: tileset}
+      modes:
+        - {when_input: reference, mode: i2i}
+        - {mode: t2i}
+      prompt:
+        template: "{caption}. {style}. High-quality, high-fidelity game-ready asset with clean, readable details. {contract}, on a simple solid background."
+        edit_template: |-
+          Use the reference image as the exact identity and appearance source.
+          Edit only this requested detail: {caption}.
+          Keep all other details unchanged, including identity, pose, proportions, colors, materials and silhouette.
+        contracts:
+          character: "Show one complete full-body character in a neutral standing pose, facing directly forward in a straight-on eye-level orthographic view, centered and fully visible"
+          weapon: "Show the complete weapon horizontally, centered and fully visible"
+          prop: "Show one complete standalone object, centered and fully visible"
+          terrain: "Show a seamless square top-down tile with matching opposite edges"
+          vfx: "Show one complete isolated effect at its clearest peak moment, centered and fully visible"
+        style_aliases:
+          character: {pixel: pixel_art, smooth: 2d_action_game}
+          weapon: {pixel: weapon_pixel_art, smooth: weapon_realistic_tactical, 2d_action_game: weapon_realistic_tactical}
+          prop: {pixel: prop_pixel_art, smooth: prop_realistic_game_ready, 2d_action_game: prop_realistic_game_ready}
+          terrain: {pixel: terrain_pixel_art, smooth: terrain_realistic_pbr, 2d_action_game: terrain_realistic_pbr}
+          vfx: {pixel: vfx_pixel_art, smooth: vfx_stylized_action, 2d_action_game: vfx_stylized_action}
     controls:
       - id: category
         type: select
@@ -113,6 +163,20 @@ actions:
     accepts:
       character: {type: Image, required: false, max: 1}
     produces: [FrameSeq]
+    presentation: animation-create
+    execution:
+      capability: video
+      project_type: character
+      postprocess: pixelize
+      artifact_aliases: {character: source}
+      finalizer: frame_sequence
+      allow_duplicate_outputs: true
+      modes:
+        - {when_input: character, mode: i2v}
+        - {mode: t2v}
+      prompt:
+        template: "{caption}. Create one consistent {action} animation in place, viewed from {view} toward {direction}. Locked orthographic camera, fixed distance, full-body framing, stable background and shared foot pivot."
+    control_sets: [animation_target]
     controls:
       - id: prompt
         type: text
@@ -126,45 +190,6 @@ actions:
         i18n:
           zh-CN: {name: 提示词模板, description: 开启后使用 CookSprite 提示词模板；关闭后原文直传}
           en: {name: Prompt Template, description: Use the CookSprite prompt template; off sends your exact text unchanged}
-      - id: action
-        type: select
-        default: walk
-        i18n:
-          zh-CN: {name: 动作, description: 选择要创作的动作}
-          en: {name: Action, description: Choose a motion}
-        options:
-          - {id: idle, example_key: motion.idle, i18n: {zh-CN: {name: 待机}, en: {name: Idle}}}
-          - {id: walk, example_key: motion.walk, i18n: {zh-CN: {name: 行走}, en: {name: Walk}}}
-          - {id: run, example_key: motion.run, i18n: {zh-CN: {name: 奔跑}, en: {name: Run}}}
-          - {id: attack, example_key: motion.attack, i18n: {zh-CN: {name: 攻击}, en: {name: Attack}}}
-          - {id: cast, example_key: motion.cast, i18n: {zh-CN: {name: 施法}, en: {name: Cast}}}
-          - {id: hit, example_key: motion.hit, i18n: {zh-CN: {name: 受击}, en: {name: Hit}}}
-          - {id: jump, example_key: motion.jump, i18n: {zh-CN: {name: 跳跃}, en: {name: Jump}}}
-          - {id: death, example_key: motion.death, i18n: {zh-CN: {name: 倒下}, en: {name: Death}}}
-      - id: view
-        type: select
-        default: level
-        i18n:
-          zh-CN: {name: 视角, description: 本次动画只对应一个视角}
-          en: {name: View, description: This sequence targets one view}
-        options:
-          - {id: level, i18n: {zh-CN: {name: 平视正交}, en: {name: Level orthographic}}}
-          - {id: top45, i18n: {zh-CN: {name: 45° 俯视}, en: {name: Top-45 orthographic}}}
-      - id: direction
-        type: select
-        default: s
-        i18n:
-          zh-CN: {name: 方向, description: 本次动画只对应一个真实方向}
-          en: {name: Direction, description: This sequence targets one real direction}
-        options:
-          - {id: n, i18n: {zh-CN: {name: 北}, en: {name: North}}}
-          - {id: ne, i18n: {zh-CN: {name: 东北}, en: {name: North-east}}}
-          - {id: e, i18n: {zh-CN: {name: 东}, en: {name: East}}}
-          - {id: se, i18n: {zh-CN: {name: 东南}, en: {name: South-east}}}
-          - {id: s, i18n: {zh-CN: {name: 南}, en: {name: South}}}
-          - {id: sw, i18n: {zh-CN: {name: 西南}, en: {name: South-west}}}
-          - {id: w, i18n: {zh-CN: {name: 西}, en: {name: West}}}
-          - {id: nw, i18n: {zh-CN: {name: 西北}, en: {name: North-west}}}
       - id: count
         type: number
         default: 8
@@ -188,6 +213,18 @@ actions:
     accepts:
       frame: {type: Image, required: true, max: 1}
     produces: [ImageBatch]
+    presentation: frame-redraw
+    execution:
+      capability: image
+      project_type: character
+      postprocess: pixelize
+      artifact_aliases: {frame: source}
+      modes: [{mode: i2i}]
+      prompt:
+        edit_template: |-
+          Use the reference image as the exact identity and appearance source.
+          Edit only this requested detail: {caption}.
+          Keep all other details unchanged, including identity, pose, proportions, colors, materials and silhouette.
     controls:
       - id: prompt
         type: text
@@ -215,10 +252,12 @@ actions:
     accepts:
       sheet: {type: SpriteSheet, required: true, max: 1}
     produces: [FrameSeq]
+    execution:
+      finalizer: frame_sequence
+      allow_duplicate_outputs: true
+      modes: [{mode: sheet-to-frames}]
+    control_sets: [animation_target]
     controls:
-      - {id: action, type: select, default: walk, i18n: {zh-CN: {name: 目标动作}, en: {name: Target action}}, options: [{id: idle, i18n: {zh-CN: {name: 待机}, en: {name: Idle}}}, {id: walk, i18n: {zh-CN: {name: 行走}, en: {name: Walk}}}, {id: run, i18n: {zh-CN: {name: 奔跑}, en: {name: Run}}}, {id: attack, i18n: {zh-CN: {name: 攻击}, en: {name: Attack}}}, {id: cast, i18n: {zh-CN: {name: 施法}, en: {name: Cast}}}, {id: hit, i18n: {zh-CN: {name: 受击}, en: {name: Hit}}}, {id: jump, i18n: {zh-CN: {name: 跳跃}, en: {name: Jump}}}, {id: death, i18n: {zh-CN: {name: 倒下}, en: {name: Death}}}]}
-      - {id: view, type: select, default: level, i18n: {zh-CN: {name: 目标视角}, en: {name: Target view}}, options: [{id: level, i18n: {zh-CN: {name: 平视正交}, en: {name: Level orthographic}}}, {id: top45, i18n: {zh-CN: {name: 45° 俯视}, en: {name: Top-45 orthographic}}}]}
-      - {id: direction, type: select, default: s, i18n: {zh-CN: {name: 目标方向}, en: {name: Target direction}}, options: [{id: n, i18n: {zh-CN: {name: 北}, en: {name: North}}}, {id: ne, i18n: {zh-CN: {name: 东北}, en: {name: North-east}}}, {id: e, i18n: {zh-CN: {name: 东}, en: {name: East}}}, {id: se, i18n: {zh-CN: {name: 东南}, en: {name: South-east}}}, {id: s, i18n: {zh-CN: {name: 南}, en: {name: South}}}, {id: sw, i18n: {zh-CN: {name: 西南}, en: {name: South-west}}}, {id: w, i18n: {zh-CN: {name: 西}, en: {name: West}}}, {id: nw, i18n: {zh-CN: {name: 西北}, en: {name: North-west}}}]}
       - {id: columns, type: number, default: 0, min: 0, max: 256, step: 1, i18n: {zh-CN: {name: 列数（0 自动）}, en: {name: Columns (0 auto)}}}
       - {id: rows, type: number, default: 0, min: 0, max: 256, step: 1, i18n: {zh-CN: {name: 行数（0 自动）}, en: {name: Rows (0 auto)}}}
       - {id: frame_width, type: number, default: 64, min: 1, max: 4096, step: 1, i18n: {zh-CN: {name: 帧宽}, en: {name: Frame width}}}
@@ -234,10 +273,14 @@ actions:
     accepts:
       video: {type: Video, required: true, max: 1}
     produces: [FrameSeq]
+    execution:
+      capability: video
+      finalizer: frame_sequence
+      allow_duplicate_outputs: true
+      temporal_source: sampled_video
+      modes: [{mode: video-to-frames}]
+    control_sets: [animation_target]
     controls:
-      - {id: action, type: select, default: walk, i18n: {zh-CN: {name: 目标动作}, en: {name: Target action}}, options: [{id: idle, i18n: {zh-CN: {name: 待机}, en: {name: Idle}}}, {id: walk, i18n: {zh-CN: {name: 行走}, en: {name: Walk}}}, {id: run, i18n: {zh-CN: {name: 奔跑}, en: {name: Run}}}, {id: attack, i18n: {zh-CN: {name: 攻击}, en: {name: Attack}}}, {id: cast, i18n: {zh-CN: {name: 施法}, en: {name: Cast}}}, {id: hit, i18n: {zh-CN: {name: 受击}, en: {name: Hit}}}, {id: jump, i18n: {zh-CN: {name: 跳跃}, en: {name: Jump}}}, {id: death, i18n: {zh-CN: {name: 倒下}, en: {name: Death}}}]}
-      - {id: view, type: select, default: level, i18n: {zh-CN: {name: 目标视角}, en: {name: Target view}}, options: [{id: level, i18n: {zh-CN: {name: 平视正交}, en: {name: Level orthographic}}}, {id: top45, i18n: {zh-CN: {name: 45° 俯视}, en: {name: Top-45 orthographic}}}]}
-      - {id: direction, type: select, default: s, i18n: {zh-CN: {name: 目标方向}, en: {name: Target direction}}, options: [{id: n, i18n: {zh-CN: {name: 北}, en: {name: North}}}, {id: ne, i18n: {zh-CN: {name: 东北}, en: {name: North-east}}}, {id: e, i18n: {zh-CN: {name: 东}, en: {name: East}}}, {id: se, i18n: {zh-CN: {name: 东南}, en: {name: South-east}}}, {id: s, i18n: {zh-CN: {name: 南}, en: {name: South}}}, {id: sw, i18n: {zh-CN: {name: 西南}, en: {name: South-west}}}, {id: w, i18n: {zh-CN: {name: 西}, en: {name: West}}}, {id: nw, i18n: {zh-CN: {name: 西北}, en: {name: North-west}}}]}
       - {id: sample_fps, type: range, default: 12, min: 1, max: 60, step: 1, i18n: {zh-CN: {name: 采样帧率}, en: {name: Sample FPS}}}
       - {id: max_frames, type: number, default: 48, min: 1, max: 240, step: 1, advanced: true, i18n: {zh-CN: {name: 最大帧数}, en: {name: Maximum frames}}}
 
@@ -249,6 +292,24 @@ actions:
       source: {type: [Image, FrameSeq, SpriteSheet], required: true, max: 1}
       pixel_plan: {type: PixelGeometryPlan, required: false, max: 1}
     produces: [NormalMap]
+    presentation: normal
+    execution:
+      finalizer: normal
+      sequence_limit: 240
+      sequence_error: sequence_too_large
+      expand_source_frames: true
+      pixel_plan: true
+      legacy_mode_aliases: {single: image-to-normal, temporal: frames-to-normal}
+      artifact_binding:
+        expand_slot: source
+        workflow_slot: source
+        input_prefix: source
+        index_start: 0
+        static_slots: [pixel_plan]
+      modes:
+        - {when_input: pixel_plan, mode: image-to-pixel-normal}
+        - {when_source_kind: FrameSeq, mode: frames-to-normal}
+        - {mode: image-to-normal}
     controls:
       - {id: strength, type: range, default: 1, min: 0, max: 2, step: 0.05, i18n: {zh-CN: {name: 法线强度}, en: {name: Normal strength}}}
       - {id: flip_y, type: toggle, default: false, i18n: {zh-CN: {name: 翻转 Y}, en: {name: Flip Y}}}
@@ -261,6 +322,17 @@ actions:
     accepts:
       source: {type: [Image, FrameSeq, SpriteSheet], required: true, max: 1}
     produces: [Image, FrameSeq, NormalMap]
+    presentation: pixel-normal
+    execution:
+      finalizer: sprite_pair
+      allow_duplicate_outputs: true
+      sequence_limit: 32
+      sequence_error: sprite_chunk_too_large
+      expand_source_frames: true
+      modes:
+        - {when_source_kind: FrameSeq, mode: frames-to-sprite-pair}
+        - {mode: image-to-sprite-pair}
+    control_sets: [palette_budget]
     controls:
       - {id: strength, type: range, default: 1, min: 0, max: 2, step: 0.05, i18n: {zh-CN: {name: 法线强度}, en: {name: Normal strength}}}
       - {id: flip_y, type: toggle, default: false, i18n: {zh-CN: {name: 翻转 Y}, en: {name: Flip Y}}}
@@ -271,18 +343,6 @@ actions:
         i18n:
           zh-CN: {name: 像素尺寸, description: 输出最长边，自动保持原图长宽比}
           en: {name: Pixel size, description: Output longest edge while preserving aspect ratio}
-      - id: palette_budget
-        type: select
-        default: "32"
-        i18n:
-          zh-CN: {name: 调色板, description: Oklab 调色板颜色数量}
-          en: {name: Palette, description: Number of colors in the Oklab palette}
-        options:
-          - {id: "8", i18n: {zh-CN: {name: 8 色}, en: {name: 8 colors}}}
-          - {id: "16", i18n: {zh-CN: {name: 16 色}, en: {name: 16 colors}}}
-          - {id: "32", i18n: {zh-CN: {name: 32 色}, en: {name: 32 colors}}}
-          - {id: "64", i18n: {zh-CN: {name: 64 色}, en: {name: 64 colors}}}
-          - {id: "128", i18n: {zh-CN: {name: 128 色}, en: {name: 128 colors}}}
       - id: outline
         type: toggle
         default: false
@@ -303,6 +363,10 @@ actions:
     accepts:
       source: {type: Image, required: true, max: 1}
     produces: [ImageBatch]
+    presentation: image-views
+    execution:
+      capability: image
+      modes: [{mode: i2i-sequence}]
     controls: []
 
   - id: image.pixelize
@@ -312,6 +376,18 @@ actions:
     accepts:
       source: {type: [Image, FrameSeq], required: true, max: 1}
     produces: [Image, FrameSeq]
+    presentation: pixelize
+    execution:
+      finalizer: pixelize_sequence
+      allow_duplicate_outputs: true
+      sequence_limit: 240
+      sequence_error: sequence_too_large
+      sequence_mode_min_frames: 1
+      continuous_flow_control: temporal_mode
+      modes:
+        - {when_source_kind: FrameSeq, mode: frames-to-frames}
+        - {mode: image-to-image}
+    control_sets: [palette_budget]
     controls:
       - id: target_size
         type: select
@@ -320,18 +396,6 @@ actions:
         i18n:
           zh-CN: {name: 像素尺寸, description: 输出最长边，自动保持原图长宽比}
           en: {name: Pixel size, description: Output longest edge while preserving aspect ratio}
-      - id: palette_budget
-        type: select
-        default: "32"
-        i18n:
-          zh-CN: {name: 调色板, description: Oklab 调色板颜色数量}
-          en: {name: Palette, description: Number of colors in the Oklab palette}
-        options:
-          - {id: "8", i18n: {zh-CN: {name: 8 色}, en: {name: 8 colors}}}
-          - {id: "16", i18n: {zh-CN: {name: 16 色}, en: {name: 16 colors}}}
-          - {id: "32", i18n: {zh-CN: {name: 32 色}, en: {name: 32 colors}}}
-          - {id: "64", i18n: {zh-CN: {name: 64 色}, en: {name: 64 colors}}}
-          - {id: "128", i18n: {zh-CN: {name: 128 色}, en: {name: 128 colors}}}
       - id: outline
         type: toggle
         default: false
@@ -363,4 +427,6 @@ actions:
     accepts:
       source: {type: Image, required: true, max: 1}
     produces: [Image]
+    execution:
+      modes: [{mode: image-to-image}]
     controls: []

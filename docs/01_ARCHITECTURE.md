@@ -1,100 +1,123 @@
 # 01 · Architecture
 
-## Boundary
+## Deployment boundary
+
+CookSprite assigns responsibility to processes, never host identity. Every
+clone has the same code and capabilities.
 
 ```text
-Human              Automation                Contributor
-Vue UI              cspr / Skill              graph APIs
-   └──────────────────────┬────────────────────────┘
-                          ▼
-                 CookSprite /api/v1
-       Action registry · validation · compiler · runs
-       projects · SpriteDocument · artifact metadata
-                          │ private prompt
-                          ▼
-                       ComfyUI
-              inference and all media operations
-                          │ CS_StoreArtifact
-                          ▼
-        SQLite metadata + data/artifacts/<sha256>
+Web / CLI / agent
+          │ stable Action / Project / Artifact API
+          ▼
+CookSprite API
+  Web · SQLite · Project documents · Artifact Blob Store · exports
+          │ private Action → Task → Workflow → Tool lowering
+          │ signed CS_LoadArtifact / CS_StoreArtifact URLs
+          ▼
+selected ComfyUI Runtime
+  Custom Nodes · models · accelerator
 ```
 
-CookSprite is a control plane, not an inference server. The API may validate,
-version, compile, schedule, package existing bytes, and track provenance. It
-must not run a model or perform an image/video operation. ComfyUI is the only
-execution runtime. `CS_LoadArtifact` and `CS_StoreArtifact` are the sole bridge;
-Comfy upload/view folders are not public storage.
+The API/data-directory location determines Project and Artifact ownership. The
+selected ComfyUI Runtime determines inference location. Both may run on one
+host or separate hosts without changing product contracts.
 
-## Product layer
+ComfyUI `output/`, `temp/`, model cache, and execution cache are local
+implementation data, not product storage. Source synchronization is also a
+separate concern: ordinary clones use only the shared Git remote with
+`git push` and `git pull --ff-only`. Model weights and generated media are data,
+not Git contents.
 
-Most clients use stable Actions. One YAML registry is compiled into:
+## Product API boundary
 
-- API discovery and validation;
-- Vue controls, typed option examples, input slots, availability, and model choices;
-- `cspr action describe/run`;
-- the CookSprite agent Skill.
+The public `/api/v1` surface is intentionally small:
 
-Option examples are normal `ArtifactRef` values, not media URLs or hidden prompt
-packs. Every business image is rendered from an Artifact and uses the same
-`{artifact_id, kind}` drag payload. The browser sends Action IDs, artifact IDs,
-and user-visible values; it cannot author or submit a Comfy graph.
+- stable Action discovery and Action Runs;
+- Projects, SpriteDocuments, Artifacts, exports, gallery, Runs, and queue;
+- explicit Runtime probe/import/doctor/select/defaults/capabilities;
+- controlled Recipe registration for an already doctored Runtime;
+- the scoped Artifact Bridge used only by custom nodes.
 
-## Contributor layer
+The API validates typed requests, assembles private graphs, schedules Runs,
+tracks normalized progress/provenance, and persists declared Artifacts. It does
+not run media computation, manage a connected Runtime host process, install a
+node pack, download a model, inspect a remote filesystem, or infer a remote
+callback URL.
 
-Advanced integrations can register runtimes, inspect Tools, and author typed
-Workflow/Task definitions. A Workflow is a flat Tool DAG. A Task is a Workflow
-DAG with explicit candidates. Every revision is immutable and bound to one
-doctor snapshot. A runtime change requires a newly validated revision; there is
-no hidden fallback.
+Public clients cannot create Tools, Workflows, Tasks, or generic Runs. Those
+are private compilation structures:
 
-The canonical lowering chain is `Action → Task revision → Workflow revision →
-Tool → ComfyUI node`. These are authoring layers, not separate executors. Each
-ends in the same private `ExecutionPlan` (`graph` plus declared artifact sinks),
-then uses one submit/wait/cancel/error path. Tool output ports determine
-artifact kinds; names such as `normal` are never used to guess a type. A Tool is
-not directly runnable because a versioned Workflow must declare which typed
-outputs may leave ComfyUI.
+```text
+Action → Task revision → Workflow revision → Tool → ComfyUI node/subgraph
+```
 
-Related built-in Tools live in static, versioned Tool packages. One aggregate
-registry owns the Action list, package manifests, node lowerings, dependency
-checks, CLI/Web constants, and generated Agent reference. There is no dynamic
-plugin marketplace or API-side media fallback.
+Their revisions remain in SQLite only as needed to lower an Action and record
+Run provenance. A client selects stable user intent, typed input Artifacts, and
+declared values; it never receives a raw graph, Comfy path, prompt ID, or
+temporary file URL.
 
 ## Runtime adaptation
 
-An online ComfyUI and a compatible Action are separate facts. Doctor snapshots
-node schemas and model folders; a compact `Recipe` binds an Action to one
-checkpoint or imported API-format workflow and declares only:
+A reachable ComfyUI and an Action-capable Runtime are separate facts. Doctor
+reads its live node schema, system information, and model inventory. A Recipe
+then binds stable Actions to a compatible model/workflow and one immutable
+Runtime snapshot. A new runtime snapshot requires new internal definitions;
+there is no hidden fallback to a different model or graph.
 
-- supported Action IDs;
-- accepted modes such as `t2i`, `i2i`, `i2i-sequence`, or `video-to-frames`;
-- checkpoint identity or workflow graph;
-- semantic input slots and one typed output.
+For any worker-managed Runtime, doctor additionally requires
+`GET /cooksprite/runtime-info`. The identity contains only the source branch,
+source revision, node-pack version, dependency-lock SHA-256, and Comfy URL. The
+active API records the first observed identity. If any later doctor observes a
+change, it returns `worker_runtime_incompatible` until that API explicitly
+re-registers the Runtime after an approved Git/worker synchronization.
 
-This keeps arbitrary user ComfyUI installations useful without guessing what a
-node/model combination means. Runtime liveness plus at least one verified Recipe
-is required before the product says “ready.” Imported recipes are tied to the
-doctor snapshot and cannot silently survive incompatible node changes.
+Every remote Runtime registration must include an explicit API `callback_url`
+reachable from that ComfyUI. Loopback/default callback inheritance is forbidden
+for remote compute. A worker-managed Runtime may be local or remote.
 
-The same topology works locally or remotely. For remote compute, CookSprite API
-is deployed beside ComfyUI, and signed artifact bridge traffic stays between
-those services. Web, CLI, and agents see the same Actions and never receive
-Comfy URLs, filesystem paths, workflow JSON, or prompt IDs.
+## State and durability
 
-## State
+```text
+<API data directory>/
+├── cooksprite.sqlite3              metadata and current Project/Run state
+└── artifacts/<sha256>              canonical immutable media bytes
+```
 
-- `Project`: name, static/character/tileset type, publication state.
-- `SpriteDocument`: semantic editable state with ETag concurrency: pivot,
-  canvas, clips, views, direction tracks, frame order, timing, offsets, normals.
-- `Artifact`: immutable SHA-256 blob plus kind, media type, lineage, favorites,
-  trash state, and project links.
-- `Run`: Action/graph request, public status, normalized error, artifact outputs,
-  immutable definition/package/runtime provenance, and private runtime identifiers.
+- `Project`: name, type, publication state, and document reference.
+- `SpriteDocument`: mutable semantic state with ETag concurrency.
+- `Artifact`: immutable content-addressed blob plus kind, media type, lineage,
+  favorites/trash state, and project references.
+- `Run`: one Action request, normalized state/error, declared output
+  references, and immutable runtime/package/definition provenance.
 
-A `RunSupervisor` owns worker lifetime. It maps ComfyUI WebSocket sampler steps
-to public Run progress, falls back to history polling through incompatible
-proxies, resumes already-submitted prompts after restart, and gives an explicit
-retryable failure to work interrupted before submission.
+Project directories are not mirrors of blobs. An explicit export creates the
+canonical `.cooksprite` package; it does not make a second user-visible media
+store. Artifact uploads stream into an API-owned same-filesystem staging file,
+compute SHA-256 incrementally, fsync, and atomically promote to
+`artifacts/<sha256>`. Downloads use file streaming rather than reading the
+whole Artifact into API memory. Export packaging likewise streams blobs in
+bounded chunks into a staged ZIP before atomically promoting that package.
 
-The local Gallery is deliberately manual: only explicitly published projects
-appear. v0.1 assumes trusted localhost/private networking and has no users.
+## Managed Runtime lifecycle
+
+`cspr comfy worker init/install/sync/start/stop/restart/status/doctor` is the managed
+ComfyUI lifecycle contract. A worker owns one non-Git Runtime sibling of its
+source clone. It only stops PIDs recorded by that Runtime and only when the
+command line proves ownership. `install` and `sync` reject dirty source, a
+changed pinned origin, local-only `HEAD`, a running listener, and
+non-fast-forward Git state; they synchronize the locked environment and
+atomically swap the node pack while stopped. Device selection is backend-neutral
+and shared by default. Optional exclusivity is implemented by registered
+resource inspectors; the current CUDA inspector uses process ownership rather
+than utilization as its signal.
+
+The same acceptance path applies to local and remote Runtimes:
+
+```text
+API stores input Artifact
+→ API creates Action Run and signed bridge URLs
+→ selected ComfyUI loads declared bytes
+→ ComfyUI graph executes
+→ ComfyUI stores declared output
+→ API Blob Store persists it and marks the Run succeeded
+```

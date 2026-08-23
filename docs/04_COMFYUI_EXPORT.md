@@ -1,62 +1,70 @@
-# 04 · ComfyUI runtime and package import
+# 04 · ComfyUI runtime, Recipe import, and delivery
 
-## Runtime
+## Runtime ownership
 
-Register an already running trusted ComfyUI, then doctor it:
+CookSprite does not turn a connected URL into a managed host. The API/data
+directory owns SQLite, Projects, Artifacts, and `.cooksprite` exports. The
+selected ComfyUI Runtime owns only execution, models, and runtime caches.
+
+Register an already running remote Runtime, then Doctor it:
 
 ```bash
-cspr comfy import --runtime local --label "Local ComfyUI" --url http://127.0.0.1:8188
-cspr comfy doctor --runtime local
+cspr --api https://api.example.test \
+  comfy connect import \
+  --label Remote \
+  --url http://runtime.example.test:8288 \
+  --location remote \
+  --callback-url https://api.example.test/api/v1 \
+  --worker-managed
+
+cspr --api https://api.example.test comfy inspect doctor --runtime <runtime-id>
 ```
 
-Doctor reads `/object_info`, `/system_stats`, `/features`, and live model
-folders, stores a snapshot hash, and discovers `comfy.*` Tool schemas plus
-compatible Recipes. CookSprite Actions compile to a private Comfy
-prompt. Completion maps from Comfy history, queue state maps from `/queue`, and
-cancellation maps to queue deletion plus `/interrupt`. Public clients receive
-only CookSprite Run IDs and normalized state through HTTP/SSE.
+Doctor reads `/object_info`, `/system_stats`, model folders, and the optional
+worker identity endpoint. It stores a capability snapshot and discovers
+compatible Recipes. It never starts/restarts ComfyUI, installs a package,
+downloads a model, or finds a remote directory.
 
-`CS_LoadArtifact` reads immutable inputs through short-lived, run-scoped signed
-URLs. Only `CS_StoreArtifact` outputs can use the corresponding signed upload
-URL and be attached to the Run. The runtime's upload/output folders are never
-treated as public artifact storage.
+For a managed ComfyUI Runtime, `cspr comfy worker` is the installation and lifecycle
+interface. See [07_MANAGED_WORKER.md](07_MANAGED_WORKER.md).
 
-There is no product Demo/Fake runtime, demo node, deterministic image fallback,
-or browser-side inference path. Automated unit tests may replace the HTTP
-transport with a protocol double, but acceptance uses a real pinned ComfyUI and
-real model execution.
+## Recipe import
 
-`cspr comfy install <directory>` installs the pinned official ComfyUI revision
-and this versioned node pack into an isolated environment. It never downloads a
-default model. Model files and model paths are selected in the connected
-ComfyUI; attaching to an existing ComfyUI never copies or mutates its models.
-Install or update the locked node pack with
-`cspr comfy sync <managed-runtime>` and restart ComfyUI. Use
-`cspr comfy install-nodes <comfy-directory> --no-deps` only when attaching to a
-user-owned external ComfyUI whose Python environment CookSprite must not
-modify.
+Core checkpoints can be discovered directly. An image/video/custom graph that
+cannot be inferred safely is registered as a compact Recipe:
 
-Core checkpoints are discovered directly and become `t2i`, `i2i`, and
-image-sequence choices without copying model files. Model families whose graph
-cannot be inferred safely (for example an existing image-to-video or
-text-to-video stack) are registered with `cspr comfy recipe --runtime <id>
-recipe.json`. The adapter contains only the existing Comfy API-format workflow,
-semantic slot addresses, one typed output, and modes such as `i2v` or `t2v`.
-CookSprite revalidates every node and model on each doctor pass; an incompatible
-Recipe becomes unavailable rather than falling back to a different graph.
+```bash
+cspr --api https://api.example.test \
+  comfy inspect recipe --runtime <runtime-id> recipe.json
+```
 
-The managed NVIDIA Linux environment pins a CUDA 12.6 PyTorch wheel, which is
-compatible with the common 535-series datacenter driver used in remote GPU
-hosts. Package installation first honors a configured mirror and retries on
-official PyPI only when the mirror is incomplete.
+A Recipe contains an existing ComfyUI API-format workflow, semantic slot
+addresses/types, supported stable Action IDs/modes, and exactly one typed
+output. It is validated against the current doctor snapshot. CookSprite's
+shared assembler injects the API-owned prompt and Artifact bridge nodes; it
+does not create a product-specific API branch or expose the raw graph to Web,
+CLI, or agents.
 
-For a remote worker, run CookSprite API beside ComfyUI and set the runtime
-callback URL to that API. Frontends then point at the same `/api/v1` contract;
-Comfy hostnames, graph JSON, model paths, and prompt IDs remain private.
+If a runtime/node/model snapshot changes, doctor must validate again. Any
+worker-managed identity change requires an explicit re-registration before
+doctor can accept it.
 
-## `.cooksprite`
+## Artifact bridge
 
-The only canonical delivery is a ZIP with MIME
+`CS_LoadArtifact` reads declared immutable input bytes through a short-lived,
+run-scoped signed bridge URL. `CS_StoreArtifact` uploads declared typed output
+bytes to the API that owns the Run. These are the only supported bridge nodes.
+
+```text
+API Blob Store → CS_LoadArtifact → selected Comfy graph → CS_StoreArtifact → API Blob Store
+```
+
+ComfyUI upload/output/view/temp folders are not public artifact storage. The
+API does not expose paths or grant a browser direct ComfyUI access.
+
+## `.cooksprite` delivery
+
+The canonical delivery is a ZIP with MIME
 `application/vnd.cooksprite+zip`:
 
 ```text
@@ -66,12 +74,12 @@ frames/<sha256>.png
 normals/<sha256>.png
 ```
 
-The manifest stores project type, canvas, pivot, static or tileset fields, and
-character clips/views/direction tracks with frame order, `duration_ms`, offsets,
-normal links, loop mode, and integrity warnings. Media is copied byte-for-byte;
-packaging performs no image transform.
+The manifest records project type, canvas, pivot, tracks, frame order,
+`duration_ms`, offsets, normal links, loop mode, and integrity warnings. Media
+is copied byte-for-byte in bounded chunks from the Blob Store into one
+same-filesystem staging ZIP, then atomically promoted as the export Artifact.
+Packaging never performs image transforms or creates a new Artifact mirror.
 
-The official Godot 4.4+ importer is in `godot/addons/cooksprite_importer`.
-It always imports a `PackedScene`: `Sprite2D`, `AnimatedSprite2D`, or
-`TileMapLayer` according to project type, pairing diffuse/normal data with
-`CanvasTexture` resources. See `godot/README.md`.
+The Godot 4.4+ importer is in `godot/addons/cooksprite_importer`. It maps the
+package to `Sprite2D`, `AnimatedSprite2D`, or `TileMapLayer` and pairs diffuse
+and normal maps with `CanvasTexture` resources.

@@ -6,16 +6,14 @@ import json
 import time
 import urllib.parse
 import zipfile
+from pathlib import Path
 from typing import ClassVar
 
+import yaml
 from fastapi.testclient import TestClient
 
 from cooksprite.api.app import create_app
-from cooksprite.prompting import (
-    ImagePromptRequest,
-    SpritePromptCompiler,
-    VideoPromptRequest,
-)
+from cooksprite.prompting import PromptCompiler
 from cooksprite.recipes import (
     Recipe,
     discover_recipes,
@@ -24,7 +22,7 @@ from cooksprite.recipes import (
     recipes_from_runtime,
     supports,
 )
-from cooksprite.registry import ACTION_IDS, ActionRegistry
+from cooksprite.registry import ACTION_IDS, CookSpriteRegistry
 from cooksprite.store import Store
 
 PNG = base64.b64decode(
@@ -111,18 +109,6 @@ CORE_NODES = {
             "sequence_mode": "STRING",
         },
         ["IMAGE", "MASK", "IMAGE"],
-    ),
-    "CS_RemoveBackground": node(
-        {
-            "image": "IMAGE",
-            "model": "STRING",
-            "alpha_matting": "BOOLEAN",
-            "alpha_matting_foreground_threshold": "INT",
-            "alpha_matting_background_threshold": "INT",
-            "alpha_matting_erode_size": "INT",
-            "batch_size": "INT",
-        },
-        ["IMAGE", "MASK"],
     ),
     "LoadBackgroundRemovalModel": node(
         {"bg_removal_name": "COMBO"},
@@ -245,7 +231,6 @@ class ProtocolComfy:
             upstream = {
                 "CS_Pixelize": "image",
                 "CS_PixelizePair": "image",
-                "CS_RemoveBackground": "image",
                 "CS_IsolateOnGreen": "image",
                 "CS_LotusNormalPrepare": "image",
                 "CS_LotusNormalFinalize": "reference",
@@ -298,13 +283,18 @@ class ProtocolComfy:
 
 
 def ready_client(tmp_path):
-    app = create_app(tmp_path, ProtocolComfy, allow_test_runtime=True)
+    app = create_app(tmp_path, ProtocolComfy)
     ProtocolComfy.store = app.state.store
     client = TestClient(app)
     assert (
         client.post(
             "/api/v1/runtimes",
-            json={"id": "rt_test", "label": "Protocol Test", "base_url": "http://test"},
+            json={
+                "id": "rt_test",
+                "label": "Protocol Test",
+                "base_url": "http://test",
+                "location": "local",
+            },
         ).status_code
         == 200
     )
@@ -339,7 +329,7 @@ def test_runtime_doctor_returns_a_compact_summary_not_the_dynamic_node_catalog(t
 
 
 def test_registry_is_stable_bilingual_and_has_no_hidden_preset_surface():
-    registry = ActionRegistry()
+    registry = CookSpriteRegistry()
     actions = registry.list()
     assert tuple(item.id for item in actions) == ACTION_IDS
     assert all(set(item.i18n) == {"zh-CN", "en"} for item in actions)
@@ -350,6 +340,84 @@ def test_registry_is_stable_bilingual_and_has_no_hidden_preset_surface():
     normal_types = registry.get("normal.generate").accepts["source"].type
     assert normal_types == ["Image", "FrameSeq", "SpriteSheet"]
     assert registry.get("animation.generate").accepts["character"].required is False
+
+
+def test_new_registry_action_and_recipe_run_without_api_dispatch_changes(tmp_path):
+    source_registry = Path(__file__).parents[1] / "cooksprite" / "actions.yaml"
+    raw = yaml.safe_load(source_registry.read_text(encoding="utf-8"))
+    raw["actions"].append(
+        {
+            "id": "test.echo",
+            "i18n": {
+                "zh-CN": {"name": "测试动作", "description": "Registry 扩展测试"},
+                "en": {"name": "Test action", "description": "Registry extension test"},
+            },
+            "accepts": {},
+            "produces": ["Image"],
+            "presentation": "generic",
+            "execution": {"modes": [{"mode": "t2i"}]},
+            "controls": [
+                {
+                    "id": "prompt",
+                    "type": "text",
+                    "default": "",
+                    "i18n": {
+                        "zh-CN": {"name": "描述"},
+                        "en": {"name": "Prompt"},
+                    },
+                }
+            ],
+        }
+    )
+    registry_path = tmp_path / "actions.yaml"
+    registry_path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+    app = create_app(tmp_path / "data", ProtocolComfy, registry_path=registry_path)
+    ProtocolComfy.store = app.state.store
+    client = TestClient(app)
+    client.post(
+        "/api/v1/runtimes",
+        json={
+            "id": "rt_test",
+            "label": "Protocol Test",
+            "base_url": "http://test",
+            "location": "local",
+        },
+    )
+    assert client.post("/api/v1/runtimes/rt_test/doctor").status_code == 200
+    recipe = Recipe(
+        id="test-echo-recipe",
+        label="Test Echo",
+        family="custom.echo",
+        actions=["test.echo"],
+        modes=["t2i"],
+        workflow={"10": {"class_type": "ImportedSampler", "inputs": {"prompt": ""}}},
+        slots={"text": "10.prompt"},
+        output=["10", 0],
+        output_type="Image",
+        source="imported",
+    )
+    imported = client.post(
+        "/api/v1/runtimes/rt_test/recipes",
+        json={
+            key: value
+            for key, value in recipe.dump().items()
+            if key not in {"source", "runtime_snapshot", "workflows"}
+        },
+    )
+    assert imported.status_code == 201, imported.text
+    action = client.get("/api/v1/actions/test.echo").json()
+    assert action["available"] is True
+    project = client.post("/api/v1/projects", json={"type": "static"}).json()
+    run = client.post(
+        "/api/v1/actions/test.echo/runs",
+        json={
+            "project": project["id"],
+            "inputs": {},
+            "values": {"model": action["models"][0]["id"], "prompt": "echo"},
+        },
+    )
+    assert run.status_code == 202, run.text
+    assert wait(client, run.json()["id"])["status"] == "succeeded"
 
 
 def test_animation_recipes_advertise_their_actual_text_and_image_modes():
@@ -574,9 +642,9 @@ def test_asset_type_and_style_are_compiled_by_api_without_implicit_postprocessin
         for node in smooth_graph.values()
         if node["class_type"] == "CLIPTextEncode" and node["inputs"]["text"]
     )
-    assert "Crisp pixel-art weapon sprite" in pixel_prompt
+    assert "pixel clusters" in pixel_prompt
     assert "Show the complete weapon horizontally" in pixel_prompt
-    assert "Realistic PBR terrain surface" in smooth_prompt
+    assert "Physically plausible material response" in smooth_prompt
     assert "seamless square top-down tile" in smooth_prompt
     assert not any(node["class_type"] == "CS_Pixelize" for node in pixel_graph.values())
     assert not any(node["class_type"] == "CS_IsolateOnGreen" for node in pixel_graph.values())
@@ -769,6 +837,7 @@ def test_action_request_compiles_to_real_comfy_graph_and_artifact_store(tmp_path
             "runtime_id": "rt_test",
             "family": "comfy.core-checkpoint",
             "modes": ["t2i", "i2i", "i2i-sequence"],
+            "params_schema": {},
         }
     ]
     request = {
@@ -915,72 +984,36 @@ def test_action_examples_are_typed_artifacts_not_media_urls(tmp_path):
 
 
 def test_prompt_tool_is_model_neutral_and_deterministic():
-    compiler = SpritePromptCompiler()
-    request = ImagePromptRequest(
-        caption="a soup knight",
-        category="character",
-        style="pixel",
-        mode="t2i",
-        camera_preset="top45",
-        orientation="right",
-        camera_option="rear_top_down_45",
-    )
-    first = compiler.compile_image(request)
-    second = compiler.compile_image(request)
-    assert first.to_dict() == second.to_dict()
-    assert first.task == "image"
-    assert first.mode == "t2i"
-    assert first.metadata["compiler_version"] == "sprite_prompt_package_v1.6"
-    assert first.negative_prompt == ""
-    assert "negative_prompt" not in first.to_dict()
-    assert first.metadata["packet_type"] == "character_prompt_packet"
-    assert first.metadata["combination"]["total_variants"] == 5
-    assert first.camera_contract.pitch_deg == 0
-    assert first.camera_contract.yaw_deg == 0
-    assert first.metadata["camera"] == "front_eye_level"
-    assert first.metadata["orientation"] == "front"
-    assert first.prompt == (
-        "a soup knight. Crisp pixel-art character sprite with deliberate pixel clusters and a limited color palette. "
-        "High-quality, high-fidelity game-ready character asset with clean, readable details. Show one complete "
-        "full-body character in a neutral standing pose, facing directly forward in a straight-on eye-level "
-        "orthographic view, centered and fully visible, on a simple solid background."
-    )
-    assert "clip" not in first.prompt.lower()
-    assert "2D game illustration" not in first.prompt
+    compiler = PromptCompiler()
+    values = {"prompt": "a soup knight", "category": "character", "style": "pixel"}
+    first = compiler.compile("image.generate", "t2i", values)
+    second = compiler.compile("image.generate", "t2i", values)
+    assert first == second
+    assert first.metadata["compiler_version"] == "cooksprite.prompt-profile/v2"
+    assert first.metadata["style"] == "pixel_art"
+    assert first.prompt.startswith("a soup knight.")
+    assert "full-body character" in first.prompt
     assert "simple solid background" in first.prompt
     assert "green background" not in first.prompt.lower()
-    video = compiler.compile_video(VideoPromptRequest(caption="soup knight", action="walk"))
-    assert video.task == "video"
-    assert video.metadata["action"] == "walk"
-    assert len(compiler.image_matrix("soup knight")) == 4
-    assert len(compiler.character_matrix("soup knight")) == 5
-    assert len(compiler.video_actions("soup knight")) == 9
 
 
 def test_character_i2i_uses_edit_template_instead_of_t2i_character_packet():
-    result = SpritePromptCompiler().compile_image(
-        ImagePromptRequest(
-            caption="Replace the Gatling gun behind the character with a machine gun, keep everything else unchanged",
-            category="character",
-            style="2d_action_game",
-            mode="i2i",
-        )
-    )
-    assert result.prompt == (
-        "Use the reference image as the exact identity and appearance source.\n"
-        "Edit only this requested detail: Replace the Gatling gun behind the character with a machine gun, keep everything else unchanged.\n"
-        "Keep all other details unchanged, including character identity, pose, proportions, outfit, colors, materials and silhouette."
+    result = PromptCompiler().compile(
+        "image.generate",
+        "i2i",
+        {
+            "prompt": "Replace the Gatling gun behind the character with a machine gun, keep everything else unchanged",
+            "category": "character",
+            "style": "2d_action_game",
+        },
     )
     assert result.metadata["mode"] == "i2i"
-    assert result.metadata["edit_instruction"] == (
-        "Replace the Gatling gun behind the character with a machine gun, keep everything else unchanged"
-    )
-    assert "Single full-body character" not in result.prompt
-    assert result.reference_required is True
+    assert "Use the reference image as the exact identity" in result.prompt
+    assert "Edit only this requested detail" in result.prompt
 
 
 def test_non_character_prompt_packets_use_category_specific_templates_and_styles():
-    compiler = SpritePromptCompiler()
+    compiler = PromptCompiler()
     cases = (
         (
             "weapon",
@@ -1008,57 +1041,26 @@ def test_non_character_prompt_packets_use_category_specific_templates_and_styles
         ),
     )
     for category, style, caption, contract in cases:
-        result = compiler.compile_image(
-            ImagePromptRequest(caption=caption, category=category, style=style, mode="t2i")
+        result = compiler.compile(
+            "image.generate", "t2i", {"prompt": caption, "category": category, "style": style}
         )
         assert result.prompt.startswith(f"{caption}.")
         assert contract in result.prompt
-        assert result.negative_prompt == ""
-        assert result.metadata["packet_type"] == f"{category}_prompt_packet"
         assert result.metadata["style"] == style
-        assert result.metadata["combination"]["total_variants"] == 5
 
 
 def test_weapon_prompt_keeps_user_instruction_primary():
-    result = SpritePromptCompiler().compile_image(
-        ImagePromptRequest(
-            caption="A folding energy bow that opens into two blades",
-            category="weapon",
-            style="weapon_scifi_hardsurface",
-            mode="t2i",
-        )
+    result = PromptCompiler().compile(
+        "image.generate",
+        "t2i",
+        {
+            "prompt": "A folding energy bow that opens into two blades",
+            "category": "weapon",
+            "style": "weapon_scifi_hardsurface",
+        },
     )
-    assert result.prompt == (
-        "A folding energy bow that opens into two blades. "
-        "Polished sci-fi hard-surface weapon concept with modular mechanical parts and controlled emissive details. "
-        "High-quality, high-fidelity game-ready asset with clean, readable details. "
-        "Show the complete weapon horizontally, centered and fully visible, on a simple solid background."
-    )
-
-
-def test_legacy_scene_packet_uses_the_merged_prop_template():
-    result = SpritePromptCompiler().compile_image(
-        ImagePromptRequest(
-            caption="A cyan crystal outcrop",
-            category="scene",
-            style="scene_stylized_low_poly",
-            mode="t2i",
-        )
-    )
-    assert result.metadata["style"] == "prop_stylized_3d"
-    assert "Show one complete standalone object" in result.prompt
-
-
-def test_non_character_legacy_styles_map_to_each_category_packet():
-    compiler = SpritePromptCompiler()
-    smooth = compiler.compile_image(
-        ImagePromptRequest(caption="A copper pot", category="prop", style="smooth")
-    )
-    pixel = compiler.compile_image(
-        ImagePromptRequest(caption="Frozen tiles", category="terrain", style="pixel")
-    )
-    assert smooth.metadata["style"] == "prop_realistic_game_ready"
-    assert pixel.metadata["style"] == "terrain_pixel_art"
+    assert result.prompt.startswith("A folding energy bow that opens into two blades.")
+    assert "Show the complete weapon horizontally" in result.prompt
 
 
 def test_action_prompt_compiler_toggle_is_applied_before_comfy_graph(tmp_path):
@@ -1359,7 +1361,7 @@ def test_schema_v2_image_sequences_migrate_to_typed_manifest(tmp_path):
     store.db.close()
 
     migrated = Store(tmp_path)
-    assert migrated.db.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert migrated.db.execute("PRAGMA user_version").fetchone()[0] == 7
     assert [migrated.artifact(item)["kind"] for item in frame_ids] == ["Image", "Image"]
     run = migrated.run(run_id)
     sequence_ids = json.loads(run["artifacts"])
@@ -1377,7 +1379,7 @@ def test_schema_v2_image_sequences_migrate_to_typed_manifest(tmp_path):
 
 
 def test_document_requires_etag_and_detects_conflict(tmp_path):
-    client = TestClient(create_app(tmp_path, ProtocolComfy, allow_test_runtime=True))
+    client = TestClient(create_app(tmp_path, ProtocolComfy))
     project = client.post("/api/v1/projects", json={"type": "character"}).json()
     current = client.get(f"/api/v1/projects/{project['id']}/document").json()
     document = current["document"]
@@ -1401,7 +1403,7 @@ def test_document_requires_etag_and_detects_conflict(tmp_path):
 
 
 def test_curated_document_track_materializes_as_reusable_frame_sequence(tmp_path):
-    client = TestClient(create_app(tmp_path, ProtocolComfy, allow_test_runtime=True))
+    client = TestClient(create_app(tmp_path, ProtocolComfy))
     project = client.post("/api/v1/projects", json={"type": "character"}).json()
     frame_ids = []
     for index in range(3):
@@ -1470,7 +1472,7 @@ def test_curated_document_track_materializes_as_reusable_frame_sequence(tmp_path
 
 
 def test_materializing_an_empty_track_returns_explicit_error(tmp_path):
-    client = TestClient(create_app(tmp_path, ProtocolComfy, allow_test_runtime=True))
+    client = TestClient(create_app(tmp_path, ProtocolComfy))
     project = client.post("/api/v1/projects", json={"type": "character"}).json()
     result = client.post(
         f"/api/v1/projects/{project['id']}/sequences",
@@ -1481,7 +1483,7 @@ def test_materializing_an_empty_track_returns_explicit_error(tmp_path):
 
 
 def test_artifact_favorite_is_real_persisted_state(tmp_path):
-    client = TestClient(create_app(tmp_path, ProtocolComfy, allow_test_runtime=True))
+    client = TestClient(create_app(tmp_path, ProtocolComfy))
     artifact = client.post(
         "/api/v1/artifacts",
         params={"kind": "Image", "media_type": "image/png", "title": "Chef"},
@@ -1491,31 +1493,6 @@ def test_artifact_favorite_is_real_persisted_state(tmp_path):
     assert changed.status_code == 200
     assert changed.json()["favorite"] is True
     assert client.get(f"/api/v1/artifacts/{artifact['id']}").json()["favorite"] is True
-
-
-def test_runtime_artifact_records_its_source_lineage(tmp_path):
-    app = create_app(tmp_path, ProtocolComfy, allow_test_runtime=True)
-    client = TestClient(app)
-    project = client.post("/api/v1/projects", json={"type": "static"}).json()
-    source = client.post(
-        "/api/v1/artifacts",
-        params={"project_id": project["id"], "kind": "Image", "media_type": "image/png"},
-        content=PNG,
-    ).json()
-    app.state.store.create_run(
-        "run_lineage",
-        None,
-        action_id="normal.generate",
-        project_id=project["id"],
-        request={"project": project["id"], "inputs": {"source": source["id"]}, "values": {}},
-    )
-    normal = client.post(
-        "/api/v1/internal/artifacts",
-        params={"run_id": "run_lineage", "kind": "NormalMap", "media_type": "image/png"},
-        content=PNG + b"normal-lineage",
-    )
-    assert normal.status_code == 200
-    assert normal.json()["meta"]["source_artifacts"] == [source["id"]]
 
 
 def test_static_package_is_unique_format_and_marks_integrity(tmp_path):
@@ -1562,7 +1539,7 @@ def test_static_package_is_unique_format_and_marks_integrity(tmp_path):
 
 
 def test_openapi_contains_the_same_public_surface(tmp_path):
-    client = TestClient(create_app(tmp_path, ProtocolComfy, allow_test_runtime=True))
+    client = TestClient(create_app(tmp_path, ProtocolComfy))
     paths = client.get("/api/v1/openapi.json").json()["paths"]
     for path in [
         "/api/v1/actions",

@@ -22,27 +22,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["build>=1.2", "pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.3", "Pillow>=10.0", "playwright>=1.55"]
+dev = ["build>=1.2", "pytest>=8.0", "ruff>=0.3", "Pillow>=10.0", "playwright>=1.55"]
 
 [project.scripts]
 cspr = "cli.__main__:main"
 
-[tool.setuptools]
-packages = [
-    "cooksprite",
-    "cooksprite.api",
-    "cooksprite.comfy",
-    "cooksprite.example_assets",
-    "cooksprite.generated",
-    "cooksprite.nodes",
-    "cooksprite.nodes.pixel",
-    "cooksprite.nodes.pixel.grid",
-    "cooksprite.nodes.pixel.pipelines",
-    "cooksprite.nodes.pixel.stages",
-    "cooksprite.workflows",
-    "cooksprite.tool_packages",
-    "cli",
-]
+[tool.setuptools.packages.find]
+include = ["cooksprite*", "cli*"]
 
 [tool.setuptools.dynamic]
 version = { attr = "cooksprite.version.__version__" }
@@ -59,6 +45,7 @@ cooksprite = [
     "skill/*.md",
 ]
 "cooksprite.nodes.pixel" = ["LICENSE", "PROVENANCE.md", "presets/*.yaml"]
+"cooksprite.nodes.normalcrafter" = ["LICENSE", "PROVENANCE.md"]
 "cooksprite.workflows" = ["*.md"]
 
 [tool.pytest.ini_options]

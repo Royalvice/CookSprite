@@ -698,44 +698,6 @@ class CS_PixelSnap:
         )
 
 
-class CS_RemoveBackground:
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "image": ("IMAGE",),
-                "model": ("STRING", {"default": "u2net", "enum": ["u2net", "u2netp", "isnet-anime", "birefnet-general"]}),
-                "alpha_matting": ("BOOLEAN", {"default": False}),
-                "alpha_matting_foreground_threshold": ("INT", {"default": 240, "min": 0, "max": 255}),
-                "alpha_matting_background_threshold": ("INT", {"default": 10, "min": 0, "max": 255}),
-                "alpha_matting_erode_size": ("INT", {"default": 10, "min": 0, "max": 64}),
-                "batch_size": ("INT", {"default": 1, "min": 1, "max": 64}),
-            }
-        }
-
-    RETURN_TYPES = ("IMAGE", "MASK")
-    RETURN_NAMES = ("image", "mask")
-    FUNCTION = "run"
-    CATEGORY = "CookSprite/Alpha"
-
-    def run(self, image, model, alpha_matting, alpha_matting_foreground_threshold, alpha_matting_background_threshold, alpha_matting_erode_size, batch_size):
-        from .alpha import remove_background_batch
-
-        output, output_mask = remove_background_batch(
-            image.detach().cpu().numpy(),
-            str(model),
-            bool(alpha_matting),
-            int(alpha_matting_foreground_threshold),
-            int(alpha_matting_background_threshold),
-            int(alpha_matting_erode_size),
-            int(batch_size),
-        )
-        return (
-            torch.from_numpy(output).to(device=image.device, dtype=image.dtype),
-            torch.from_numpy(output_mask).to(device=image.device, dtype=image.dtype),
-        )
-
-
 class CS_IsolateOnGreen:
     """Replace edge-connected background colors with canonical chroma green."""
 
@@ -1072,7 +1034,6 @@ NODE_CLASSES = [
     CS_PixelizePair,
     CS_PixelizeSequence,
     CS_PixelSnap,
-    CS_RemoveBackground,
     CS_LotusModelLoader,
     CS_LotusNormalPrepare,
     CS_LotusNormalFinalize,

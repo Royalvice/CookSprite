@@ -35,18 +35,21 @@ from a ComfyUI node.
 The root `uv.lock` locks CookSprite. `cooksprite/comfy/requirements.in` plus
 the generated `cooksprite/nodes/requirements.txt` lock the managed ComfyUI
 environment into `cooksprite/comfy/requirements.lock`. After changing a Tool
-Package or custom node, run:
+Package or custom node, run in the source clone:
 
 ```bash
-cspr dev sync
-cspr comfy lock
-cspr comfy sync ~/.cooksprite/runtime
+cspr dev package sync
+cspr dev package lock
+cspr dev check
 ```
 
 Do not install an unpinned package with bare `pip` into either environment.
-Remote or user-owned ComfyUI environments are not synchronized by this
-workflow; update their node pack only through an explicit, user-approved
-operation.
+Commit/push through the authoritative Git remote, then run
+`cspr comfy worker sync --runtime-dir ../worker-runtime` on the managed ComfyUI host
+while its runtime is stopped. Worker synchronization pins its configured remote, requires
+its `HEAD` to match that pull's `FETCH_HEAD`, and always refreshes the locked
+environment before atomically replacing the node pack. Remote or user-owned
+ComfyUI environments are never synchronized from a CookSprite API.
 
 ## SOP
 
@@ -69,7 +72,7 @@ and hidden prompt text out of the public Action.
 Then run:
 
 ```bash
-cspr dev sync
+cspr dev package sync
 cspr dev check
 ```
 
@@ -134,11 +137,13 @@ Prompt packets are control-plane data, not media computation:
 Required checks:
 
 ```bash
-cspr dev sync
+cspr dev package sync
 cspr dev check
 python -m pytest -q
 npm run build
 ```
 
-Finish with a real ComfyUI API acceptance run. Do not claim readiness from a
-queued request, a fake response, or a successful frontend build alone.
+Finish with a real managed ComfyUI API acceptance run. For a remote Runtime,
+this is an API → ComfyUI → API Artifact Bridge round trip.
+Do not claim readiness from a queued request, a fake response, or a successful
+frontend build alone.

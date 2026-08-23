@@ -19,7 +19,7 @@ from .domain import (
     WorkflowDefinition,
     WorkflowRevision,
 )
-from .prompting import compile_action_values
+from .prompting import PromptCompiler, compile_action_values
 from .recipe_assembler import (
     assemble_recipe_workflow,
     input_ref,
@@ -27,10 +27,13 @@ from .recipe_assembler import (
     output_ref,
 )
 from .recipes import OFFICIAL_ALPHA_MODEL, Recipe, recipe_mode, recipe_variants
+from .registry import CookSpriteRegistry
 from .store import Store
+from .tool_packages import tool_packages
 
 IMAGE_RESOLUTIONS = (64, 128, 256, 512, 1024)
 _HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
+_ACTION_REGISTRY = CookSpriteRegistry()
 
 
 def _image_resolution(value: Any) -> int:
@@ -55,6 +58,7 @@ def _core_image_workflow(
     recipe: Recipe,
     action_id: str,
     mode: str,
+    source_slot: str | None = None,
 ) -> WorkflowDefinition:
     if not recipe.checkpoint:
         raise ValueError("core image recipe requires a checkpoint")
@@ -66,9 +70,9 @@ def _core_image_workflow(
         "pixel_enabled": "Boolean",
         "resolution": "Number",
     }
-    source_slot = ""
     if mode in {"i2i", "i2v"}:
-        source_slot = "reference" if action_id == "image.generate" else "source"
+        if source_slot is None:
+            raise ValueError(f"{action_id}:{mode} requires an explicit image input slot")
         inputs[source_slot] = "Image"
 
     nodes = [
@@ -174,7 +178,7 @@ def _core_image_workflow(
         ]
     )
     final_ref = output_ref("decode", "output_0")
-    if action_id != "image.generate":
+    if _ACTION_REGISTRY.execution(action_id).get("postprocess") == "pixelize":
         nodes.extend(
             [
                 ToolNode(
@@ -561,83 +565,124 @@ def _cutout_workflow(runtime_id: str, recipe: Recipe) -> WorkflowDefinition:
     )
 
 
+@tool_packages.recipe_builder_for("comfy.core-checkpoint")
+def _build_core(runtime_id: str, recipe: Recipe) -> dict[str, WorkflowDefinition]:
+    return {
+        "image.generate:t2i": _core_image_workflow(runtime_id, recipe, "image.generate", "t2i"),
+        "image.generate:i2i": _core_image_workflow(
+            runtime_id, recipe, "image.generate", "i2i", "reference"
+        ),
+        "frame.redraw:i2i": _core_image_workflow(
+            runtime_id, recipe, "frame.redraw", "i2i", "source"
+        ),
+        "animation.generate:i2v": _core_image_workflow(
+            runtime_id, recipe, "animation.generate", "i2v", "source"
+        ),
+    }
+
+
+@tool_packages.recipe_builder_for("cooksprite.normal")
+def _build_normal(runtime_id: str, recipe: Recipe) -> dict[str, WorkflowDefinition]:
+    normal = _normal_workflow(runtime_id, recipe)
+    definitions = {
+        "normal.generate:image-to-normal": normal,
+        "normal.generate:frames-to-normal": normal,
+    }
+    if "image-to-pixel-normal" in recipe.modes:
+        definitions["normal.generate:image-to-pixel-normal"] = _normal_pixel_plan_workflow(
+            runtime_id, recipe
+        )
+    return definitions
+
+
+@tool_packages.recipe_builder_for("cooksprite.sprite")
+def _build_sprite(runtime_id: str, recipe: Recipe) -> dict[str, WorkflowDefinition]:
+    sprite = _sprite_pixel_workflow(runtime_id, recipe)
+    return {
+        "sprite.pixelize:image-to-sprite-pair": sprite,
+        "sprite.pixelize:frames-to-sprite-pair": sprite,
+    }
+
+
+@tool_packages.recipe_builder_for("cooksprite.normal-temporal")
+def _build_normal_temporal(runtime_id: str, recipe: Recipe) -> dict[str, WorkflowDefinition]:
+    return {"normal.generate:frames-to-normal": _normal_temporal_workflow(runtime_id, recipe)}
+
+
+@tool_packages.recipe_builder_for("cooksprite.sprite-temporal")
+def _build_sprite_temporal(runtime_id: str, recipe: Recipe) -> dict[str, WorkflowDefinition]:
+    return {
+        "sprite.pixelize:frames-to-sprite-pair": _sprite_pixel_workflow(
+            runtime_id, recipe, temporal=True
+        )
+    }
+
+
+@tool_packages.recipe_builder_for("cooksprite.pixel")
+def _build_pixel(runtime_id: str, recipe: Recipe) -> dict[str, WorkflowDefinition]:
+    definitions = {"image.pixelize:image-to-image": _pixel_workflow(runtime_id, recipe)}
+    if "frames-to-frames" in recipe.modes:
+        definitions["image.pixelize:frames-to-frames"] = _pixel_sequence_workflow(
+            runtime_id, recipe
+        )
+    return definitions
+
+
+@tool_packages.recipe_builder_for("comfy.flux2-klein")
+def _build_flux(runtime_id: str, recipe: Recipe) -> dict[str, WorkflowDefinition]:
+    definitions: dict[str, WorkflowDefinition] = {}
+    for action_id in recipe.actions:
+        for mode in recipe.modes:
+            if mode != "i2i":
+                definitions[f"{action_id}:{mode}"] = assemble_recipe_workflow(
+                    runtime_id, recipe, action_id, mode
+                )
+                continue
+            for variant in recipe_variants(recipe):
+                count = (
+                    "1"
+                    if not variant.workflow_variant
+                    else variant.workflow_variant.removeprefix("i2i-")
+                )
+                definitions[f"{action_id}:{mode}:{count}"] = assemble_recipe_workflow(
+                    runtime_id, variant, action_id, mode
+                )
+    return definitions
+
+
+def _build_imported(runtime_id: str, recipe: Recipe) -> dict[str, WorkflowDefinition]:
+    if recipe.source not in {"imported", "discovered"} or not recipe.workflow:
+        return {}
+    return {
+        f"{action_id}:{mode}": assemble_recipe_workflow(runtime_id, recipe, action_id, mode)
+        for action_id in recipe.actions
+        for mode in recipe.modes
+    }
+
+
+@tool_packages.recipe_builder_for("cooksprite.sheet")
+def _build_sheet(runtime_id: str, recipe: Recipe) -> dict[str, WorkflowDefinition]:
+    return {"sheet.slice:sheet-to-frames": _sheet_workflow(runtime_id, recipe)}
+
+
+@tool_packages.recipe_builder_for("cooksprite.video")
+def _build_video(runtime_id: str, recipe: Recipe) -> dict[str, WorkflowDefinition]:
+    return {"video.sample:video-to-frames": _video_workflow(runtime_id, recipe)}
+
+
+@tool_packages.recipe_builder_for("cooksprite.alpha")
+def _build_alpha(runtime_id: str, recipe: Recipe) -> dict[str, WorkflowDefinition]:
+    return {"image.cutout:image-to-image": _cutout_workflow(runtime_id, recipe)}
+
+
 def materialize_recipe_workflows(
     store: Store,
     runtime_id: str,
     snapshot: str,
     recipe: Recipe,
 ) -> Recipe:
-    definitions: dict[str, WorkflowDefinition] = {}
-    if recipe.family == "comfy.core-checkpoint":
-        definitions = {
-            "image.generate:t2i": _core_image_workflow(runtime_id, recipe, "image.generate", "t2i"),
-            "image.generate:i2i": _core_image_workflow(runtime_id, recipe, "image.generate", "i2i"),
-            "frame.redraw:i2i": _core_image_workflow(runtime_id, recipe, "frame.redraw", "i2i"),
-            "animation.generate:i2v": _core_image_workflow(
-                runtime_id, recipe, "animation.generate", "i2v"
-            ),
-        }
-    elif recipe.family == "cooksprite.normal":
-        normal = _normal_workflow(runtime_id, recipe)
-        definitions = {
-            "normal.generate:image-to-normal": normal,
-            "normal.generate:frames-to-normal": normal,
-        }
-        if "image-to-pixel-normal" in recipe.modes:
-            definitions["normal.generate:image-to-pixel-normal"] = _normal_pixel_plan_workflow(
-                runtime_id, recipe
-            )
-    elif recipe.family == "cooksprite.sprite":
-        sprite = _sprite_pixel_workflow(runtime_id, recipe)
-        definitions = {
-            "sprite.pixelize:image-to-sprite-pair": sprite,
-            "sprite.pixelize:frames-to-sprite-pair": sprite,
-        }
-    elif recipe.family == "cooksprite.normal-temporal":
-        definitions = {
-            "normal.generate:frames-to-normal": _normal_temporal_workflow(runtime_id, recipe)
-        }
-    elif recipe.family == "cooksprite.sprite-temporal":
-        definitions = {
-            "sprite.pixelize:frames-to-sprite-pair": _sprite_pixel_workflow(
-                runtime_id, recipe, temporal=True
-            )
-        }
-    elif recipe.family == "cooksprite.sheet":
-        definitions = {"sheet.slice:sheet-to-frames": _sheet_workflow(runtime_id, recipe)}
-    elif recipe.family == "cooksprite.video":
-        definitions = {"video.sample:video-to-frames": _video_workflow(runtime_id, recipe)}
-    elif recipe.family == "cooksprite.pixel":
-        definitions = {"image.pixelize:image-to-image": _pixel_workflow(runtime_id, recipe)}
-        if "frames-to-frames" in recipe.modes:
-            definitions["image.pixelize:frames-to-frames"] = _pixel_sequence_workflow(
-                runtime_id, recipe
-            )
-    elif recipe.family == "cooksprite.alpha":
-        definitions = {"image.cutout:image-to-image": _cutout_workflow(runtime_id, recipe)}
-    elif recipe.family == "comfy.flux2-klein":
-        for action_id in recipe.actions:
-            for mode in recipe.modes:
-                if mode != "i2i":
-                    definitions[f"{action_id}:{mode}"] = assemble_recipe_workflow(
-                        runtime_id, recipe, action_id, mode
-                    )
-                    continue
-                for variant in recipe_variants(recipe):
-                    count = (
-                        "1"
-                        if not variant.workflow_variant
-                        else variant.workflow_variant.removeprefix("i2i-")
-                    )
-                    definitions[f"{action_id}:{mode}:{count}"] = assemble_recipe_workflow(
-                        runtime_id, variant, action_id, mode
-                    )
-    elif recipe.source in {"imported", "discovered"} and recipe.workflow:
-        for action_id in recipe.actions:
-            for mode in recipe.modes:
-                definitions[f"{action_id}:{mode}"] = assemble_recipe_workflow(
-                    runtime_id, recipe, action_id, mode
-                )
+    builder = tool_packages.recipe_builder(recipe.family)
+    definitions = builder(runtime_id, recipe) if builder else _build_imported(runtime_id, recipe)
     if not definitions:
         return recipe.bind_workflows(snapshot, {})
     refs: dict[str, dict[str, Any]] = {}
@@ -677,15 +722,19 @@ def bind_action_task(
     artifacts: dict[str, list[str]],
     values: dict[str, Any],
     params: dict[str, Any] | None = None,
+    execution: dict[str, Any] | None = None,
+    prompt_compiler: PromptCompiler | None = None,
+    action_mode: str | None = None,
 ) -> tuple[
     TaskRevision,
     dict[tuple[str, int], WorkflowRevision],
     dict[str, ValueRef],
     dict[str, Any],
 ]:
-    workflow_ref = recipe.workflow_for(action_id, artifacts)
+    execution = dict(execution or _ACTION_REGISTRY.execution(action_id))
+    mode = action_mode or recipe_mode(action_id, artifacts)
+    workflow_ref = recipe.workflow_for(action_id, artifacts, mode)
     if not workflow_ref:
-        mode = recipe_mode(action_id, artifacts)
         raise ValueError(f"recipe {recipe.id} has no typed workflow for {action_id}:{mode}")
     workflow = _workflow_revision(store, workflow_ref)
     params = dict(params or {})
@@ -745,32 +794,34 @@ def bind_action_task(
     run_inputs: dict[str, ValueRef] = {}
     task_outputs: dict[str, ValueRef] = {}
 
-    source_slots: list[tuple[str, str]] = []
+    source_slots: list[tuple[str, str, str]] = []
     static_artifact_slots: list[tuple[str, str]] = []
-    if action_id == "normal.generate" and artifacts.get("pixel_plan"):
-        # Plan-backed normal generation is intentionally one human-selected
-        # source keyframe.  It must not silently turn into a 100+ frame Lotus
-        # batch or invent automatic keyframe selection.
-        source_slots = [("source", artifacts["source"][0])]
-        static_artifact_slots = [("pixel_plan", artifacts["pixel_plan"][0])]
-    elif action_id == "normal.generate":
+    binding = execution.get("artifact_binding") or {}
+    expand_slot = str(binding.get("expand_slot") or "")
+    aliases = {
+        str(name): str(target) for name, target in (execution.get("artifact_aliases") or {}).items()
+    }
+    if expand_slot and artifacts.get(expand_slot):
+        workflow_slot = str(binding.get("workflow_slot") or "")
+        prefix = str(binding.get("input_prefix") or expand_slot)
+        index_start = int(binding.get("index_start") or 0)
         source_slots = [
-            (f"source_{index}", artifact_id)
-            for index, artifact_id in enumerate(artifacts["source"])
+            (f"{prefix}_{index}", workflow_slot or f"{prefix}_{index}", artifact_id)
+            for index, artifact_id in enumerate(artifacts[expand_slot], start=index_start)
         ]
-    elif action_id == "image.generate" and artifacts.get("reference"):
-        source_slots = [
-            (f"reference_{index}", artifact_id)
-            for index, artifact_id in enumerate(artifacts["reference"], start=1)
+        static_artifact_slots = [
+            (slot, artifacts[slot][0])
+            for slot in binding.get("static_slots", [])
+            if artifacts.get(slot)
         ]
     else:
         for slot, artifact_ids in artifacts.items():
             if slot.startswith("__"):
                 continue
             if artifact_ids:
-                source_slots.append((slot, artifact_ids[0]))
+                source_slots.append((slot, aliases.get(slot, slot), artifact_ids[0]))
         if not source_slots:
-            source_slots = [("", "")]
+            source_slots = [("", "", "")]
 
     seed = int(values.get("seed", -1))
     if seed < 0:
@@ -778,8 +829,7 @@ def bind_action_task(
     # Keep every Action value so a Recipe can declare a new workflow slot
     # without another API-side allow-list.  The aliases below normalize the
     # stable product controls to the semantic names used by old recipes.
-    mode = recipe_mode(action_id, artifacts)
-    final_prompt, prompt_metadata = compile_action_values(action_id, mode, values)
+    final_prompt, prompt_metadata = compile_action_values(action_id, mode, values, prompt_compiler)
     prepared = {**values, **params}
     prepared.update(
         {
@@ -792,19 +842,8 @@ def bind_action_task(
             "prompt_compile": bool(values.get("prompt_compile", True)),
             "count": max(1, min(int(values.get("count", 1)), 16)),
             "seed": seed,
-            "strength": max(
-                0.0,
-                min(
-                    float(
-                        values.get(
-                            "strength",
-                            1.0 if action_id in {"normal.generate", "sprite.pixelize"} else 0.65,
-                        )
-                    ),
-                    2.0 if action_id in {"normal.generate", "sprite.pixelize"} else 1.0,
-                ),
-            ),
-            "pixel_enabled": action_id != "image.generate" and values.get("style") == "pixel",
+            "strength": float(values.get("strength", 0.65)),
+            "pixel_enabled": bool(execution.get("pixel_enabled", values.get("style") == "pixel")),
             "flip_y": bool(values.get("flip_y", False)),
             "columns": int(values.get("columns", 0)),
             "rows": int(values.get("rows", 0)),
@@ -822,26 +861,16 @@ def bind_action_task(
             "outline_color": _outline_color(values.get("outline_color", "#000000")),
             "temporal_mode": str(values.get("temporal_mode", "auto")),
             "frame_index": int(values.get("frame_index", -1)),
-            # Workflow-specific NormalCrafter knobs deliberately travel via
-            # the reserved ``params`` map.  Defaults are still materialized
-            # here so the recipe remains a standalone runnable graph.
-            "max_resolution": int(params.get("max_resolution", 1024)),
-            "window_size": int(params.get("window_size", 14)),
-            "time_step_size": int(params.get("time_step_size", 10)),
-            "decode_chunk_size": int(params.get("decode_chunk_size", 7)),
         }
     )
+    for name, schema in (recipe.params_schema.get("properties") or {}).items():
+        if name not in prepared and isinstance(schema, dict) and "default" in schema:
+            prepared[name] = schema["default"]
 
-    for index, (slot, artifact_id) in enumerate(source_slots):
+    for index, (input_name, workflow_slot, artifact_id) in enumerate(source_slots):
         call_id = f"step_{index + 1}"
         call_inputs: dict[str, ValueRef] = {}
-        if slot:
-            input_name = slot if action_id != "normal.generate" else f"source_{index}"
-            workflow_slot = (
-                "source"
-                if action_id in {"normal.generate", "frame.redraw", "animation.generate"}
-                else slot
-            )
+        if input_name:
             port_type = workflow.inputs.get(workflow_slot)
             if not port_type:
                 raise ValueError(

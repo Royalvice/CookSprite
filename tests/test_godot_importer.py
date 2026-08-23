@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import shutil
 import subprocess
 import zipfile
@@ -10,7 +11,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-GODOT = Path("/Applications/Godot.app/Contents/MacOS/Godot")
+GODOT = os.environ.get("GODOT_EXECUTABLE") or shutil.which("godot4") or shutil.which("godot")
 DIRECTIONS = ("n", "ne", "e", "se", "s", "sw", "w", "nw")
 
 
@@ -28,7 +29,7 @@ def package(path: Path, manifest: dict, files: dict[str, bytes]) -> None:
             archive.writestr(name, body)
 
 
-@pytest.mark.skipif(not GODOT.exists(), reason="Godot editor is not installed")
+@pytest.mark.skipif(not GODOT, reason="Godot editor is not installed")
 def test_godot_imports_static_sixteen_tracks_and_tileset(tmp_path):
     project = tmp_path / "godot"
     shutil.copytree(Path(__file__).parents[1] / "godot", project)

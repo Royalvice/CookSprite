@@ -1,8 +1,8 @@
 """Real browser workflow acceptance against a remote CookSprite API + ComfyUI.
 
-This suite never starts or accepts the fake runtime.  Start a Vite frontend with
-``COOKSPRITE_API_PROXY_TARGET`` pointing at the remote CookSprite API,
-then provide the JSON produced by ``remote_real_acceptance.py``.
+This suite never starts or accepts the fake runtime. Point ``COOKSPRITE_WEB_URL``
+at a packaged CookSprite Web endpoint or a Vite development server, then provide
+the JSON produced by ``remote_real_acceptance.py``.
 """
 
 from __future__ import annotations
@@ -12,7 +12,9 @@ import os
 import re
 from pathlib import Path
 
-from playwright.sync_api import Locator, Page, expect, sync_playwright
+from playwright.sync_api import Locator, Page, expect
+
+from web_qa_harness import browser_qa, wait_for_app
 
 BASE = os.environ.get("COOKSPRITE_WEB_URL", "http://127.0.0.1:5173").rstrip("/")
 RESULT = Path(
@@ -28,23 +30,7 @@ SHOTS = Path(
     )
 )
 EXPECTED_RUNTIME = os.environ.get("COOKSPRITE_EXPECTED_RUNTIME", "remote-gpu-workflow")
-EDGE = "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
 ARTIFACT_MIME = "application/x-cooksprite-artifact"
-
-
-def browser_launch_options() -> dict:
-    executable = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE")
-    if executable:
-        return {"executable_path": executable}
-    if Path(EDGE).exists():
-        return {"executable_path": EDGE}
-    return {}
-
-
-def wait_for_app(page: Page, url: str) -> None:
-    page.goto(url, wait_until="commit", timeout=20_000)
-    page.locator(".studio-view, .library-view").first.wait_for(timeout=20_000)
-    page.wait_for_timeout(1_200)
 
 
 def capture_drag(source: Locator, target: Locator) -> dict:
@@ -103,33 +89,12 @@ def run() -> None:
     image_id = acceptance["image_artifact"]
     sequence_id = acceptance["frame_sequence"]
     SHOTS.mkdir(parents=True, exist_ok=True)
-    failures: list[str] = []
 
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True, **browser_launch_options())
-        page = browser.new_page(viewport={"width": 1440, "height": 1000})
-        page.set_default_timeout(20_000)
-        page.on(
-            "console",
-            lambda message: (
-                failures.append(f"console:{message.type}:{message.text}")
-                if message.type == "error"
-                else None
-            ),
-        )
-        page.on("pageerror", lambda error: failures.append(f"pageerror:{error}"))
-        page.on(
-            "requestfailed",
-            lambda request: failures.append(f"requestfailed:{request.url}:{request.failure}"),
-        )
-        page.on(
-            "response",
-            lambda response: (
-                failures.append(f"http:{response.status}:{response.url}")
-                if response.status >= 400 and "/hdri/" not in response.url
-                else None
-            ),
-        )
+    with browser_qa(
+        collect_http_errors=True,
+        ignored_http_fragments=("/hdri/",),
+    ) as qa:
+        page = qa.page
 
         health = page.request.get(f"{BASE}/api/v1/health").json()
         assert health["runtime"] == "ready", health
@@ -156,7 +121,7 @@ def run() -> None:
         )
         assert "presets" not in image_action
 
-        wait_for_app(page, f"{BASE}/studio/{project_id}")
+        wait_for_app(page, f"{BASE}/studio/{project_id}", settle_ms=1_200)
         expect(page.locator(".topbar .runtime-chip.ready")).to_be_visible()
         expect(page.locator(".stage-check")).to_have_count(0)
         expect(page.locator(".run-results .artifact-card")).to_have_count(1)
@@ -284,8 +249,7 @@ def run() -> None:
             == image_id
         )
 
-        assert not failures, json.dumps(failures, ensure_ascii=False, indent=2)
-        browser.close()
+        qa.assert_clean()
 
     print(
         json.dumps(

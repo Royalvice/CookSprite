@@ -9,7 +9,9 @@ those pieces mean to a CookSprite user.
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import asdict, dataclass, field, replace
+from functools import lru_cache
 from typing import Any
 
 from .workflows.flux2_klein import (
@@ -26,6 +28,7 @@ from .workflows.model_bundles import MODEL_BUNDLES
 from .workflows.normalcrafter import (
     NORMALCRAFTER_BUNDLE_ID,
     NORMALCRAFTER_MODEL,
+    NORMALCRAFTER_PARAMS_SCHEMA,
     NORMALCRAFTER_PROVENANCE,
 )
 
@@ -146,6 +149,8 @@ class Recipe:
     family: str
     actions: list[str]
     modes: list[str]
+    priority: int = 0
+    max_frames: int | None = None
     checkpoint: str | None = None
     workflow: dict[str, Any] | None = None
     slots: dict[str, str] = field(default_factory=dict)
@@ -161,6 +166,7 @@ class Recipe:
     model_bundle: str | None = None
     model_files: list[dict[str, Any]] = field(default_factory=list)
     provenance: dict[str, Any] = field(default_factory=dict)
+    params_schema: dict[str, Any] = field(default_factory=dict)
 
     def dump(self) -> dict[str, Any]:
         return asdict(self)
@@ -168,8 +174,13 @@ class Recipe:
     def bind_workflows(self, runtime_snapshot: str, workflows: dict[str, dict[str, Any]]) -> Recipe:
         return replace(self, runtime_snapshot=runtime_snapshot, workflows=workflows)
 
-    def workflow_for(self, action_id: str, inputs: dict[str, list[str]]) -> dict[str, Any] | None:
-        mode = recipe_mode(action_id, inputs)
+    def workflow_for(
+        self,
+        action_id: str,
+        inputs: dict[str, list[str]],
+        mode: str | None = None,
+    ) -> dict[str, Any] | None:
+        mode = mode or recipe_mode(action_id, inputs)
         if mode == "i2i":
             count = len(inputs.get("reference") or [])
             variant = self.workflows.get(f"{action_id}:{mode}:{count}")
@@ -450,6 +461,7 @@ def _flux2_recipes(report: dict[str, Any]) -> list[Recipe]:
                 family="comfy.flux2-klein",
                 actions=["image.generate"],
                 modes=["t2i"],
+                priority=100 if "9b" in bundle_id else 80,
                 checkpoint=bundle["files"][0]["name"],
                 workflow=t2i_graph,
                 slots=t2i_slots,
@@ -486,6 +498,7 @@ def _flux2_recipes(report: dict[str, Any]) -> list[Recipe]:
                 family="comfy.flux2-klein",
                 actions=["image.generate"],
                 modes=["i2i"],
+                priority=100 if "9b" in bundle_id else 80,
                 checkpoint=bundle["files"][0]["name"],
                 workflow=first_graph,
                 slots=first_slots or {},
@@ -603,6 +616,8 @@ def discover_recipes(report: dict[str, Any]) -> list[Recipe]:
                     if LOTUS_NORMAL_PLAN_NODES.issubset(nodes)
                     else ["image-to-normal", "frames-to-normal"]
                 ),
+                priority=50,
+                max_frames=32,
                 checkpoint=LOTUS_NORMAL_MODEL,
                 source="discovered",
                 model_bundle=LOTUS_NORMAL_BUNDLE_ID,
@@ -639,11 +654,13 @@ def discover_recipes(report: dict[str, Any]) -> list[Recipe]:
                 family="cooksprite.normal-temporal",
                 actions=["normal.generate"],
                 modes=["frames-to-normal"],
+                priority=100,
                 checkpoint=NORMALCRAFTER_MODEL,
                 source="discovered",
                 model_bundle=NORMALCRAFTER_BUNDLE_ID,
                 model_files=list(normalcrafter_bundle["files"]),
                 provenance=dict(NORMALCRAFTER_PROVENANCE),
+                params_schema=dict(NORMALCRAFTER_PARAMS_SCHEMA),
             )
         )
         if NORMALCRAFTER_BATCH_NODES.issubset(nodes) and CORE_PIXEL_PAIR_NODES.issubset(nodes):
@@ -662,6 +679,7 @@ def discover_recipes(report: dict[str, Any]) -> list[Recipe]:
                         "normal": dict(NORMALCRAFTER_PROVENANCE),
                         "pixel": {"package": "cooksprite.pixel", "version": "2.1.0"},
                     },
+                    params_schema=dict(NORMALCRAFTER_PARAMS_SCHEMA),
                 )
             )
     if CORE_PIXEL_NODES.issubset(nodes):
@@ -828,8 +846,6 @@ def _runtime_recipe_allowed(recipe: Recipe) -> bool:
 def recipes_from_runtime(runtime: dict[str, Any] | None) -> list[Recipe]:
     if not runtime:
         return []
-    import json
-
     try:
         assets = json.loads(runtime.get("assets") or "[]")
     except (TypeError, json.JSONDecodeError):
@@ -844,15 +860,12 @@ def recipes_from_runtime(runtime: dict[str, Any] | None) -> list[Recipe]:
     ]
 
 
-def recipe_for(runtime: dict[str, Any], recipe_id: str) -> Recipe | None:
-    return next((item for item in recipes_from_runtime(runtime) if item.id == recipe_id), None)
-
-
 def recipe_for_model(
     recipes: list[Recipe],
     model_id: str,
     action_id: str,
     inputs: dict[str, list[str]],
+    mode: str | None = None,
 ) -> Recipe | None:
     """Resolve one model identity to the Recipe matching the current input mode."""
 
@@ -865,49 +878,37 @@ def recipe_for_model(
             recipe
             for recipe in recipes
             if str(recipe.checkpoint or recipe.id) == selected_model
-            and supports(recipe, action_id, inputs)
+            and supports(recipe, action_id, inputs, mode=mode)
         ),
         None,
     )
 
 
 def recipe_mode(action_id: str, inputs: dict[str, list[str]]) -> str:
-    if action_id == "image.generate":
-        return "i2i" if inputs.get("reference") else "t2i"
-    if action_id == "frame.redraw":
-        return "i2i"
-    if action_id == "animation.generate":
-        return "i2v" if inputs.get("character") else "t2v"
-    return {
-        "normal.generate": (
-            "image-to-pixel-normal"
-            if inputs.get("pixel_plan")
-            else "frames-to-normal"
-            if inputs.get("__source_kind") == ["FrameSeq"]
-            else "image-to-normal"
-        ),
-        "sprite.pixelize": (
-            "frames-to-sprite-pair"
-            if inputs.get("__source_kind") == ["FrameSeq"]
-            else "image-to-sprite-pair"
-        ),
-        "sheet.slice": "sheet-to-frames",
-        "video.sample": "video-to-frames",
-        "image.pixelize": "frames-to-frames"
-        if inputs.get("__source_kind") == ["FrameSeq"]
-        else "image-to-image",
-        "image.cutout": "image-to-image",
-    }.get(action_id, "")
+    return _action_registry().mode(action_id, inputs)
 
 
-def supports(recipe: Recipe, action_id: str, inputs: dict[str, list[str]] | None = None) -> bool:
+@lru_cache(maxsize=1)
+def _action_registry():
+    from .registry import CookSpriteRegistry
+
+    return CookSpriteRegistry()
+
+
+def supports(
+    recipe: Recipe,
+    action_id: str,
+    inputs: dict[str, list[str]] | None = None,
+    *,
+    mode: str | None = None,
+) -> bool:
     if action_id not in recipe.actions:
         return False
     if recipe.workflow and not recipe_contract_is_valid(recipe):
         return False
     if inputs is None:
         return True
-    mode = recipe_mode(action_id, inputs)
+    mode = mode or recipe_mode(action_id, inputs)
     compatible = {
         "i2v": {"i2v", "i2i-sequence"},
         "t2v": {"t2v", "t2i-sequence"},

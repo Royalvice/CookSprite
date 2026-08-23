@@ -87,12 +87,6 @@ _COMMON_NODES = {
     "sample": {"class_type": "SamplerCustomAdvanced", "inputs": {}},
     "decode": {"class_type": "VAEDecode", "inputs": {}},
 }
-
-
-def _link(node: dict[str, Any], name: str, source: str, output: int = 0) -> None:
-    node["inputs"][name] = [source, output]
-
-
 def _graph_base(bundle_id: str) -> dict[str, Any]:
     bundle = FLUX2_BUNDLES[bundle_id]
     files = {item["folder"]: item["name"] for item in bundle["files"]}

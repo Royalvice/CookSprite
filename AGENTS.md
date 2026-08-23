@@ -7,22 +7,21 @@ Lowest user burden and one canonical implementation per capability win.
 ## System boundary
 
 ```text
-Human Web ──────────────────────┐
-Human / Agent → cspr CLI ───────┼→ CookSprite /api/v1 → ComfyUI → Artifacts
-Contributor graph clients ─────┘
+Human Web ───────────────┐
+Human / Agent → cspr ────┼→ current CookSprite /api/v1 → selected ComfyUI
+Stable Action clients ───┘
+                                  └──────────────→ current API Artifacts
 ```
 
-For the standard two-machine deployment, the Mac is the only CookSprite
-control plane: it runs Web/API/CLI and owns Projects, SQLite metadata,
-Artifacts, and exports. H20 is a compute-only worker: it runs one managed
-ComfyUI runtime, CookSprite Custom Nodes, models, and GPU cache. H20 does not
-run a product API or own final CookSprite material.
+CookSprite has no machine roles. Every clone has the same capabilities and may
+run Web, API, CLI, or a managed ComfyUI Runtime. Project and Artifact ownership
+follows the API process and its data directory; inference location follows the
+Runtime selected by that API. Local and remote Runtimes share one contract.
 
-Mac and H20 use ordinary clones of the same Git remote. Source synchronization
-is exclusively `git push` and `git pull --ff-only` through that remote; never
-copy source with `scp`, `rsync`, archive files, patches, or shared directories.
-Installing the node pack from the H20 local clone into its H20 local ComfyUI
-runtime is a local deployment derivation, not cross-machine source transfer.
+Ordinary clones synchronize source only through their shared Git remote with
+`git push` and `git pull --ff-only`; never copy source with `scp`, `rsync`,
+archives, patches, or shared directories. Installing the node pack from a
+clone into its local Runtime is a deployment derivation, not source transfer.
 
 CookSprite API is the control plane. It validates typed requests, versions and
 compiles graphs, schedules runs, tracks state/provenance, and persists declared
@@ -41,8 +40,8 @@ output, and view folders are never public storage.
 
 ## Product and composition model
 
-Stable Actions are the only ordinary product entry points. Internally they
-compile through the following model:
+Stable Actions are the only public product entry points. Internally they
+compile through the following private model:
 
 ```text
 Action → Task → Workflow → Tool → cooksprite.* / comfy.* ComfyUI nodes
@@ -130,7 +129,7 @@ Adding a capability is incomplete until the same change provides:
 
 1. typed Tool package contract and ComfyUI implementation;
 2. Workflow/Task/Recipe lowering and stable Action exposure;
-3. CLI list/describe/run/wait/cancel/result support without a browser;
+3. CLI list/show/run/wait/cancel/result support without a browser;
 4. generated or compiler-checked Web controls and Agent Skill documentation;
 5. contract tests plus real ComfyUI execution returning typed artifacts.
 
@@ -138,37 +137,46 @@ Agents invoke `cspr`; they do not call internal Python classes or ComfyUI.
 Humans may use either Web or `cspr`. Every principal product workflow must be
 completable by CLI against `/api/v1`, without starting a frontend or browser.
 
-## H20 worker contract
+## Managed worker contract
 
-Use `cspr worker`, from the H20 source clone, for every H20 lifecycle action:
+Use `cspr comfy worker`, from the ComfyUI host's source clone, for every managed
+runtime lifecycle action:
 `init`, `install`, `sync`, `start`, `stop`, `restart`, `status`, and `doctor`.
-It owns exactly one non-Git runtime sibling and never creates a product data
-directory. `sync` rejects source edits, uses `git pull --ff-only`, refuses a
-running ComfyUI listener, and then synchronizes the locked local node/runtime
-deployment through an atomic node-pack swap. The active node pack contains a
+It owns exactly one non-Git `worker-runtime` sibling and never creates a product
+data directory. An existing `runtime/` directory is user-owned and is never a
+valid default or adoption target. `install` and `sync` pin the
+configured credential-redacted `origin`, use `git pull --ff-only`, require
+`HEAD` to equal that pull's `FETCH_HEAD`, refuse source edits and a running
+ComfyUI listener, then synchronize the locked local environment and node
+runtime through an atomic node-pack swap. There is no local-commit or
+dependency-sync bypass. The active node pack contains a
 minimal `RUNTIME.json` identity and serves it read-only at
 `/cooksprite/runtime-info`; a worker-managed runtime must match its source
 revision, node version, and dependency lock before it can start. Do not replace
-this with agent scripts or a second worker HTTP API.
+this with agent scripts or a second worker HTTP API. Device selection is
+`auto|cpu|cuda[:N]|rocm[:N]|mps`. Shared mode never requires a vendor CLI;
+optional `--exclusive` uses a registered backend inspector and refuses foreign
+processes when that inspector can prove ownership.
 
-Remote Runtime registration belongs to the Mac API. It must have an explicit
-Mac-reachable callback URL for `CS_LoadArtifact`/`CS_StoreArtifact`; a remote
-runtime may not silently inherit a loopback callback. H20 outputs return over
-that scoped artifact bridge and do not become public files in ComfyUI output.
+Remote Runtime registration belongs to the active CookSprite API. It must have
+an explicit callback URL reachable from that ComfyUI for
+`CS_LoadArtifact`/`CS_StoreArtifact`; a remote runtime may not silently inherit
+a loopback callback. Remote outputs return to the API-owned Artifact Store over
+that scoped bridge and do not become public files in ComfyUI output.
 
 ## Distribution and installation
 
 - The Python distribution `cooksprite` owns domain schemas, compiler, API,
-  CLI, installer, and node-pack payload/metadata, and ships as a wheel/sdist.
+  CLI, and node-pack payload/metadata, and ships as a wheel/sdist.
 - `web/` is a TypeScript + Vue npm workspace used to build and test the UI.
   End users must not need Node.js or npm: release builds ship its static output
   inside the Python/release distribution and the CookSprite server serves it.
 - CookSprite custom nodes are independently versioned as standard ComfyUI node
-  packages but are installed and verified by the CookSprite installer.
-- One explicit install command is the target UX for CLI, API, built Web assets,
-  an isolated pinned ComfyUI when needed, and compatible CookSprite node packs.
-  Existing local or remote ComfyUI installations use the same API and may be
-  registered without copying or modifying their existing models.
+  packages. In a managed runtime they are installed and verified only by
+  `cspr comfy worker` from that host's local Git clone.
+- A product installation owns CLI, API, and built Web assets. Managed ComfyUI
+  installation is a separate explicit `cspr comfy worker install` operation; Runtime
+  registration through an API never copies or modifies model files.
 - Model downloads are never a startup side effect. An install command must show
   model identity, source, license, size, destination, and obtain explicit
   consent before downloading. Installation must be resumable and verifiable.
@@ -192,8 +200,9 @@ The ComfyUI environment is resolved from `cooksprite/comfy/requirements.in`
 and installed from its generated `requirements.lock`. Tool Package manifests
 are the only source for CookSprite node dependencies; the node requirements
 file and ComfyUI lock are generated, not hand-maintained. A new or changed
-custom node is incomplete until `cspr dev sync`, `cspr comfy lock`, and a
-locked `cspr comfy sync <runtime>` succeed. `uv` is required to refresh locks;
+custom node is incomplete until `cspr dev package sync`, `cspr dev package lock`,
+and a locked `cspr comfy worker sync` succeed on the target ComfyUI host.
+`uv` is required to refresh locks;
 an existing lock may be installed with the release fallback when `uv` is not
 available.
 
@@ -204,8 +213,9 @@ but only an explicit node installation may modify their environment.
 
 ## Project rules
 
-- Stable Actions minimize usage burden; contributor graph APIs are advanced
-  integration surfaces, not normal product UX.
+- Stable Actions minimize usage burden. Public Tool/Workflow/Task CRUD and
+  generic Run submission do not exist; controlled Recipe registration is the
+  only advanced graph-facing API surface.
 - No game-specific geometry, names, assets, or baked direction/canvas policy.
 - No user accounts in v0.1; use trusted localhost or private networking.
 - Do not commit secrets, models, generated outputs, `.env`, `.agent-os`, or

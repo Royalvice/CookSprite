@@ -1,10 +1,20 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
+export type ParameterSchema = {
+  type?: string;
+  title?: string;
+  default?: unknown;
+  minimum?: number;
+  maximum?: number;
+  multipleOf?: number;
+};
+
 export type NormalEstimatorOption = {
   id: string;
   modelId: string;
   label: string;
+  paramsSchema?: { properties?: Record<string, ParameterSchema> };
 };
 
 const props = withDefaults(defineProps<{
@@ -25,11 +35,12 @@ const emit = defineEmits<{
 }>();
 
 const selected = computed(() => props.options.find((option) => option.id === props.model));
-const isNormalCrafter = computed(() => selected.value?.modelId === "normalcrafter-v1");
+const parameterFields = computed(() => Object.entries(selected.value?.paramsSchema?.properties || {}));
 
-function value(name: string, fallback: number) {
-  const raw = Number(props.params[name] ?? fallback);
-  return Number.isFinite(raw) ? raw : fallback;
+function value(name: string, fallback: unknown) {
+  const defaultValue = Number(fallback ?? 0);
+  const raw = Number(props.params[name] ?? defaultValue);
+  return Number.isFinite(raw) ? raw : defaultValue;
 }
 </script>
 
@@ -47,51 +58,18 @@ function value(name: string, fallback: number) {
         <option v-for="option in options" :key="option.id" :value="option.id">{{ option.label }}</option>
       </select>
     </label>
-    <details v-if="advanced && isNormalCrafter" class="normal-estimator-advanced">
+    <details v-if="advanced && parameterFields.length" class="normal-estimator-advanced">
       <summary>{{ $t("normal.advanced") }}</summary>
       <div>
-        <label>
-          <span>{{ $t("normal.maxResolution") }}</span>
+        <label v-for="[name, schema] in parameterFields" :key="name">
+          <span>{{ schema.title || name }}</span>
           <input
-            :value="value('max_resolution', 1024)"
+            :value="value(name, schema.default)"
             type="number"
-            min="256"
-            max="1024"
-            step="64"
-            @change="emit('update:param', 'max_resolution', Number(($event.target as HTMLInputElement).value))"
-          />
-        </label>
-        <label>
-          <span>{{ $t("normal.windowSize") }}</span>
-          <input
-            :value="value('window_size', 14)"
-            type="number"
-            min="2"
-            max="32"
-            step="1"
-            @change="emit('update:param', 'window_size', Number(($event.target as HTMLInputElement).value))"
-          />
-        </label>
-        <label>
-          <span>{{ $t("normal.timeStep") }}</span>
-          <input
-            :value="value('time_step_size', 10)"
-            type="number"
-            min="1"
-            max="32"
-            step="1"
-            @change="emit('update:param', 'time_step_size', Number(($event.target as HTMLInputElement).value))"
-          />
-        </label>
-        <label>
-          <span>{{ $t("normal.decodeChunk") }}</span>
-          <input
-            :value="value('decode_chunk_size', 7)"
-            type="number"
-            min="1"
-            max="32"
-            step="1"
-            @change="emit('update:param', 'decode_chunk_size', Number(($event.target as HTMLInputElement).value))"
+            :min="schema.minimum"
+            :max="schema.maximum"
+            :step="schema.multipleOf || 1"
+            @change="emit('update:param', name, Number(($event.target as HTMLInputElement).value))"
           />
         </label>
       </div>

@@ -12,18 +12,15 @@ from .domain import ActionDescriptor, ArtifactRef, ModelOption, ToolDescriptor
 from .recipes import Recipe, supports
 from .tool_packages import ToolPackageRegistry, tool_packages
 
-ACTION_IDS = (
-    "image.generate",
-    "animation.generate",
-    "frame.redraw",
-    "sheet.slice",
-    "video.sample",
-    "normal.generate",
-    "sprite.pixelize",
-    "image.views",
-    "image.pixelize",
-    "image.cutout",
-)
+_DEFAULT_REGISTRY_PATH = Path(__file__).with_name("actions.yaml")
+
+
+def _registered_action_ids(path: Path = _DEFAULT_REGISTRY_PATH) -> tuple[str, ...]:
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return tuple(str(item["id"]) for item in raw.get("actions", []))
+
+
+ACTION_IDS = _registered_action_ids()
 
 
 class RegistryError(ValueError):
@@ -38,17 +35,30 @@ class CookSpriteRegistry:
         path: str | Path | None = None,
         packages: ToolPackageRegistry = tool_packages,
     ):
-        self.path = Path(path or Path(__file__).with_name("actions.yaml"))
+        self.path = Path(path or _DEFAULT_REGISTRY_PATH)
         self.packages = packages
         raw = yaml.safe_load(self.path.read_text(encoding="utf-8"))
         if raw.get("schema") != "cooksprite.actions/v1":
             raise RegistryError("unsupported Action registry schema")
-        actions = [ActionDescriptor.model_validate(item) for item in raw.get("actions", [])]
+        control_sets = raw.get("control_sets") or {}
+        action_rows: list[dict[str, Any]] = []
+        self._policies: dict[str, dict[str, Any]] = {}
+        for item in raw.get("actions", []):
+            row = dict(item)
+            action_id = str(row["id"])
+            self._policies[action_id] = dict(row.pop("execution", {}) or {})
+            expanded: list[dict[str, Any]] = []
+            for name in row.pop("control_sets", []) or []:
+                values = control_sets.get(name)
+                if not isinstance(values, list):
+                    raise RegistryError(f"{action_id}: unknown control set {name!r}")
+                expanded.extend(values)
+            row["controls"] = [*expanded, *(row.get("controls") or [])]
+            action_rows.append(row)
+        actions = [ActionDescriptor.model_validate(item) for item in action_rows]
         ids = tuple(action.id for action in actions)
         if len(ids) != len(set(ids)):
             raise RegistryError("Action ids must be unique")
-        if ids != ACTION_IDS:
-            raise RegistryError(f"Action ids/order must remain stable: {ACTION_IDS}")
         for action in actions:
             if set(action.i18n) != {"zh-CN", "en"}:
                 raise RegistryError(f"{action.id}: bilingual labels are required")
@@ -70,8 +80,45 @@ class CookSpriteRegistry:
 
         self._examples = dict(examples)
 
+    @property
+    def action_ids(self) -> tuple[str, ...]:
+        return tuple(self._actions)
+
     def get(self, action_id: str) -> ActionDescriptor | None:
         return self._actions.get(action_id)
+
+    def execution(self, action_id: str) -> dict[str, Any]:
+        return dict(self._policies.get(action_id) or {})
+
+    def mode(self, action_id: str, inputs: dict[str, list[str]]) -> str:
+        for rule in self.execution(action_id).get("modes", []):
+            if not isinstance(rule, dict) or not rule.get("mode"):
+                continue
+            input_name = rule.get("when_input")
+            if input_name and not inputs.get(str(input_name)):
+                continue
+            source_kind = rule.get("when_source_kind")
+            if source_kind and inputs.get("__source_kind") != [source_kind]:
+                continue
+            return str(rule["mode"])
+        return ""
+
+    def project_type(
+        self,
+        action_id: str,
+        values: dict[str, Any],
+        current: str,
+    ) -> str:
+        policy = self.execution(action_id)
+        selected = str(policy.get("project_type") or current)
+        for rule in policy.get("project_type_rules", []):
+            if not isinstance(rule, dict):
+                continue
+            conditions = rule.get("when") or {}
+            if isinstance(conditions, dict) and all(values.get(key) == value for key, value in conditions.items()):
+                selected = str(rule.get("type") or selected)
+                break
+        return selected
 
     def tools(self) -> list[ToolDescriptor]:
         return self.packages.tools()
@@ -141,6 +188,9 @@ class CookSpriteRegistry:
                         runtime_id=runtime["id"],
                         family=representative.family,
                         modes=list(dict.fromkeys(mode for item in group for mode in item.modes)),
+                        params_schema=next(
+                            (item.params_schema for item in group if item.params_schema), {}
+                        ),
                     ).model_dump(mode="json")
                 )
         data.update(available=available, unavailable_reason=reason, models=models)
@@ -207,12 +257,8 @@ def _model_identity_label(label: str) -> str:
     return value
 
 
-# Backwards-compatible import name for contributors using the v0.1 API.
-ActionRegistry = CookSpriteRegistry
-
 __all__ = [
     "ACTION_IDS",
-    "ActionRegistry",
     "CookSpriteRegistry",
     "RegistryError",
 ]

@@ -48,6 +48,7 @@ export const useStudioStore = defineStore("studio", () => {
   const documentDirty = ref(false);
   const undoStack = ref<SpriteDocument[]>([]);
   const redoStack = ref<SpriteDocument[]>([]);
+  const operationHistory = ref<Array<{ operation: string; at: string }>>([]);
   let saveTimer = 0;
   let stopEvents: (() => void) | undefined;
   let runtimeRefreshing = false;
@@ -161,6 +162,7 @@ export const useStudioStore = defineStore("studio", () => {
       localStorage.setItem("cooksprite.current-project", project.id);
       undoStack.value = [];
       redoStack.value = [];
+      operationHistory.value = [];
       saveState.value = "saved";
       activeSequence.value = null;
       curatedSequence.value = null;
@@ -219,16 +221,18 @@ export const useStudioStore = defineStore("studio", () => {
       if (next.status === "succeeded") {
         await refreshArtifacts();
         if (actionId && !integrated) lastOutputsByAction.value[actionId] = next.artifacts;
-        if (actionId === "sprite.pixelize" && !integrated && next.artifacts.length) {
+        const normalOutputs = next.artifacts.filter((item) => item.kind === "NormalMap");
+        const visualOutput = next.artifacts.find((item) => item.kind === "Image" || item.kind === "FrameSeq");
+        if (!integrated && normalOutputs.length && visualOutput) {
           integrated = true;
           await attachPixelizedSprite(source, next.artifacts);
-        } else if (actionId && !integrated && SEQUENCE_ACTIONS.has(actionId) && next.artifacts[0]?.kind === "FrameSeq") {
+        } else if (!integrated && visualOutput?.kind === "FrameSeq") {
           integrated = true;
-          await loadSequence(next.artifacts[0].id);
+          await loadSequence(visualOutput.id);
         }
-        if (!integrated && actionId === "normal.generate" && next.artifacts.length) {
+        if (!integrated && normalOutputs.length) {
           integrated = true;
-          attachNormals(source, next.artifacts);
+          attachNormals(source, normalOutputs);
         }
       } else if (next.status === "failed" && actionId) {
         await refreshRuntime();
@@ -237,12 +241,7 @@ export const useStudioStore = defineStore("studio", () => {
   }
 
   async function runAction(actionId: string, inputs: Record<string, string | string[]>, values: Record<string, unknown>, params: Record<string, unknown> = {}) {
-    const projectType: ProjectType = actionId === "animation.generate"
-      ? "character"
-      : actionId === "image.generate" && values.category === "terrain" && (!currentProject.value || currentProject.value.type === "static")
-        ? "tileset"
-        : currentProject.value?.type || "static";
-    const project = await ensureProject(projectType);
+    const project = await ensureProject(currentProject.value?.type || "static");
     await saveDocument();
     if (saveState.value !== "saved") return null;
     error.value = "";
@@ -254,16 +253,14 @@ export const useStudioStore = defineStore("studio", () => {
         values,
         ...(Object.keys(params).length ? { params } : {}),
       });
-      if (project.type !== projectType) {
-        const [updatedProject, updatedDocument] = await Promise.all([
-          api.project(project.id),
-          api.document(project.id),
-        ]);
-        currentProject.value = updatedProject;
-        documentView.value = updatedDocument;
-        const index = projects.value.findIndex((item) => item.id === updatedProject.id);
-        if (index >= 0) projects.value[index] = updatedProject;
-      }
+      const [updatedProject, updatedDocument] = await Promise.all([
+        api.project(project.id),
+        api.document(project.id),
+      ]);
+      currentProject.value = updatedProject;
+      documentView.value = updatedDocument;
+      const index = projects.value.findIndex((item) => item.id === updatedProject.id);
+      if (index >= 0) projects.value[index] = updatedProject;
     } catch (reason) {
       error.value = readableError(reason);
       await refreshRuntime();
@@ -319,7 +316,7 @@ export const useStudioStore = defineStore("studio", () => {
       const next = cloneDocument(documentView.value.document);
       next.type = "character";
       next.character ||= { pivot: { x: 0.5, y: 1 }, clips: [] };
-      next.history.push({ operation: "convert_to_character", at: new Date().toISOString() });
+      operationHistory.value.push({ operation: "convert_to_character", at: new Date().toISOString() });
       documentDirty.value = true;
       documentView.value = await api.putDocument(currentProject.value.id, next, documentView.value.etag);
       documentDirty.value = false;
@@ -357,7 +354,7 @@ export const useStudioStore = defineStore("studio", () => {
     queue.value = {
       running: run.status === "running" || run.status === "cancel_requested" ? [run, ...all.filter((item) => item.status === "running" || item.status === "cancel_requested")] : all.filter((item) => item.status === "running" || item.status === "cancel_requested"),
       pending: run.status === "queued" ? [run, ...all.filter((item) => item.status === "queued")] : all.filter((item) => item.status === "queued"),
-      history: ["succeeded", "failed", "cancelled"].includes(run.status) ? [run, ...all.filter((item) => ["succeeded", "failed", "cancelled"].includes(item.status))] : all.filter((item) => ["succeeded", "failed", "cancelled"].includes(item.status)),
+      history: (["succeeded", "failed", "cancelled"].includes(run.status) ? [run, ...all.filter((item) => ["succeeded", "failed", "cancelled"].includes(item.status))] : all.filter((item) => ["succeeded", "failed", "cancelled"].includes(item.status))).slice(0, 50),
     };
   }
 
@@ -367,7 +364,8 @@ export const useStudioStore = defineStore("studio", () => {
     if (undoStack.value.length > 80) undoStack.value.shift();
     redoStack.value = [];
     change(documentView.value.document);
-    documentView.value.document.history.push({ operation, at: new Date().toISOString() });
+    operationHistory.value.push({ operation, at: new Date().toISOString() });
+    if (operationHistory.value.length > 80) operationHistory.value.shift();
     documentDirty.value = true;
     scheduleSave();
   }
@@ -479,6 +477,8 @@ export const useStudioStore = defineStore("studio", () => {
     if (!documentView.value || !undoStack.value.length) return;
     redoStack.value.push(cloneDocument(documentView.value.document));
     documentView.value.document = undoStack.value.pop()!;
+    documentDirty.value = true;
+    operationHistory.value.push({ operation: "undo", at: new Date().toISOString() });
     scheduleSave();
   }
 
@@ -486,6 +486,8 @@ export const useStudioStore = defineStore("studio", () => {
     if (!documentView.value || !redoStack.value.length) return;
     undoStack.value.push(cloneDocument(documentView.value.document));
     documentView.value.document = redoStack.value.pop()!;
+    documentDirty.value = true;
+    operationHistory.value.push({ operation: "redo", at: new Date().toISOString() });
     scheduleSave();
   }
 
@@ -530,14 +532,12 @@ export const useStudioStore = defineStore("studio", () => {
 
   return {
     actions, projects, runtimes, activeRuntimeId, gallery, currentProject, documentView, document, artifacts, allArtifacts,
-    queue, runtimeStatus, runtimeError, runtimeReady, activeSequence, curatedSequence, lastOutputsByAction, activeRun, loading, error, saveState, undoStack, redoStack,
+    queue, runtimeStatus, runtimeError, runtimeReady, activeSequence, curatedSequence, lastOutputsByAction, activeRun, loading, error, saveState, undoStack, redoStack, operationHistory,
     runningCount, artifactById,
     initialize, refreshActions, refreshRuntimes, selectRuntime, refreshRuntime, ensureProject, createProject, ensureCharacterDocument, openProject, patchProject, refreshArtifacts, upload, runAction, readSequence, loadSequence, loadCuratedSequence, materializeTrackSequence,
     cancel, retry, refreshQueue, mutateDocument, undo, redo, saveDocument, publish, exportPack,
   };
 });
-
-const SEQUENCE_ACTIONS = new Set(["animation.generate", "sheet.slice", "video.sample", "image.pixelize"]);
 
 function readableError(reason: unknown): string {
   if (reason instanceof ApiError) return reason.detail.message || reason.message;

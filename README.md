@@ -1,152 +1,100 @@
 # CookSprite
 
-CookSprite is a local-first, open-source AI Sprite studio. Its signature asset
-is a `SpritePair`: diffuse art plus a same-size normal map that can be tested
-under live light before export.
+CookSprite is a local-first open-source AI sprite studio. Every Git clone has
+the same capabilities: it may run Web, API, CLI, or a managed ComfyUI Runtime.
+Projects and Artifacts live with the selected CookSprite API data directory;
+inference runs in the ComfyUI Runtime selected by that API.
 
-The product has one execution boundary:
-
-```text
-Vue Web UI / cspr CLI / agent Skill
-                  │
-                  ▼
-       CookSprite /api/v1 Actions
-                  │
-                  ▼
-               ComfyUI
-                  │
-                  ▼
-    SHA-256 CookSprite artifacts
-```
-
-The browser never talks to ComfyUI and never contains inference logic. The API
-validates a registered Action, compiles its private graph, tracks the run, and
-stores only declared outputs. ComfyUI is the sole media execution runtime.
-
-## Mac control plane + H20 compute worker
-
-The production two-machine topology is deliberately asymmetric:
-
-```text
-Mac: CookSprite Web + API + CLI + Project/Artifact Store
-                         │ typed Run + scoped bridge URLs
-                         ▼
-H20: one Git clone + one managed ComfyUI runtime + nodes + models + GPU
-                         │ CS_StoreArtifact
-                         ▼
-Mac: immutable SHA-256 artifacts and export packages
-```
-
-The API host owns every Project, SQLite record, and final artifact. The H20
-host owns GPU compute only; it does not run the CookSprite product API or keep
-a second artifact database. The two machines synchronize source only through
-the shared Git remote (`git push` and `git pull --ff-only`), never through
-directory copies or ad-hoc deployment scripts.
-
-On H20, run the compute worker from the single Git clone:
+## Install
 
 ```bash
-cspr worker init --runtime-dir ../runtime --cuda-device 0
-cspr worker install --runtime-dir ../runtime
-cspr worker sync --runtime-dir ../runtime
-cspr worker start --runtime-dir ../runtime
-cspr worker doctor --runtime-dir ../runtime --json
+git clone https://github.com/Royalvice/CookSprite.git
+cd CookSprite
+uv sync --extra dev
 ```
 
-`cspr worker` is the only supported H20 lifecycle interface. It records a
-non-secret worker/runtime identity, requires a clean Git source, fast-forwards
-from the configured remote branch, and refuses to alter a running or unknown
-ComfyUI listener. Node deployment is staged and atomically renamed while the
-worker is stopped; the loaded node pack exposes its safe source/lock/version
-identity at `/cooksprite/runtime-info`, which worker start/doctor verify.
-Model downloads remain explicit and are not part of worker startup.
-
-On Mac, register H20 as a remote Runtime with an explicit callback URL that
-H20 can reach. The callback is where the artifact bridge reads source inputs
-and writes final output bytes; no H20 Comfy output directory is a product
-artifact store.
-
-## Included in v0.1
-
-- Vue 3 + TypeScript workbench with image, same-page animation curation, normal
-  preview, library, queue, gallery, and export stages.
-- Six bilingual inference Actions shared by Web, CLI, and agents:
-  `image.generate`, `animation.generate`, `frame.redraw`, `sheet.slice`,
-  `video.sample`, and `normal.generate`. Project export is a separate project
-  operation because it does not execute media computation in ComfyUI.
-- Eight real direction tracks, level/top-45 views, per-frame timing and offsets,
-  original-preserving redraw variants, and undo/redo.
-- Typed `FrameSeq` manifests with ordered reusable `Image` frames.
-- Three.js normal-map preview with direct light dragging, a visible light gizmo,
-  full normal-map view, and neutral/day/night CC0 HDR environments.
-- One canonical `.cooksprite` ZIP package and a Godot 4.4+ importer.
-- Local SQLite metadata and SHA-256 content-addressed blobs. No account,
-  telemetry, remote gallery, or download without an explicit setup command/click.
-
-## Run locally
-
-Release wheels contain the built Vue frontend, CLI, API, node pack, and Agent
-Skill. End users do not need Node.js:
+Source clones synchronize only through their shared Git remote:
 
 ```bash
-python -m pip install cooksprite
-cspr install
-cspr start
+git pull --ff-only
+git push
 ```
 
-`cspr start` starts the managed ComfyUI runtime, CookSprite API, and the Vue
-development frontend. Open `http://127.0.0.1:5173`; the frontend proxies
-CookSprite API requests to port `8000`. If any requested port is occupied,
-CookSprite selects the next available port and prints the actual URLs.
-All server entry points use the same data directory from
-`~/.cooksprite/config.toml` (default `~/.cooksprite/data`). Passing
-`--data-dir <path>` once makes that path the default for later `start` and
-`serve` commands, preventing separate databases or artifact stores.
-
-To browse the workbench without starting a local ComfyUI, start the API and
-frontend only:
+## Start CookSprite
 
 ```bash
-cspr start --no-comfy
+uv run cspr service start --data-dir ~/.cooksprite/data
 ```
 
-The workbench remains visible without a runtime, but generation Actions are
-disabled until a trusted ComfyUI is registered and checked:
+For a ComfyUI Runtime on another computer, expose an API callback URL reachable
+from that Runtime:
 
 ```bash
-cspr comfy probe-local --url http://127.0.0.1:8188
-cspr comfy import --label "Local ComfyUI" --url http://127.0.0.1:8188 --location local
-cspr comfy doctor --runtime <runtime-id-from-the-response>
+uv run cspr service start \
+  --data-dir ~/.cooksprite/data \
+  --public-api-url https://api.example.test/api/v1
 ```
 
-The Settings page uses the same compact flow: enter one ComfyUI URL, then
-choose local or remote. Runtime IDs are generated from the endpoint when
-omitted, existing local directories are inferred from the process serving the
-URL, and a remote URL is probe-only. If a remote host lacks CookSprite nodes,
-install them on that host with `cspr comfy install-nodes <ComfyUI directory>`
-and reconnect; CookSprite never writes into a remote filesystem from a URL.
+`cspr service start` starts the product API and packaged Web UI in the background. It never installs,
+starts, stops, or updates ComfyUI.
 
-If ComfyUI is not installed, the Settings page or this explicit command installs
-only an isolated pinned runtime and the CookSprite node pack from the locked
-ComfyUI dependency set. It never downloads a starter model. Select or register models through the connected ComfyUI;
-existing ComfyUI installations and model directories are never modified by the installer. Contributors
-may still run the API and Vite development server separately with `cspr serve`
-and `npm run dev` when they need independent reload control. Use
-`cspr start --no-frontend` when only the API and ComfyUI are needed.
+## Connect ComfyUI
 
-Dependency updates are explicit and locked. After adding a Tool Package or
-custom node, run `cspr dev sync`, then `cspr env lock` and
-`cspr env sync --comfy-dir ~/.cooksprite/runtime`. A normal ComfyUI sync refuses
-to use a stale lock.
-Every compatible checkpoint already visible to that ComfyUI becomes a selectable
-text/image Recipe. Existing image-to-video or text-to-video API workflows stay
-in ComfyUI and can be registered as a small Recipe adapter; their declared
-`i2v`/`t2v` modes appear in the same animation model selector. On NVIDIA Linux,
-the managed installer pins a CUDA 12.6 PyTorch build instead of accepting an
-incompatible newest-CUDA wheel from a partial package mirror.
+```bash
+uv run cspr comfy connect import \
+  --label ComfyUI \
+  --url http://127.0.0.1:8188 \
+  --location local
 
-Start with [architecture](docs/01_ARCHITECTURE.md), the
-[Action/API contract](docs/02_INFERENCE_API.md), and the
-[authoring workflow](docs/03_WORKFLOW.md). Contributor-level Comfy details live
-in [runtime integration](docs/04_COMFYUI_EXPORT.md); the existing
-[capability map](docs/05_COMFYUI_CAPABILITY_MAP.md) is preserved separately.
+uv run cspr comfy inspect doctor --runtime <runtime-id>
+uv run cspr comfy connect select --runtime <runtime-id>
+```
+
+For a remote Runtime, use `--location remote` and provide `--callback-url`.
+
+CookSprite can optionally create and manage a dedicated ComfyUI Runtime:
+
+```bash
+uv run cspr comfy worker init --runtime-dir ../worker-runtime --device auto
+uv run cspr comfy worker install --runtime-dir ../worker-runtime
+uv run cspr comfy worker start --runtime-dir ../worker-runtime
+uv run cspr comfy worker doctor --runtime-dir ../worker-runtime --json
+```
+
+The default device policy is shared. Optional CUDA exclusivity is explicit:
+
+```bash
+uv run cspr comfy worker init \
+  --runtime-dir ../worker-runtime \
+  --device cuda:0 \
+  --exclusive
+```
+
+## Use the CLI
+
+```bash
+uv run cspr action
+uv run cspr project create --name "Forest mage" --type character
+uv run cspr artifact upload hero.png --project <project-id>
+uv run cspr action run image.generate \
+  --project <project-id> \
+  --value prompt="tiny forest mage" \
+  --wait
+uv run cspr project export <project-id> --wait
+```
+
+## Development
+
+```bash
+uv run cspr dev package sync
+uv run cspr dev package lock
+uv run cspr dev check
+ruff check .
+pytest -q
+cd web && npm ci && npm run build && npm test
+```
+
+See [architecture](docs/01_ARCHITECTURE.md),
+[API](docs/02_INFERENCE_API.md),
+[managed worker](docs/07_MANAGED_WORKER.md), and
+[dependencies](docs/06_DEPENDENCY_ENVIRONMENT.md).

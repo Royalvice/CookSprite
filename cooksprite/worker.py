@@ -1,9 +1,10 @@
-"""Compute-only CookSprite worker lifecycle.
+"""Managed ComfyUI worker lifecycle.
 
 This module deliberately has no dependency on the product API, SQLite store,
 or artifact implementation.  A worker owns one local Git worktree and one
-managed ComfyUI runtime; the Mac control plane owns every Project, Run, and
-Artifact.  Source updates are performed exclusively with ``git pull --ff-only``.
+managed ComfyUI runtime. Projects, Runs, and Artifacts belong to whichever
+CookSprite API/data directory submits work to that runtime. Source updates are
+performed exclusively with ``git pull --ff-only``.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import json
 import os
 import socket
 import subprocess
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,10 +35,12 @@ from .tool_packages import tool_packages
 from .version import NODE_PACK_VERSION
 
 
-WORKER_SCHEMA = "cooksprite.worker/v1"
+WORKER_SCHEMA = "cooksprite.worker/v2"
 RUNTIME_SCHEMA = "cooksprite.worker-runtime/v1"
 WORKER_CONFIG_NAME = "worker.json"
 RUNTIME_IDENTITY_NAME = "cooksprite-runtime.json"
+DEFAULT_RUNTIME_DIR_NAME = "worker-runtime"
+DEFAULT_WORKER_PORT = 8288
 
 
 class WorkerError(RuntimeError):
@@ -44,8 +48,59 @@ class WorkerError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class DeviceSpec:
+    """Backend-neutral accelerator preference passed to ComfyUI."""
+
+    backend: str
+    index: int | None = None
+
+    @classmethod
+    def parse(cls, value: str | None) -> DeviceSpec:
+        raw = str(value or "auto").strip().lower()
+        backend, separator, raw_index = raw.partition(":")
+        if backend not in {"auto", "cpu", "cuda", "rocm", "mps"}:
+            raise WorkerError("device must be auto, cpu, cuda[:N], rocm[:N], or mps")
+        if separator:
+            if backend not in {"cuda", "rocm"} or not raw_index.isdigit():
+                raise WorkerError("only cuda and rocm devices accept a non-negative index")
+            return cls(backend, int(raw_index))
+        return cls(backend)
+
+    @property
+    def value(self) -> str:
+        return f"{self.backend}:{self.index}" if self.index is not None else self.backend
+
+    @property
+    def launch_arguments(self) -> tuple[str, ...]:
+        return DEVICE_ARGUMENT_ADAPTERS[self.backend](self)
+
+
+def _automatic_arguments(spec: DeviceSpec) -> tuple[str, ...]:
+    return ()
+
+
+def _cpu_arguments(spec: DeviceSpec) -> tuple[str, ...]:
+    return ("--cpu",)
+
+
+def _indexed_arguments(spec: DeviceSpec) -> tuple[str, ...]:
+    # ROCm exposes devices through torch.cuda and uses ComfyUI's public
+    # device-selection argument too.
+    return ("--cuda-device", str(spec.index)) if spec.index is not None else ()
+
+
+DEVICE_ARGUMENT_ADAPTERS: dict[str, Callable[[DeviceSpec], tuple[str, ...]]] = {
+    "auto": _automatic_arguments,
+    "cpu": _cpu_arguments,
+    "cuda": _indexed_arguments,
+    "rocm": _indexed_arguments,
+    "mps": _automatic_arguments,
+}
+
+
+@dataclass(frozen=True)
 class WorkerConfig:
-    """The small, non-secret H20 worker configuration persisted beside runtime."""
+    """The small, non-secret worker configuration persisted beside its runtime."""
 
     schema: str
     source_dir: str
@@ -55,7 +110,8 @@ class WorkerConfig:
     source_origin: str | None
     host: str
     port: int
-    cuda_device: int | None
+    device: str
+    exclusive: bool
     node_pack_version: str
     created_at: str
 
@@ -67,7 +123,7 @@ class WorkerConfig:
         except FileNotFoundError as exc:
             raise WorkerError(
                 f"worker is not initialized at {Path(runtime_dir).expanduser().resolve()}; "
-                "run `cspr worker init` first"
+                "run `cspr comfy worker init` first"
             ) from exc
         except (OSError, json.JSONDecodeError) as exc:
             raise WorkerError(f"worker configuration is unreadable: {path}") from exc
@@ -79,8 +135,11 @@ class WorkerConfig:
             "runtime_dir",
             "branch",
             "source_revision",
+            "source_origin",
             "host",
             "port",
+            "device",
+            "exclusive",
             "node_pack_version",
             "created_at",
         }
@@ -99,6 +158,9 @@ class WorkerConfig:
             raise WorkerError("worker configuration runtime path does not match its location")
         if not str(raw["branch"]).strip():
             raise WorkerError("worker configuration branch is empty")
+        source_origin = str(raw["source_origin"] or "").strip()
+        if not source_origin:
+            raise WorkerError("worker configuration source origin is empty")
         host = str(raw["host"]).strip()
         if not host:
             raise WorkerError("worker configuration host is empty")
@@ -108,10 +170,11 @@ class WorkerConfig:
             runtime_dir=str(runtime),
             branch=str(raw["branch"]),
             source_revision=str(raw["source_revision"]),
-            source_origin=str(raw["source_origin"]) if raw.get("source_origin") else None,
+            source_origin=source_origin,
             host=host,
             port=port,
-            cuda_device=int(raw["cuda_device"]) if raw.get("cuda_device") is not None else None,
+            device=DeviceSpec.parse(str(raw["device"])).value,
+            exclusive=bool(raw["exclusive"]),
             node_pack_version=str(raw["node_pack_version"]),
             created_at=str(raw["created_at"]),
         )
@@ -134,9 +197,54 @@ def runtime_identity_path(runtime_dir: str | Path) -> Path:
 
 
 def default_runtime_dir(source_dir: str | Path) -> Path:
-    """Use the sibling runtime directory, never a directory under Git source."""
+    """Return the dedicated worker-runtime sibling for a source clone.
 
-    return Path(source_dir).expanduser().resolve().parent / "runtime"
+    ``runtime`` is deliberately not the default name.  It is a common legacy
+    ComfyUI location, so using it would make an otherwise harmless worker
+    command capable of targeting a pre-existing deployment by accident.
+    """
+
+    return Path(source_dir).expanduser().resolve().parent / DEFAULT_RUNTIME_DIR_NAME
+
+
+def _is_empty_directory(path: Path) -> bool:
+    """Return whether ``path`` is absent or contains no entries."""
+
+    return not path.exists() or not any(path.iterdir())
+
+
+def _require_initializable_runtime(
+    runtime: Path,
+    source: Path,
+    *,
+    force: bool,
+) -> None:
+    """Refuse to adopt an arbitrary pre-existing ComfyUI directory.
+
+    A worker can create a new empty directory, or reconfigure its own stopped
+    runtime with ``--force``.  It must never plant a worker manifest inside an
+    existing legacy or user-owned runtime: doing so would make later lifecycle
+    commands appear to own a process they did not create.
+    """
+
+    config_path = worker_config_path(runtime)
+    if not config_path.exists():
+        if not _is_empty_directory(runtime):
+            raise WorkerError(
+                "refusing to initialize a non-empty runtime directory; "
+                "cspr comfy worker never adopts an existing ComfyUI deployment. "
+                "Choose a new empty worker-runtime directory instead"
+            )
+        return
+    if not force:
+        raise WorkerError(f"worker is already initialized at {runtime}; use --force only to replace its manifest")
+
+    existing = WorkerConfig.load(runtime)
+    if Path(existing.source_dir) != source:
+        raise WorkerError(
+            "refusing to replace a worker manifest owned by a different source worktree"
+        )
+    _require_port_idle(existing)
 
 
 def _write_json(path: Path, value: dict[str, Any]) -> None:
@@ -224,6 +332,28 @@ def _require_clean_source(source_dir: str | Path) -> dict[str, Any]:
     return identity
 
 
+def _require_pinned_origin(config: WorkerConfig, identity: dict[str, Any]) -> None:
+    """Reject a source whose configured remote changed after worker initialization.
+
+    A clean Git worktree is not enough: a worker host must only deploy the
+    branch from the exact remote that was recorded when the worker was
+    initialized.  The identity exposes a credential-redacted URL, so this
+    comparison never reads or prints a Git token.
+    """
+
+    expected = str(config.source_origin or "").strip()
+    observed = str(identity.get("origin") or "").strip()
+    if not expected:
+        raise WorkerError("worker configuration has no pinned source origin; reinitialize it")
+    if not observed:
+        raise WorkerError("worker source has no origin remote; refusing to deploy local-only code")
+    if observed != expected:
+        raise WorkerError(
+            "worker source origin differs from the initialized remote; "
+            "refusing to deploy code from a changed remote"
+        )
+
+
 def worker_url(config: WorkerConfig) -> str:
     host = config.host
     display_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
@@ -242,15 +372,175 @@ def port_open(host: str, port: int) -> bool:
         return False
 
 
+def _nvidia_smi(*arguments: str) -> subprocess.CompletedProcess[str]:
+    """Run the vendor CLI without importing CUDA into the API/CLI environment."""
+
+    try:
+        return subprocess.run(
+            ["nvidia-smi", *arguments],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise WorkerError(f"could not inspect NVIDIA GPU ownership: {exc}") from exc
+
+
 def _pid_command(pid: int) -> str:
     if pid <= 0:
         return ""
     try:
-        return (Path("/proc") / str(pid) / "cmdline").read_bytes().replace(b"\0", b" ").decode(
-            "utf-8", errors="replace"
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
         )
-    except OSError:
+    except (OSError, subprocess.SubprocessError):
         return ""
+    return result.stdout.strip()
+
+
+def _cuda_resource_status(config: WorkerConfig, spec: DeviceSpec) -> dict[str, Any]:
+    """Inspect one explicitly selected NVIDIA device for the CUDA adapter."""
+
+    device = spec.index
+    if device is None:
+        return {
+            "backend": spec.backend,
+            "device": spec.value,
+            "policy": "exclusive",
+            "state": "invalid_device",
+            "processes": [],
+            "error": "exclusive CUDA inspection requires cuda:N",
+        }
+    devices = _nvidia_smi("--query-gpu=index,uuid", "--format=csv,noheader,nounits")
+    if devices.returncode:
+        detail = (devices.stderr or devices.stdout).strip() or "nvidia-smi failed"
+        return {
+            "backend": spec.backend,
+            "device": spec.value,
+            "policy": "exclusive",
+            "state": "unavailable",
+            "processes": [],
+            "error": detail,
+        }
+    gpu_uuid = next(
+        (
+            values[1].strip()
+            for line in devices.stdout.splitlines()
+            if len(values := line.split(",", 1)) == 2 and values[0].strip() == str(device)
+        ),
+        None,
+    )
+    if not gpu_uuid:
+        return {
+            "backend": spec.backend,
+            "device": spec.value,
+            "policy": "exclusive",
+            "state": "invalid_device",
+            "processes": [],
+            "error": f"device {spec.value} was not reported by nvidia-smi",
+        }
+    applications = _nvidia_smi(
+        "--query-compute-apps=pid,process_name,used_memory,gpu_uuid",
+        "--format=csv,noheader,nounits",
+    )
+    if applications.returncode:
+        detail = (applications.stderr or applications.stdout).strip() or "nvidia-smi failed"
+        return {
+            "backend": spec.backend,
+            "device": spec.value,
+            "policy": "exclusive",
+            "state": "unavailable",
+            "processes": [],
+            "error": detail,
+        }
+    identity = _read_runtime_identity(config) or {}
+    owned_pid = int(identity.get("pid") or 0)
+    ownership_verified = bool(
+        owned_pid and _owns_process(config, identity, source_identity(config.source_dir))
+    )
+    processes: list[dict[str, Any]] = []
+    for line in applications.stdout.splitlines():
+        values = [value.strip() for value in line.split(",", 3)]
+        if len(values) != 4 or values[3] != gpu_uuid:
+            continue
+        try:
+            pid = int(values[0])
+        except ValueError:
+            continue
+        owned = pid == owned_pid and ownership_verified
+        try:
+            used_memory_mib = int(values[2])
+        except ValueError:
+            used_memory_mib = None
+        processes.append(
+            {
+                "pid": pid,
+                "process_name": values[1] or "unknown",
+                "used_memory_mib": used_memory_mib,
+                "owned": owned,
+            }
+        )
+    foreign = [item for item in processes if not item["owned"]]
+    return {
+        "backend": spec.backend,
+        "device": spec.value,
+        "policy": "exclusive",
+        "state": "idle" if not processes else "owned" if not foreign else "occupied",
+        "processes": processes,
+    }
+
+
+RESOURCE_INSPECTORS = {"cuda": _cuda_resource_status}
+
+
+def resource_status(config: WorkerConfig) -> dict[str, Any]:
+    spec = DeviceSpec.parse(config.device)
+    if not config.exclusive:
+        return {
+            "backend": spec.backend,
+            "device": spec.value,
+            "policy": "shared",
+            "state": "unchecked",
+            "processes": [],
+        }
+    inspector = RESOURCE_INSPECTORS.get(spec.backend)
+    if inspector is None:
+        return {
+            "backend": spec.backend,
+            "device": spec.value,
+            "policy": "exclusive",
+            "state": "unsupported",
+            "processes": [],
+            "error": f"no exclusive resource inspector is registered for {spec.backend}",
+        }
+    return inspector(config, spec)
+
+
+def _require_resource_available(config: WorkerConfig) -> None:
+    """Enforce only an explicitly requested resource-exclusivity policy."""
+
+    status = resource_status(config)
+    state = status["state"]
+    if state in {"unavailable", "invalid_device", "unsupported"}:
+        raise WorkerError(
+            "worker cannot enforce exclusive resource ownership: "
+            + str(status.get("error") or state)
+        )
+    foreign = [item for item in status["processes"] if not item["owned"]]
+    if foreign:
+        detail = ", ".join(
+            f"pid={item['pid']} ({item['process_name']}, {item['used_memory_mib']} MiB)"
+            for item in foreign
+        )
+        raise WorkerError(
+            f"configured device {status['device']} is occupied by {detail}; "
+            "choose an idle resource or disable --exclusive"
+        )
 
 
 def _read_runtime_identity(config: WorkerConfig) -> dict[str, Any] | None:
@@ -354,14 +644,17 @@ def initialize_worker(
     *,
     runtime_dir: str | Path | None = None,
     host: str = "127.0.0.1",
-    port: int = 8188,
-    cuda_device: int | None = None,
+    port: int = DEFAULT_WORKER_PORT,
+    device: str = "auto",
+    exclusive: bool = False,
     branch: str | None = None,
     force: bool = False,
 ) -> WorkerConfig:
     """Create the worker manifest without installing models or starting ComfyUI."""
 
     identity = _require_clean_source(source_dir)
+    if not identity.get("origin"):
+        raise WorkerError("worker source has no origin remote; initialize from the authoritative Git clone")
     selected_branch = branch or str(identity["branch"])
     if selected_branch != identity["branch"]:
         raise WorkerError(
@@ -369,13 +662,17 @@ def initialize_worker(
         )
     if not 1 <= int(port) <= 65535:
         raise WorkerError("worker port must be inside 1..65535")
+    selected_device = DeviceSpec.parse(device)
+    if exclusive and selected_device.backend not in RESOURCE_INSPECTORS:
+        raise WorkerError(
+            f"no exclusive resource inspector is registered for {selected_device.backend}"
+        )
     source = Path(identity["source_dir"])
     runtime = Path(runtime_dir).expanduser().resolve() if runtime_dir else default_runtime_dir(source)
     if runtime == source or source in runtime.parents:
         raise WorkerError("worker runtime must be outside the Git source worktree")
+    _require_initializable_runtime(runtime, source, force=force)
     config_path = worker_config_path(runtime)
-    if config_path.exists() and not force:
-        raise WorkerError(f"worker is already initialized at {runtime}; use --force only to replace its manifest")
     config = WorkerConfig(
         schema=WORKER_SCHEMA,
         source_dir=str(source),
@@ -385,7 +682,8 @@ def initialize_worker(
         source_origin=identity["origin"],
         host=host,
         port=int(port),
-        cuda_device=cuda_device,
+        device=selected_device.value,
+        exclusive=bool(exclusive),
         node_pack_version=NODE_PACK_VERSION,
         created_at=_now(),
     )
@@ -400,10 +698,11 @@ def _refresh_config(config: WorkerConfig, identity: dict[str, Any]) -> WorkerCon
         runtime_dir=config.runtime_dir,
         branch=str(identity["branch"]),
         source_revision=str(identity["revision"]),
-        source_origin=identity["origin"],
+        source_origin=config.source_origin,
         host=config.host,
         port=config.port,
-        cuda_device=config.cuda_device,
+        device=config.device,
+        exclusive=config.exclusive,
         node_pack_version=NODE_PACK_VERSION,
         created_at=config.created_at,
     )
@@ -416,7 +715,7 @@ def _require_installed_runtime(config: WorkerConfig) -> Path:
     main = runtime / "ComfyUI" / "main.py"
     if not main.is_file():
         raise WorkerError(
-            f"managed ComfyUI is not installed at {runtime}; run `cspr worker install` first"
+            f"managed ComfyUI is not installed at {runtime}; run `cspr comfy worker install` first"
         )
     return runtime
 
@@ -443,33 +742,37 @@ def pull_source(config: WorkerConfig) -> dict[str, Any]:
     """Advance exactly one clean worker branch through remote Git fast-forward."""
 
     identity = _require_clean_source(config.source_dir)
+    _require_pinned_origin(config, identity)
     if identity["branch"] != config.branch:
         raise WorkerError(
             f"worker is configured for branch {config.branch!r}, but source is on {identity['branch']!r}"
         )
-    result = _git(Path(config.source_dir), "pull", "--ff-only", "origin", config.branch, check=False)
+    source = Path(config.source_dir)
+    result = _git(source, "pull", "--ff-only", "origin", config.branch, check=False)
     if result.returncode:
         detail = (result.stderr or result.stdout).strip()
         raise WorkerError(f"git pull --ff-only failed: {detail or 'unknown Git failure'}")
-    return _require_clean_source(config.source_dir)
+    fetched_revision = _git_text(source, "rev-parse", "FETCH_HEAD")
+    refreshed = _require_clean_source(config.source_dir)
+    _require_pinned_origin(config, refreshed)
+    if refreshed["revision"] != fetched_revision:
+        raise WorkerError(
+            "worker source HEAD is not exactly the commit fetched from origin; "
+            "refusing to deploy local-only commits"
+        )
+    return refreshed
 
 
-def sync_worker(
-    config: WorkerConfig,
-    *,
-    pull: bool = True,
-    dependencies: bool = True,
-) -> dict[str, Any]:
+def sync_worker(config: WorkerConfig) -> dict[str, Any]:
     """Synchronize one stopped worker from its Git source into its local runtime."""
 
     _require_port_idle(config)
-    identity = pull_source(config) if pull else _require_clean_source(config.source_dir)
+    identity = pull_source(config)
     if identity["branch"] != config.branch:
         raise WorkerError("source branch changed during worker sync")
     config = _refresh_config(config, identity)
     runtime = _require_installed_runtime(config)
-    if dependencies:
-        sync_dependencies(runtime)
+    sync_dependencies(runtime)
     expected_runtime_identity = _runtime_identity_payload(config, identity)
     nodes = install_node_pack(
         runtime,
@@ -481,8 +784,8 @@ def sync_worker(
         "config": asdict(config),
         "runtime_identity": runtime_identity,
         "nodes": str(nodes),
-        "dependencies_synced": dependencies,
-        "pulled": pull,
+        "dependencies_synced": True,
+        "pulled": True,
     }
 
 
@@ -491,10 +794,10 @@ def install_worker(
     *,
     python_executable: str | None = None,
 ) -> dict[str, Any]:
-    """Explicitly install the H20-managed ComfyUI runtime, without models."""
+    """Explicitly install the managed ComfyUI runtime, without models."""
 
     _require_port_idle(config)
-    identity = _require_clean_source(config.source_dir)
+    identity = pull_source(config)
     runtime = Path(config.runtime_dir)
     config = _refresh_config(config, identity)
     expected_runtime_identity = _runtime_identity_payload(config, identity)
@@ -514,15 +817,15 @@ def install_worker(
 def _runtime_is_current(config: WorkerConfig, identity: dict[str, Any]) -> None:
     runtime_identity = _read_runtime_identity(config)
     if not runtime_identity or runtime_identity.get("schema") != RUNTIME_SCHEMA:
-        raise WorkerError("worker runtime identity is missing; run `cspr worker sync` first")
+        raise WorkerError("worker runtime identity is missing; run `cspr comfy worker sync` first")
     if runtime_identity.get("source_revision") != identity["revision"]:
-        raise WorkerError("worker runtime source revision is stale; run `cspr worker sync` first")
+        raise WorkerError("worker runtime source revision is stale; run `cspr comfy worker sync` first")
     if runtime_identity.get("node_pack_version") != NODE_PACK_VERSION:
-        raise WorkerError("worker runtime node pack is stale; run `cspr worker sync` first")
+        raise WorkerError("worker runtime node pack is stale; run `cspr comfy worker sync` first")
     if runtime_identity.get("dependency_lock_sha256") != _lock_digest(Path(identity["source_dir"])):
-        raise WorkerError("worker runtime dependency lock is stale; run `cspr worker sync` first")
+        raise WorkerError("worker runtime dependency lock is stale; run `cspr comfy worker sync` first")
     if _node_version(config) != NODE_PACK_VERSION:
-        raise WorkerError("installed CookSprite node pack is stale; run `cspr worker sync` first")
+        raise WorkerError("installed CookSprite node pack is stale; run `cspr comfy worker sync` first")
     expected = _runtime_identity_payload(config, identity)
     errors = _runtime_identity_errors(
         read_node_pack_runtime_info(config.runtime_dir),
@@ -530,7 +833,28 @@ def _runtime_is_current(config: WorkerConfig, identity: dict[str, Any]) -> None:
         subject="installed node-pack runtime identity",
     )
     if errors:
-        raise WorkerError("; ".join(errors) + "; run `cspr worker sync` first")
+        raise WorkerError("; ".join(errors) + "; run `cspr comfy worker sync` first")
+
+
+def _owns_process(
+    config: WorkerConfig,
+    runtime_identity: dict[str, Any] | None,
+    source: dict[str, Any],
+) -> bool:
+    """Prove PID, checkout path, and live node-pack identity together."""
+
+    pid = int((runtime_identity or {}).get("pid") or 0)
+    command = _pid_command(pid)
+    if not command or str(Path(config.runtime_dir) / "ComfyUI") not in command:
+        return False
+    if not port_open(config.host, config.port):
+        return False
+    try:
+        live = ComfyClient(worker_url(config)).runtime_info()
+    except Exception:  # noqa: BLE001 - a failed proof must never imply ownership.
+        return False
+    expected = _runtime_identity_payload(config, source)
+    return not _runtime_identity_errors(live, expected, subject="live runtime identity")
 
 
 def start_worker(config: WorkerConfig, *, timeout: float = 180) -> dict[str, Any]:
@@ -541,19 +865,18 @@ def start_worker(config: WorkerConfig, *, timeout: float = 180) -> dict[str, Any
     _runtime_is_current(config, identity)
     state = _read_runtime_identity(config) or {}
     if port_open(config.host, config.port):
-        pid = int(state.get("pid") or 0)
-        command = _pid_command(pid)
-        expected = str(runtime / "ComfyUI")
-        if command and expected in command:
+        if _owns_process(config, state, identity):
             return {"already_running": True, "status": worker_status(config)}
         raise WorkerError(
             f"{worker_url(config)} is already occupied by a process this worker does not own"
         )
+    _require_resource_available(config)
+    device = DeviceSpec.parse(config.device)
     launch = launch_with_preference(
         runtime,
         host=config.host,
         port=config.port,
-        cuda_device=config.cuda_device,
+        arguments=device.launch_arguments,
     )
     try:
         report = wait_until_ready(worker_url(config), timeout=timeout)
@@ -595,17 +918,14 @@ def stop_worker(config: WorkerConfig) -> dict[str, Any]:
 
     runtime = _require_installed_runtime(config)
     state = _read_runtime_identity(config) or {}
-    pid = int(state.get("pid") or 0)
-    command = _pid_command(pid)
-    expected = str(runtime / "ComfyUI")
-    if not command or expected not in command:
+    identity = _require_clean_source(config.source_dir)
+    if not _owns_process(config, state, identity):
         raise WorkerError(
             "configured worker has no owned ComfyUI process; refusing to stop an unknown listener"
         )
     method = stop_with_preference(runtime, port=config.port)
     if method == "none" and port_open(config.host, config.port):
         raise WorkerError("configured ComfyUI process could not be stopped")
-    identity = _require_clean_source(config.source_dir)
     runtime_identity = _write_runtime_identity(config, identity, stopped=True)
     return {"stopped": True, "method": method, "runtime_identity": runtime_identity}
 
@@ -631,8 +951,7 @@ def worker_status(config: WorkerConfig) -> dict[str, Any]:
     runtime = Path(config.runtime_dir)
     runtime_identity = _read_runtime_identity(config)
     pid = int((runtime_identity or {}).get("pid") or 0)
-    command = _pid_command(pid)
-    expected = str(runtime / "ComfyUI")
+    owned = _owns_process(config, runtime_identity, identity)
     return {
         "schema": WORKER_SCHEMA,
         "source": identity,
@@ -641,16 +960,18 @@ def worker_status(config: WorkerConfig) -> dict[str, Any]:
             "host": config.host,
             "port": config.port,
             "comfy_url": worker_url(config),
-            "cuda_device": config.cuda_device,
+            "device": config.device,
+            "exclusive": config.exclusive,
             "configured_revision": config.source_revision,
         },
+        "resource": resource_status(config),
         "runtime": {
             "installed": (runtime / "ComfyUI" / "main.py").is_file(),
             "listening": port_open(config.host, config.port),
             "node_pack_version": _node_version(config),
             "node_runtime_info": read_node_pack_runtime_info(config.runtime_dir),
             "identity": runtime_identity,
-            "owned_pid": pid if command and expected in command else None,
+            "owned_pid": pid if owned else None,
         },
     }
 
@@ -668,7 +989,12 @@ def doctor_worker(config: WorkerConfig) -> dict[str, Any]:
     if source["branch"] != config.branch:
         errors.append("worker source branch differs from configuration")
     if source["revision"] != config.source_revision:
-        errors.append("worker configuration revision is stale; run `cspr worker sync`")
+        errors.append("worker configuration revision is stale; run `cspr comfy worker sync`")
+    resource = status["resource"]
+    if resource["state"] in {"unavailable", "invalid_device", "unsupported"}:
+        errors.append("worker cannot enforce its exclusive resource policy")
+    elif resource["state"] == "occupied":
+        errors.append("configured resource is occupied by another compute process")
     if not runtime["installed"]:
         errors.append("managed ComfyUI is not installed")
     if runtime["node_pack_version"] != NODE_PACK_VERSION:
@@ -730,12 +1056,16 @@ def doctor_worker(config: WorkerConfig) -> dict[str, Any]:
 __all__ = [
     "RUNTIME_IDENTITY_NAME",
     "RUNTIME_SCHEMA",
+    "DEFAULT_RUNTIME_DIR_NAME",
+    "DEFAULT_WORKER_PORT",
     "WORKER_CONFIG_NAME",
     "WORKER_SCHEMA",
+    "DeviceSpec",
     "WorkerConfig",
     "WorkerError",
     "default_runtime_dir",
     "doctor_worker",
+    "resource_status",
     "initialize_worker",
     "install_worker",
     "port_open",

@@ -5,9 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import platform
-import shutil
-import subprocess
 import threading
 import time
 import uuid
@@ -19,22 +16,12 @@ from urllib.parse import urlsplit
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.responses import Response as BinaryResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .. import __version__
 from ..action_graphs import bind_action_task, materialize_recipe_workflows
 from ..bridge import ArtifactBridge, BridgeError
 from ..comfy import ComfyClient
-from ..comfy.discovery import LOOPBACK_HOSTS, discover_comfy_directory, validate_comfy_directory
-from ..comfy.managed import install as install_managed_comfy
-from ..comfy.managed import (
-    install_node_pack,
-    launch_with_preference,
-    restart_with_preference,
-    wait_until_ready,
-)
-from ..comfy.managed import launch as launch_managed_comfy
-from ..comfy.models import ModelDownloadError, download_bundle_file
 from ..compiler import CompileError, Compiler
 from ..config import resolve_data_dir
 from ..domain import (
@@ -52,24 +39,18 @@ from ..domain import (
     ProjectExportCreate,
     ProjectPatch,
     ProjectView,
-    RunCreate,
     RunRuntimeState,
     RunView,
     SpriteDocument,
-    TaskDefinition,
-    TaskRevision,
     ToolDescriptor,
     TrackSequenceCreate,
-    WorkflowDefinition,
-    WorkflowRevision,
 )
 from ..example_catalog import register_action_examples
 from ..execution import ExecutionPlan
 from ..package import PackageError, build_package
-from ..prompting import COMPILER_VERSION
+from ..prompting import COMPILER_VERSION, PromptCompiler
 from ..recipe_assembler import sealed_tool_descriptor, with_dimension_slots
 from ..recipes import (
-    MODEL_BUNDLES,
     Recipe,
     discover_recipes,
     imported_recipe_is_compatible,
@@ -82,20 +63,33 @@ from ..recipes import (
     runtime_manifest,
     supports,
 )
-from ..registry import ACTION_IDS, CookSpriteRegistry, RegistryError
+from ..registry import CookSpriteRegistry, RegistryError
 from ..runtime_state import terminal_runtime_state
-from ..store import DocumentConflict, Store, utcnow
+from ..store import (
+    DocumentConflict,
+    RUN_HISTORY_LIMIT,
+    SCHEMA_VERSION,
+    TERMINAL_RUN_STATUSES,
+    Store,
+    utcnow,
+)
 from ..supervisor import RunSupervisor
 from ..tool_packages import tool_packages
 
-SEQUENCE_ACTIONS = {
-    "animation.generate",
-    "sheet.slice",
-    "video.sample",
-    "sprite.pixelize",
-    "image.pixelize",
-}
-TEST_RUNTIME_VERSIONS = {"test", "demo-test", "cooksprite-test-runtime"}
+WORKER_RUNTIME_IDENTITY_SCHEMA = "cooksprite.worker-runtime/v1"
+WORKER_RUNTIME_IDENTITY_FIELDS = (
+    "schema",
+    "source_branch",
+    "source_revision",
+    "node_pack_version",
+    "dependency_lock_sha256",
+    "comfy_url",
+)
+DEFAULT_MAX_ARTIFACT_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024
+
+
+class RuntimeIdentityError(RuntimeError):
+    """A worker-managed runtime did not match its approved identity."""
 
 
 def _runtime_id(label: str, base_url: str) -> str:
@@ -105,6 +99,25 @@ def _runtime_id(label: str, base_url: str) -> str:
     safe_host = "".join(char if char.isalnum() else "-" for char in host).strip("-")
     digest = hashlib.sha256(base_url.rstrip("/").encode()).hexdigest()[:8]
     return f"rt_{(safe_host or label or 'comfy')[:24]}_{digest}"
+
+
+def _max_artifact_upload_bytes(explicit: int | None) -> int:
+    """Resolve the bounded raw-body size accepted by this API's Artifact Store."""
+
+    value: int | None = explicit
+    if value is None:
+        configured = os.environ.get("COOKSPRITE_MAX_ARTIFACT_UPLOAD_BYTES", "").strip()
+        if configured:
+            try:
+                value = int(configured)
+            except ValueError as exc:
+                raise ValueError(
+                    "COOKSPRITE_MAX_ARTIFACT_UPLOAD_BYTES must be a positive integer"
+                ) from exc
+    value = DEFAULT_MAX_ARTIFACT_UPLOAD_BYTES if value is None else value
+    if value <= 0:
+        raise ValueError("max_artifact_upload_bytes must be a positive integer")
+    return value
 
 
 COOKSPRITE_NODE_CLASSES = {
@@ -119,7 +132,31 @@ class RuntimeCreate(BaseModel):
     location: Literal["local", "remote"] = "remote"
     transport: str = "http"
     callback_url: str | None = None
-    directory: str | None = None
+    worker_managed: bool = False
+
+    @staticmethod
+    def _http_url(value: str, field: str) -> str:
+        normalized = value.strip().rstrip("/")
+        parsed = urlsplit(normalized)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            raise ValueError(f"{field} must be an explicit http(s) URL without credentials")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_connection_contract(self) -> RuntimeCreate:
+        self.base_url = self._http_url(self.base_url, "base_url")
+        if self.callback_url is not None:
+            self.callback_url = self._http_url(self.callback_url, "callback_url")
+        if self.location == "remote" and not self.callback_url:
+            raise ValueError(
+                "remote runtimes require an explicit callback_url reachable from ComfyUI"
+            )
+        return self
 
 
 class RecipeCreate(BaseModel):
@@ -135,42 +172,66 @@ class RecipeCreate(BaseModel):
     checkpoint: str | None = None
     output_name: str = "image"
     output_type: str = "Image"
+    params_schema: dict[str, Any] = Field(default_factory=dict)
 
 
 class RuntimeDefaultBinding(BaseModel):
     model_id: str
 
 
-class LocalSetupCreate(BaseModel):
-    directory: str | None = None
-    host: str = "127.0.0.1"
-    port: int = 8188
-
-
 class ComfyProbeCreate(BaseModel):
-    base_url: str = "http://127.0.0.1:8188"
+    base_url: str
 
-
-class LocalStartCreate(BaseModel):
-    base_url: str = "http://127.0.0.1:8188"
-    directory: str | None = None
-    host: str | None = None
-    port: int | None = Field(default=None, ge=1, le=65535)
+    @model_validator(mode="after")
+    def validate_base_url(self) -> ComfyProbeCreate:
+        self.base_url = RuntimeCreate._http_url(self.base_url, "base_url")
+        return self
 
 
 class PublishCreate(BaseModel):
     cover_artifact_id: str | None = None
 
 
-class ProjectDirectoryView(BaseModel):
-    project_id: str
-    path: str
-    opened: bool = False
-    error: str | None = None
+def _capability_identity(report: dict[str, Any]) -> dict[str, Any]:
+    """Project Doctor output onto immutable execution capabilities only."""
+
+    system = (report.get("system_stats") or {}).get("system") or {}
+    runtime = report.get("runtime_info") or {}
+    models = report.get("models") or {}
+    return {
+        "object_info": report.get("object_info") or {},
+        "models": {
+            str(folder): sorted(str(item) for item in values)
+            for folder, values in models.items()
+            if isinstance(values, list)
+        }
+        if isinstance(models, dict)
+        else {},
+        "workflow_templates": report.get("workflow_templates") or {},
+        "features": report.get("features") or {},
+        "versions": {
+            key: system.get(key)
+            for key in ("comfyui_version", "python_version", "pytorch_version")
+            if system.get(key) is not None
+        },
+        "runtime_identity": {
+            key: runtime.get(key)
+            for key in WORKER_RUNTIME_IDENTITY_FIELDS
+            if runtime.get(key) is not None
+        }
+        if isinstance(runtime, dict)
+        else {},
+    }
 
 
-def _snapshot(info: dict[str, Any]) -> str:
-    return hashlib.sha256(json.dumps(info, sort_keys=True, default=str).encode()).hexdigest()
+def _snapshot(report: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        _capability_identity(report),
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def _detail(code: str, message: str, **extra: Any) -> dict[str, Any]:
@@ -238,7 +299,8 @@ def create_app(
     data_dir: str | Path | None = None,
     comfy_factory: type[ComfyClient] = ComfyClient,
     registry_path: str | Path | None = None,
-    allow_test_runtime: bool | None = None,
+    max_artifact_upload_bytes: int | None = None,
+    serve_frontend: bool | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="CookSprite API",
@@ -253,32 +315,76 @@ def create_app(
     app.state.store = store
     app.state.registry = registry
     app.state.comfy_factory = comfy_factory
-    app.state.allow_test_runtime = (
-        os.environ.get("COOKSPRITE_ALLOW_TEST_RUNTIME") == "1"
-        if allow_test_runtime is None
-        else allow_test_runtime
-    )
+    app.state.max_artifact_upload_bytes = _max_artifact_upload_bytes(max_artifact_upload_bytes)
+    if serve_frontend is None:
+        serve_frontend = os.environ.get("COOKSPRITE_SERVE_FRONTEND", "1").lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
     default_callback_url = os.environ.get(
         "COOKSPRITE_PUBLIC_API_URL", "http://127.0.0.1:8000/api/v1"
     ).rstrip("/")
     bridge_secret = ArtifactBridge.from_data_dir(data_path, default_callback_url).secret
-    setup_lock = threading.RLock()
-    default_managed_root = (Path.home() / ".cooksprite" / "runtime").resolve()
-    managed_install_present = (default_managed_root / "install.json").is_file() and (
-        default_managed_root / "ComfyUI" / "main.py"
-    ).is_file()
-    setup_state: dict[str, Any] = {
-        "status": "installed" if managed_install_present else "idle",
-        "progress": 1.0 if managed_install_present else 0.0,
-        "message": "managed ComfyUI is installed" if managed_install_present else "",
-        "error": None,
-        "directory": str(default_managed_root) if managed_install_present else None,
-        "method": None,
-    }
     runtime_cache: dict[str, dict[str, Any]] = {}
     runtime_cache_lock = threading.RLock()
-    model_downloads: dict[str, dict[str, Any]] = {}
-    model_download_lock = threading.RLock()
+
+    async def stage_request_body(request: Request) -> tuple[Path, str, int]:
+        """Stream one raw artifact body into a same-filesystem blob staging file."""
+
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                expected_size = int(content_length)
+            except ValueError as exc:
+                raise HTTPException(
+                    400, _detail("invalid_content_length", "Content-Length must be an integer")
+                ) from exc
+            if expected_size < 0:
+                raise HTTPException(
+                    400, _detail("invalid_content_length", "Content-Length cannot be negative")
+                )
+            if expected_size > app.state.max_artifact_upload_bytes:
+                raise HTTPException(
+                    413,
+                    _detail(
+                        "artifact_too_large",
+                        "artifact request body exceeds the configured upload limit",
+                        limit_bytes=app.state.max_artifact_upload_bytes,
+                    ),
+                )
+        temporary = store.new_artifact_upload_path()
+        digest = hashlib.sha256()
+        size = 0
+        try:
+            with temporary.open("xb") as handle:
+                async for chunk in request.stream():
+                    if not chunk:
+                        continue
+                    size += len(chunk)
+                    if size > app.state.max_artifact_upload_bytes:
+                        raise HTTPException(
+                            413,
+                            _detail(
+                                "artifact_too_large",
+                                "artifact request body exceeds the configured upload limit",
+                                limit_bytes=app.state.max_artifact_upload_bytes,
+                            ),
+                        )
+                    digest.update(chunk)
+                    handle.write(chunk)
+                handle.flush()
+                if os.name != "nt":
+                    os.fsync(handle.fileno())
+            if not size:
+                raise HTTPException(
+                    422, _detail("empty_artifact", "artifact request body is empty")
+                )
+            return temporary, digest.hexdigest(), size
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
 
     def runtime_assets(runtime: dict[str, Any] | None) -> list[dict[str, Any]]:
         if not runtime:
@@ -304,38 +410,83 @@ def create_app(
         installed = COOKSPRITE_NODE_CLASSES.issubset(present)
         return installed, len(COOKSPRITE_NODE_CLASSES.intersection(present))
 
-    def bridge_for(runtime: dict[str, Any] | None) -> ArtifactBridge:
+    def runtime_is_worker_managed(runtime: dict[str, Any] | None) -> bool:
         manifest = manifest_from_assets(runtime_assets(runtime))
-        callback_url = manifest.get("callback_url") or default_callback_url
+        return bool(manifest.get("worker_managed"))
+
+    def runtime_worker_identity(runtime: dict[str, Any] | None) -> dict[str, str] | None:
+        manifest = manifest_from_assets(runtime_assets(runtime))
+        value = manifest.get("worker_runtime_identity")
+        return value if isinstance(value, dict) else None
+
+    def worker_runtime_identity(report: dict[str, Any]) -> dict[str, str]:
+        raw = report.get("runtime_info")
+        if not isinstance(raw, dict):
+            raise RuntimeIdentityError(
+                "worker-managed runtime does not expose GET /cooksprite/runtime-info"
+            )
+        identity: dict[str, str] = {}
+        for field in WORKER_RUNTIME_IDENTITY_FIELDS:
+            value = raw.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise RuntimeIdentityError(f"worker-managed runtime identity is missing {field}")
+            identity[field] = value.strip()
+        if identity["schema"] != WORKER_RUNTIME_IDENTITY_SCHEMA:
+            raise RuntimeIdentityError(
+                "worker-managed runtime reports an unsupported identity schema"
+            )
+        return identity
+
+    def validate_worker_runtime_identity(
+        runtime: dict[str, Any], report: dict[str, Any], existing_manifest: dict[str, Any]
+    ) -> dict[str, str] | None:
+        if not runtime_is_worker_managed(runtime):
+            return None
+        observed = worker_runtime_identity(report)
+        approved = existing_manifest.get("worker_runtime_identity")
+        if approved is None:
+            return observed
+        if not isinstance(approved, dict):
+            raise RuntimeIdentityError("stored worker runtime identity is invalid; re-register it")
+        changed = [
+            field
+            for field in WORKER_RUNTIME_IDENTITY_FIELDS
+            if approved.get(field) != observed[field]
+        ]
+        if changed:
+            raise RuntimeIdentityError(
+                "worker runtime identity changed ("
+                + ", ".join(changed)
+                + "); re-register the runtime after an approved worker sync"
+            )
+        return observed
+
+    def bridge_for(runtime: dict[str, Any] | None) -> ArtifactBridge:
+        callback_url = callback_for(runtime, required=True)
         return ArtifactBridge(bridge_secret, callback_url)
 
-    def callback_for(runtime: dict[str, Any] | None) -> str:
+    def callback_for(runtime: dict[str, Any] | None, *, required: bool = False) -> str | None:
         manifest = manifest_from_assets(runtime_assets(runtime))
-        return str(manifest.get("callback_url") or default_callback_url).rstrip("/")
+        callback_url = manifest.get("callback_url")
+        if isinstance(callback_url, str) and callback_url.strip():
+            return callback_url.rstrip("/")
+        if runtime and runtime.get("location", "remote") == "remote":
+            if required:
+                raise RuntimeIdentityError(
+                    "remote runtime has no explicit callback_url; re-register it before running"
+                )
+            return None
+        return default_callback_url
 
     def _default_binding(
         action_id: str,
         recipes: list[Recipe],
         current: dict[str, Any] | None = None,
-        *,
-        prefer_flux9b: bool = False,
     ) -> dict[str, str] | None:
         """Keep one model default; select the compatible Workflow at run time."""
 
         compatible = [recipe for recipe in recipes if supports(recipe, action_id)]
         if not compatible:
-            return None
-        if prefer_flux9b:
-            selected = next(
-                (
-                    recipe
-                    for recipe in compatible
-                    if recipe.id == "flux2-klein-9b-turbo-t2i"
-                ),
-                None,
-            )
-            if selected:
-                return {"model_id": selected.checkpoint or selected.id}
             return None
         if isinstance(current, dict):
             workflow_id = str(current.get("workflow_id") or "")
@@ -350,7 +501,7 @@ def create_app(
             # An explicit model that disappeared is not silently replaced by
             # a different model. The user can choose another installed model.
             return None
-        selected = compatible[0]
+        selected = max(compatible, key=lambda recipe: recipe.priority)
         return {"model_id": selected.checkpoint or selected.id}
 
     def runtime_defaults(
@@ -367,54 +518,25 @@ def create_app(
         )
         available = recipes if recipes is not None else recipes_from_runtime(runtime)
         result: dict[str, dict[str, str]] = {}
-        for action_id in ACTION_IDS:
-            # Normal-aware Actions use the two explicit still/temporal
-            # estimator bindings below.  Keeping a second Action-level
-            # default would be misleading and would not affect routing.
-            if action_id in {"normal.generate", "sprite.pixelize"}:
-                continue
-            has_flux = any(
-                recipe.family == "comfy.flux2-klein"
-                and action_id in recipe.actions
-                for recipe in available
-            )
+        for action_id in registry.action_ids:
+            source = sources.get(action_id)
             binding = _default_binding(
                 action_id,
                 available,
-                stored.get(action_id)
-                if not (action_id == "image.generate" and has_flux and sources.get(action_id) != "user")
-                else None,
-                prefer_flux9b=action_id == "image.generate" and has_flux and sources.get(action_id) != "user",
+                stored.get(action_id, {}) if source in {"user", "auto"} else None,
             )
             if binding:
                 result[action_id] = binding
         return result
 
-    def _normal_estimator_binding(
+    def _mode_binding(
+        action_id: str,
         mode: str,
         recipes: list[Recipe],
         current: dict[str, Any] | None = None,
     ) -> dict[str, str] | None:
-        """Resolve one explicitly mode-compatible normal estimator.
-
-        A single image never silently becomes a temporal model, and a missing
-        user-selected temporal model never falls back to Lotus.  That keeps
-        model semantics visible instead of changing output quality behind the
-        user's back.
-        """
-
-        if mode not in {"single", "temporal"}:
-            raise ValueError("normal estimator mode must be single or temporal")
-        inputs = {"__source_kind": ["FrameSeq"]} if mode == "temporal" else {}
         compatible = [
-            recipe
-            for recipe in recipes
-            if supports(recipe, "normal.generate", inputs)
-            and (
-                recipe.family == "cooksprite.normal"
-                if mode == "single"
-                else recipe.family in {"cooksprite.normal", "cooksprite.normal-temporal"}
-            )
+            recipe for recipe in recipes if action_id in recipe.actions and mode in recipe.modes
         ]
         if isinstance(current, dict):
             model_id = str(current.get("model_id") or "")
@@ -422,52 +544,67 @@ def create_app(
                 str(recipe.checkpoint or recipe.id) == model_id for recipe in compatible
             ):
                 return {"model_id": model_id}
-            # A recorded selection that disappeared is deliberately not
-            # replaced by another estimator.
             if model_id:
                 return None
         if not compatible:
             return None
-        if mode == "temporal":
-            # Lotus stays available as an explicit <=32-frame choice, but it
-            # is never promoted automatically when the temporal model is
-            # absent.  That avoids an invisible quality/temporal-consistency
-            # downgrade.
-            selected = next(
-                (recipe for recipe in compatible if recipe.family == "cooksprite.normal-temporal"),
-                None,
-            )
-            if selected is None:
-                return None
-        else:
-            selected = compatible[0]
+        selected = max(compatible, key=lambda recipe: recipe.priority)
         return {"model_id": str(selected.checkpoint or selected.id)}
+
+    def runtime_mode_defaults(
+        runtime: dict[str, Any] | None,
+        recipes: list[Recipe] | None = None,
+    ) -> dict[str, dict[str, dict[str, str]]]:
+        if not runtime:
+            return {}
+        manifest = manifest_from_assets(runtime_assets(runtime))
+        stored = (
+            manifest.get("mode_defaults") if isinstance(manifest.get("mode_defaults"), dict) else {}
+        )
+        available = recipes if recipes is not None else recipes_from_runtime(runtime)
+        result: dict[str, dict[str, dict[str, str]]] = {}
+        for action_id in registry.action_ids:
+            modes = sorted(
+                {
+                    mode
+                    for recipe in available
+                    if action_id in recipe.actions
+                    for mode in recipe.modes
+                }
+            )
+            action_defaults = (
+                stored.get(action_id) if isinstance(stored.get(action_id), dict) else {}
+            )
+            for mode in modes:
+                binding = _mode_binding(action_id, mode, available, action_defaults.get(mode))
+                if binding:
+                    result.setdefault(action_id, {})[mode] = binding
+        return result
 
     def runtime_normal_estimators(
         runtime: dict[str, Any] | None,
         recipes: list[Recipe] | None = None,
     ) -> dict[str, dict[str, str]]:
-        if not runtime:
-            return {}
-        manifest = manifest_from_assets(runtime_assets(runtime))
-        stored = (
-            manifest.get("normal_estimators")
-            if isinstance(manifest.get("normal_estimators"), dict)
-            else {}
-        )
-        available = recipes if recipes is not None else recipes_from_runtime(runtime)
-        return {
-            mode: binding
-            for mode in ("single", "temporal")
-            if (binding := _normal_estimator_binding(mode, available, stored.get(mode)))
-        }
+        """Legacy settings projection backed by generic Action mode defaults."""
+
+        all_modes = runtime_mode_defaults(runtime, recipes)
+        for action_id in registry.action_ids:
+            aliases = registry.execution(action_id).get("legacy_mode_aliases") or {}
+            if aliases:
+                modes = all_modes.get(action_id, {})
+                return {
+                    str(alias): modes[str(mode)]
+                    for alias, mode in aliases.items()
+                    if modes.get(str(mode))
+                }
+        return {}
 
     def save_runtime_defaults(
         runtime: dict[str, Any],
         defaults: dict[str, dict[str, str]],
         *,
         explicit_action: str | None = None,
-        normal_estimators: dict[str, dict[str, str]] | None = None,
+        mode_defaults: dict[str, dict[str, dict[str, str]]] | None = None,
     ) -> None:
         manifest = manifest_from_assets(runtime_assets(runtime))
         default_sources = (
@@ -482,12 +619,8 @@ def create_app(
             "schema": manifest.get("schema", "cooksprite.runtime-assets/v1"),
             "defaults": defaults,
             "default_sources": default_sources,
-            "normal_estimators": (
-                normal_estimators
-                if normal_estimators is not None
-                else manifest.get("normal_estimators", {})
-            ),
-            "callback_url": callback_for(runtime),
+            "mode_defaults": mode_defaults or manifest.get("mode_defaults", {}),
+            "callback_url": callback_for(runtime, required=True),
         }
         assets = [
             item
@@ -504,7 +637,6 @@ def create_app(
             assets,
             runtime.get("location", "remote"),
             runtime.get("transport", "http"),
-            runtime.get("directory"),
         )
 
     def runtime_model_options(recipes: list[Recipe]) -> list[dict[str, Any]]:
@@ -526,9 +658,11 @@ def create_app(
     def persist_runtime_report(
         runtime: dict[str, Any],
         report: dict[str, Any],
-        *,
-        is_test_runtime: bool = False,
     ) -> tuple[str, list[ToolDescriptor], list[Recipe]]:
+        existing_manifest = manifest_from_assets(runtime_assets(runtime))
+        observed_worker_identity = validate_worker_runtime_identity(
+            runtime, report, existing_manifest
+        )
         dynamic = _dynamic_tools(list((report.get("object_info") or {}).items()))
         snapshot = _snapshot(report)
         discovered = [
@@ -546,8 +680,12 @@ def create_app(
             # the same id, while unrelated user workflows remain intact.
             recipes_by_id.setdefault(recipe.id, recipe)
         recipes = list(recipes_by_id.values())
-        manifest = runtime_manifest(report, recipes, callback_url=callback_for(runtime))
-        existing_manifest = manifest_from_assets(runtime_assets(runtime))
+        manifest = runtime_manifest(
+            report, recipes, callback_url=callback_for(runtime, required=True)
+        )
+        if runtime_is_worker_managed(runtime):
+            manifest["worker_managed"] = True
+            manifest["worker_runtime_identity"] = observed_worker_identity
         stored_defaults = (
             existing_manifest.get("defaults")
             if isinstance(existing_manifest.get("defaults"), dict)
@@ -558,46 +696,63 @@ def create_app(
             if isinstance(existing_manifest.get("default_sources"), dict)
             else {}
         )
-        stored_normal_estimators = (
+        stored_mode_defaults = (
+            existing_manifest.get("mode_defaults")
+            if isinstance(existing_manifest.get("mode_defaults"), dict)
+            else {}
+        )
+        legacy_normal = (
             existing_manifest.get("normal_estimators")
             if isinstance(existing_manifest.get("normal_estimators"), dict)
             else {}
         )
+        for action_id in registry.action_ids:
+            aliases = registry.execution(action_id).get("legacy_mode_aliases") or {}
+            if legacy_normal and aliases and not stored_mode_defaults.get(action_id):
+                stored_mode_defaults[action_id] = {
+                    str(mode): legacy_normal.get(str(alias)) for alias, mode in aliases.items()
+                }
         manifest["defaults"] = {
             action_id: binding
-            for action_id in ACTION_IDS
-            if action_id not in {"normal.generate", "sprite.pixelize"}
+            for action_id in registry.action_ids
             if (
                 binding := _default_binding(
                     action_id,
                     recipes,
-                    stored_defaults.get(action_id)
-                    if not (
-                        action_id == "image.generate"
-                        and any(
-                            recipe.family == "comfy.flux2-klein"
-                            and action_id in recipe.actions
-                            for recipe in recipes
-                        )
-                        and stored_sources.get(action_id) != "user"
-                    )
+                    stored_defaults.get(action_id, {})
+                    if stored_sources.get(action_id) in {"user", "auto"}
                     else None,
-                    prefer_flux9b=action_id == "image.generate"
-                    and any(
-                        recipe.family == "comfy.flux2-klein"
-                        and action_id in recipe.actions
-                        for recipe in recipes
-                    )
-                    and stored_sources.get(action_id) != "user",
                 )
             )
         }
+        for action_id in manifest["defaults"]:
+            stored_sources.setdefault(action_id, "auto")
         manifest["default_sources"] = stored_sources
-        manifest["normal_estimators"] = {
-            mode: binding
-            for mode in ("single", "temporal")
-            if (binding := _normal_estimator_binding(mode, recipes, stored_normal_estimators.get(mode)))
+        manifest["mode_defaults"] = {
+            action_id: {
+                mode: binding
+                for mode in sorted(
+                    {
+                        mode
+                        for recipe in recipes
+                        if action_id in recipe.actions
+                        for mode in recipe.modes
+                    }
+                )
+                if (
+                    binding := _mode_binding(
+                        action_id,
+                        mode,
+                        recipes,
+                        (stored_mode_defaults.get(action_id) or {}).get(mode),
+                    )
+                )
+            }
+            for action_id in registry.action_ids
         }
+        manifest["normal_estimators"] = runtime_normal_estimators(
+            {**runtime, "assets": json.dumps([manifest])}, recipes
+        )
         model_sources: dict[str, str] = {}
         for folder, names in (manifest.get("models") or {}).items():
             if not isinstance(names, list):
@@ -606,34 +761,18 @@ def create_app(
                 key = f"{folder}:{name}"
                 model_sources[key] = "User existing"
         manifest["model_sources"] = model_sources
-        assets: list[dict[str, Any]] = [
-            manifest
-        ]
-        if is_test_runtime:
-            assets.append({"cooksprite_test_runtime": True})
         store.put_runtime(
             runtime["id"],
             runtime["label"],
             runtime["base_url"],
             snapshot,
             [item.model_dump(mode="json") for item in dynamic],
-            assets,
+            [manifest],
             runtime.get("location", "remote"),
             runtime.get("transport", "http"),
-            runtime.get("directory"),
         )
         invalidate_runtime(runtime["id"])
         return snapshot, dynamic, recipes
-
-    def is_stored_test_runtime(runtime: dict[str, Any]) -> bool:
-        try:
-            assets = json.loads(runtime.get("assets") or "[]")
-        except (TypeError, json.JSONDecodeError):
-            return False
-        return any(
-            isinstance(item, dict) and item.get("cooksprite_test_runtime") is True
-            for item in assets
-        )
 
     def invalidate_runtime(runtime_id: str | None = None) -> None:
         with runtime_cache_lock:
@@ -661,13 +800,6 @@ def create_app(
                 "runtime_id": runtime["id"],
                 "checked_at": checked_at,
                 "error": "Runtime has not passed capability validation",
-            }
-        if is_stored_test_runtime(runtime) and not app.state.allow_test_runtime:
-            return {
-                "status": "offline",
-                "runtime_id": runtime["id"],
-                "checked_at": checked_at,
-                "error": "Fake Runtime is disabled outside an explicit test process",
             }
         with runtime_cache_lock:
             cached = runtime_cache.get(runtime["id"])
@@ -719,21 +851,6 @@ def create_app(
                 404,
                 _detail("runtime_not_found", f"unknown runtime {runtime_id}"),
             )
-        if runtime.get("location", "remote") == "local" and not runtime.get("directory"):
-            directory = discover_comfy_directory(runtime["base_url"])
-            if directory:
-                store.put_runtime(
-                    runtime["id"],
-                    runtime["label"],
-                    runtime["base_url"],
-                    runtime.get("snapshot", ""),
-                    json.loads(runtime.get("tools") or "[]"),
-                    runtime_assets(runtime),
-                    runtime.get("location", "remote"),
-                    runtime.get("transport", "http"),
-                    directory,
-                )
-                runtime = store.runtime(runtime_id) or runtime
         return runtime
 
     def runtime_tools(runtime: dict[str, Any]) -> list[ToolDescriptor]:
@@ -744,28 +861,12 @@ def create_app(
             descriptor
             for recipe in recipes_from_runtime(runtime)
             for variant in recipe_variants(recipe)
-            if (
-                descriptor := sealed_tool_descriptor(with_dimension_slots(variant))
-            )
-            is not None
+            if (descriptor := sealed_tool_descriptor(with_dimension_slots(variant))) is not None
         ]
         return registry.tools() + dynamic + sealed
 
     def capability_category(action_id: str) -> str:
-        if action_id in {"image.generate", "image.views", "frame.redraw"}:
-            return "image"
-        if action_id in {"animation.generate", "video.sample"}:
-            return "video"
-        if action_id in {
-            "normal.generate",
-            "sprite.pixelize",
-            "sheet.slice",
-            "image.pixelize",
-            "image.cutout",
-            "project.export",
-        }:
-            return "tools"
-        return "text"
+        return str(registry.execution(action_id).get("capability") or "tools")
 
     def runtime_capabilities(runtime: dict[str, Any]) -> dict[str, Any]:
         """Return a compact, semantic view over one ComfyUI capability snapshot."""
@@ -809,23 +910,27 @@ def create_app(
                     {
                         "id": recipe.id,
                         "label": recipe.label,
-                        "source": "CookSprite"
-                        if recipe.family.startswith("cooksprite.")
-                        else "User imported"
+                        "source": "User imported"
                         if recipe.source == "imported"
+                        else "CookSprite"
+                        if tool_packages.recipe_builder(recipe.family)
                         else "ComfyUI",
                         "actions": recipe.actions,
                         "modes": recipe.modes,
                     }
                 )
         templates = manifest.get("workflow_templates") or {}
-        for template_id, template in (templates.items() if isinstance(templates, dict) else []):
+        for template_id, template in templates.items() if isinstance(templates, dict) else []:
             serialized = json.dumps(template, ensure_ascii=False).lower()
             if any(token in serialized for token in ("video", "animated", "i2v", "t2v")):
                 category = "video"
-            elif any(token in serialized for token in ("prompt", "caption", "translate", "enhance")):
+            elif any(
+                token in serialized for token in ("prompt", "caption", "translate", "enhance")
+            ):
                 category = "text"
-            elif any(token in serialized for token in ("image", "checkpoint", "ksampler", "t2i", "i2i")):
+            elif any(
+                token in serialized for token in ("image", "checkpoint", "ksampler", "t2i", "i2i")
+            ):
                 category = "image"
             else:
                 category = "tools"
@@ -842,12 +947,20 @@ def create_app(
             tool_category = "tools"
             if tool.source == "comfy":
                 output_types = {item.type for item in tool.outputs}
-                tool_category = "video" if "Video" in output_types else "image" if "Image" in output_types else "tools"
+                tool_category = (
+                    "video"
+                    if "Video" in output_types
+                    else "image"
+                    if "Image" in output_types
+                    else "tools"
+                )
             categories[tool_category]["tools"].append(
                 {
                     "id": tool.id,
                     "label": tool.title,
-                    "source": "CookSprite" if tool.source == "cooksprite" else "ComfyUI / third-party",
+                    "source": "CookSprite"
+                    if tool.source == "cooksprite"
+                    else "ComfyUI / third-party",
                     "inputs": [item.type for item in tool.inputs],
                     "outputs": [item.type for item in tool.outputs],
                 }
@@ -855,6 +968,8 @@ def create_app(
         return {
             "runtime_id": runtime["id"],
             "snapshot": runtime.get("snapshot"),
+            "worker_managed": runtime_is_worker_managed(runtime),
+            "runtime_identity": runtime_worker_identity(runtime),
             "system": manifest.get("system") or {},
             "features": manifest.get("features") or {},
             "workflow_templates": manifest.get("workflow_templates") or {},
@@ -866,8 +981,7 @@ def create_app(
             descriptor.id: normalized.dump()
             for recipe in recipes_from_runtime(runtime)
             for variant in recipe_variants(recipe)
-            if variant.source in {"imported", "discovered"}
-            and variant.workflow
+            if variant.source in {"imported", "discovered"} and variant.workflow
             if (normalized := with_dimension_slots(variant))
             if (descriptor := sealed_tool_descriptor(normalized)) is not None
         }
@@ -881,49 +995,22 @@ def create_app(
             if isinstance(item, dict) and item.get("id")
         }
 
-    def assert_runtime(runtime_id: str, snapshot: str) -> dict[str, Any]:
-        runtime = runtime_or_404(runtime_id)
-        if not runtime["snapshot"] or runtime["snapshot"] != snapshot:
-            raise HTTPException(
-                409,
-                _detail(
-                    "runtime_snapshot_incompatible",
-                    "definition needs revalidation on this runtime",
-                ),
-            )
-        state = probe_runtime(runtime)
-        if state["status"] != "ready":
-            raise HTTPException(
-                409,
-                _detail("runtime_offline", state["error"] or "ComfyUI is offline"),
-            )
-        return runtime
-
-    def workflow_from(row: dict[str, Any]) -> WorkflowRevision:
-        return WorkflowRevision.model_validate(
-            {
-                **json.loads(row["body"]),
-                "revision": row["revision"],
-                "runtime_snapshot": row["snapshot"],
-            }
-        )
-
-    def task_from(row: dict[str, Any]) -> TaskRevision:
-        return TaskRevision.model_validate(
-            {
-                **json.loads(row["body"]),
-                "revision": row["revision"],
-                "runtime_snapshot": row["snapshot"],
-            }
-        )
-
-    def run_view(run_id: str) -> RunView:
-        row = store.run(run_id)
+    def run_view(
+        run_id: str,
+        *,
+        row: dict[str, Any] | None = None,
+        artifact_rows: dict[str, dict[str, Any]] | None = None,
+    ) -> RunView:
+        row = row or store.run(run_id)
         if not row:
             raise HTTPException(404, _detail("run_not_found", "unknown run"))
         artifacts = []
         for artifact_id in json.loads(row["artifacts"] or "[]"):
-            artifact = store.artifact(artifact_id)
+            artifact = (
+                artifact_rows.get(artifact_id)
+                if artifact_rows is not None
+                else store.artifact(artifact_id)
+            )
             if artifact:
                 artifacts.append(store.artifact_ref(artifact, row.get("project_id")))
         try:
@@ -1040,11 +1127,12 @@ def create_app(
         target_action = target_value(values, "action")
         view = target_value(values, "view")
         direction = target_value(values, "direction")
+        temporal_source = registry.execution(action_id).get("temporal_source")
         temporal = (
             FrameSequenceTemporal(
-                source="sampled_video", sample_fps=float(values.get("sample_fps", 12))
+                source=temporal_source, sample_fps=float(values.get("sample_fps", 12))
             )
-            if action_id == "video.sample"
+            if temporal_source
             else None
         )
         manifest = FrameSequenceManifest(
@@ -1081,9 +1169,10 @@ def create_app(
     def order_normal_outputs(run_id: str, source_ids: list[str]) -> None:
         record = store.run(run_id)
         output_ids = json.loads(record.get("artifacts") or "[]") if record else []
+        output_rows = store.artifacts_by_ids(output_ids)
         by_source: dict[str, list[str]] = {}
         for artifact_id in output_ids:
-            row = store.artifact(artifact_id)
+            row = output_rows.get(artifact_id)
             if not row or row.get("kind") != "NormalMap":
                 continue
             meta = json.loads(row.get("meta") or "{}")
@@ -1111,14 +1200,24 @@ def create_app(
 
     def finalize_sprite_pixelize(
         run_id: str,
+        action_id: str,
         source_artifact: str,
         sources: list[str],
         project_id: str,
     ) -> None:
         record = store.run(run_id)
         output_ids = json.loads(record.get("artifacts") or "[]") if record else []
-        images = [artifact_id for artifact_id in output_ids if (store.artifact(artifact_id) or {}).get("kind") == "Image"]
-        normals = [artifact_id for artifact_id in output_ids if (store.artifact(artifact_id) or {}).get("kind") == "NormalMap"]
+        output_rows = store.artifacts_by_ids(output_ids)
+        images = [
+            artifact_id
+            for artifact_id in output_ids
+            if output_rows.get(artifact_id, {}).get("kind") == "Image"
+        ]
+        normals = [
+            artifact_id
+            for artifact_id in output_ids
+            if output_rows.get(artifact_id, {}).get("kind") == "NormalMap"
+        ]
         if len(images) != len(sources) or len(normals) != len(sources):
             raise RuntimeError("ComfyUI sprite outputs do not match the requested source frames")
 
@@ -1131,22 +1230,24 @@ def create_app(
             normal_relation = normal_relations.setdefault(normal_id, {"sources": [], "pairs": []})
             normal_relation["sources"].extend((image_id, source_id))
             normal_relation["pairs"].append(image_id)
+        meta_updates: dict[str, dict[str, Any]] = {}
         for artifact_id, relation in image_relations.items():
-            row = store.artifact(artifact_id)
+            row = output_rows.get(artifact_id)
             meta = json.loads(row.get("meta") or "{}") if row else {}
             meta.update(
                 source_artifacts=list(dict.fromkeys(relation["sources"])),
                 paired_normals=list(dict.fromkeys(relation["pairs"])),
             )
-            store.update_artifact_meta(artifact_id, meta)
+            meta_updates[artifact_id] = meta
         for artifact_id, relation in normal_relations.items():
-            row = store.artifact(artifact_id)
+            row = output_rows.get(artifact_id)
             meta = json.loads(row.get("meta") or "{}") if row else {}
             meta.update(
                 source_artifacts=list(dict.fromkeys(relation["sources"])),
                 paired_diffuses=list(dict.fromkeys(relation["pairs"])),
             )
-            store.update_artifact_meta(artifact_id, meta)
+            meta_updates[artifact_id] = meta
+        store.update_artifact_meta_many(meta_updates)
 
         source_row = store.artifact(source_artifact)
         if source_row and source_row.get("kind") == "FrameSeq":
@@ -1164,7 +1265,7 @@ def create_app(
                 {
                     "role": "pixel_frame_sequence",
                     "run_id": run_id,
-                    "action_id": "sprite.pixelize",
+                    "action_id": action_id,
                     "frame_count": len(images),
                     "cover_artifact": images[0],
                     "action": original.action,
@@ -1175,13 +1276,9 @@ def create_app(
                 project_id=project_id,
                 title="Pixelized Sprite Sequence",
             )
-            store.set_run_artifacts(
-                run_id, [sequence.id, *normals], preserve_duplicates=True
-            )
+            store.set_run_artifacts(run_id, [sequence.id, *normals], preserve_duplicates=True)
         else:
-            store.set_run_artifacts(
-                run_id, [images[0], normals[0]], preserve_duplicates=True
-            )
+            store.set_run_artifacts(run_id, [images[0], normals[0]], preserve_duplicates=True)
 
     def pixel_plan_source_digest(frames: list[Any]) -> str:
         """Return the canonical digest shared by a Plan and its source order."""
@@ -1195,7 +1292,9 @@ def create_app(
             for frame in frames
         ]
         return hashlib.sha256(
-            json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+            json.dumps(
+                canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode()
         ).hexdigest()
 
     def validate_pixel_plan_integrity(plan: PixelGeometryPlanManifest) -> None:
@@ -1245,6 +1344,7 @@ def create_app(
         except Exception as exc:
             raise ValueError("PixelGeometryPlan artifact is invalid") from exc
         validate_pixel_plan_integrity(plan)
+
         def matches_source(index: int) -> bool:
             return (
                 0 <= index < len(plan.frames)
@@ -1269,10 +1369,13 @@ def create_app(
             raise ValueError(
                 "the selected source occurs more than once in this PixelGeometryPlan; select its frame index"
             )
-        raise ValueError("the selected source image is not an exact source frame of this PixelGeometryPlan")
+        raise ValueError(
+            "the selected source image is not an exact source frame of this PixelGeometryPlan"
+        )
 
     def finalize_pixelize_sequence(
         run_id: str,
+        action_id: str,
         source_artifact: str,
         project_id: str,
     ) -> ArtifactRef:
@@ -1280,15 +1383,16 @@ def create_app(
 
         record = store.run(run_id)
         output_ids = json.loads(record.get("artifacts") or "[]") if record else []
+        output_rows = store.artifacts_by_ids(output_ids)
         images = [
             artifact_id
             for artifact_id in output_ids
-            if (store.artifact(artifact_id) or {}).get("kind") == "Image"
+            if output_rows.get(artifact_id, {}).get("kind") == "Image"
         ]
         plans = [
             artifact_id
             for artifact_id in output_ids
-            if (store.artifact(artifact_id) or {}).get("kind") == "PixelGeometryPlan"
+            if output_rows.get(artifact_id, {}).get("kind") == "PixelGeometryPlan"
         ]
         source_view = frame_sequence_view(source_artifact)
         if len(images) != len(source_view.sequence.frames) or len(plans) != 1:
@@ -1301,19 +1405,25 @@ def create_app(
             raise RuntimeError(str(exc)) from exc
         expected_canvas = tuple(plan.target)
         for image_id in images:
-            image_row = store.artifact(image_id)
-            image_canvas = json.loads(image_row.get("meta") or "{}").get("canvas") if image_row else None
+            image_row = output_rows.get(image_id)
+            image_canvas = (
+                json.loads(image_row.get("meta") or "{}").get("canvas") if image_row else None
+            )
             if (
                 isinstance(image_canvas, (list, tuple))
                 and len(image_canvas) == 2
                 and tuple(int(value) for value in image_canvas) != expected_canvas
             ):
-                raise RuntimeError("PixelGeometryPlan target canvas does not match a streamed output")
+                raise RuntimeError(
+                    "PixelGeometryPlan target canvas does not match a streamed output"
+                )
+        relation_rows = store.artifacts_by_ids([*source_view.sequence.frames, *images, plan_id])
+        meta_updates: dict[str, dict[str, Any]] = {}
         for index, (source_id, image_id) in enumerate(
             zip(source_view.sequence.frames, images, strict=True)
         ):
-            source_row = store.artifact(source_id)
-            image_row = store.artifact(image_id)
+            source_row = relation_rows.get(source_id)
+            image_row = relation_rows.get(image_id)
             if source_row:
                 source_meta = json.loads(source_row.get("meta") or "{}")
                 # Latest operational relation only: re-pixelizing the same
@@ -1323,27 +1433,28 @@ def create_app(
                     latest_pixel_plan_frame_index=index,
                     latest_pixel_frame_artifact=image_id,
                 )
-                store.update_artifact_meta(source_id, source_meta)
+                meta_updates[source_id] = source_meta
             if image_row:
                 image_meta = json.loads(image_row.get("meta") or "{}")
                 image_meta.update(
                     source_artifacts=[source_id],
                     pixel_plan_artifact=plan_id,
                 )
-                store.update_artifact_meta(image_id, image_meta)
-        plan_row = store.artifact(plan_id)
+                meta_updates[image_id] = image_meta
+        plan_row = relation_rows.get(plan_id)
         if plan_row:
             plan_meta = json.loads(plan_row.get("meta") or "{}")
             plan_meta.update(
                 role="pixel_geometry_plan",
                 system=True,
                 run_id=run_id,
-                action_id="image.pixelize",
+                action_id=action_id,
                 source_artifacts=[source_artifact],
                 frame_count=len(images),
                 pixel_frame_artifacts=images,
             )
-            store.update_artifact_meta(plan_id, plan_meta)
+            meta_updates[plan_id] = plan_meta
+        store.update_artifact_meta_many(meta_updates)
         original = source_view.sequence
         manifest = FrameSequenceManifest(
             action=original.action,
@@ -1359,12 +1470,14 @@ def create_app(
             {
                 "role": "pixel_frame_sequence",
                 "run_id": run_id,
-                "action_id": "image.pixelize",
+                "action_id": action_id,
                 "frame_count": len(images),
                 "cover_artifact": images[0],
                 "pixel_plan_artifact": plan_id,
                 "source_artifacts": [source_artifact],
-                "temporal": original.temporal.model_dump(mode="json") if original.temporal else None,
+                "temporal": original.temporal.model_dump(mode="json")
+                if original.temporal
+                else None,
             },
             project_id=project_id,
             title="Pixelized Frame Sequence",
@@ -1392,7 +1505,9 @@ def create_app(
         normal_row = store.artifact(normal_id)
         source_meta = json.loads(source_row.get("meta") or "{}") if source_row else {}
         if source_meta.get("latest_pixel_plan_artifact") != plan_id:
-            raise RuntimeError("PixelGeometryPlan is no longer the current pixel relation for this source frame")
+            raise RuntimeError(
+                "PixelGeometryPlan is no longer the current pixel relation for this source frame"
+            )
         plan_row = store.artifact(plan_id)
         plan_meta = json.loads(plan_row.get("meta") or "{}") if plan_row else {}
         frame_artifacts = plan_meta.get("pixel_frame_artifacts")
@@ -1401,10 +1516,14 @@ def create_app(
             or not 0 <= frame_index < len(frame_artifacts)
             or not isinstance(frame_artifacts[frame_index], str)
         ):
-            raise RuntimeError("PixelGeometryPlan has no current diffuse for the selected frame index")
+            raise RuntimeError(
+                "PixelGeometryPlan has no current diffuse for the selected frame index"
+            )
         diffuse_id = frame_artifacts[frame_index]
         if not diffuse_id or not store.artifact(diffuse_id):
-            raise RuntimeError("selected source frame has no current pixel diffuse paired with this plan")
+            raise RuntimeError(
+                "selected source frame has no current pixel diffuse paired with this plan"
+            )
         if normal_row:
             normal_meta = json.loads(normal_row.get("meta") or "{}")
             normal_meta.update(
@@ -1421,6 +1540,101 @@ def create_app(
             store.update_artifact_meta(diffuse_id, diffuse_meta)
         store.set_run_artifacts(run_id, [normal_id])
 
+    def frame_sequence_finalizer(
+        run_id: str,
+        action_id: str,
+        inputs: dict[str, list[str]],
+        values: dict[str, Any],
+        project_id: str,
+    ) -> Callable[[], None]:
+        return lambda: finalize_frame_sequence(run_id, action_id, project_id, values)
+
+    def sprite_pair_finalizer(
+        run_id: str,
+        action_id: str,
+        inputs: dict[str, list[str]],
+        values: dict[str, Any],
+        project_id: str,
+    ) -> Callable[[], None] | None:
+        source_ids = inputs.get("source") or []
+        if not source_ids:
+            return None
+        policy = registry.execution(action_id)
+        expanded = source_frame_ids(
+            source_ids,
+            limit=int(policy.get("sequence_limit") or 0) or None,
+        )
+        return lambda: finalize_sprite_pixelize(
+            run_id,
+            action_id,
+            source_ids[0],
+            expanded,
+            project_id,
+        )
+
+    def pixelize_sequence_finalizer(
+        run_id: str,
+        action_id: str,
+        inputs: dict[str, list[str]],
+        values: dict[str, Any],
+        project_id: str,
+    ) -> Callable[[], None] | None:
+        source_ids = inputs.get("source") or []
+        source_id = source_ids[0] if source_ids else ""
+        source = store.artifact(source_id) if source_id else None
+        if not source or source.get("kind") != "FrameSeq":
+            return None
+        return lambda: finalize_pixelize_sequence(run_id, action_id, source_id, project_id)
+
+    def normal_finalizer(
+        run_id: str,
+        action_id: str,
+        inputs: dict[str, list[str]],
+        values: dict[str, Any],
+        project_id: str,
+    ) -> Callable[[], None] | None:
+        source_ids = inputs.get("source") or []
+        plan_ids = inputs.get("pixel_plan") or []
+        if plan_ids and source_ids:
+            return lambda: finalize_pixel_plan_normal(
+                run_id,
+                source_ids[0],
+                plan_ids[0],
+                int(values.get("frame_index", 0)),
+            )
+        if not source_ids:
+            return None
+        policy = registry.execution(action_id)
+        expanded = source_frame_ids(
+            source_ids,
+            limit=int(policy.get("sequence_limit") or 0) or None,
+        )
+        return lambda: order_normal_outputs(run_id, expanded)
+
+    finalizer_builders: dict[
+        str,
+        Callable[
+            [str, str, dict[str, list[str]], dict[str, Any], str],
+            Callable[[], None] | None,
+        ],
+    ] = {
+        "frame_sequence": frame_sequence_finalizer,
+        "sprite_pair": sprite_pair_finalizer,
+        "pixelize_sequence": pixelize_sequence_finalizer,
+        "normal": normal_finalizer,
+    }
+
+    def action_finalizer(
+        run_id: str,
+        action_id: str,
+        inputs: dict[str, list[str]],
+        values: dict[str, Any],
+        project_id: str,
+    ) -> Callable[[], None] | None:
+        name = str(registry.execution(action_id).get("finalizer") or "")
+        builder = finalizer_builders.get(name)
+        return builder(run_id, action_id, inputs, values, project_id) if builder else None
+
     def selected_runtime(values: dict[str, Any]) -> dict[str, Any] | None:
         runtime_id = values.get("runtime")
         if not runtime_id and isinstance(values.get("model"), str):
@@ -1432,16 +1646,8 @@ def create_app(
     ) -> ProjectView:
         """Apply Action project semantics once for Web, CLI, and agents."""
 
-        target_type: str | None = None
-        if action_id == "animation.generate" and project.type != "character":
-            target_type = "character"
-        elif (
-            action_id == "image.generate"
-            and values.get("category") == "terrain"
-            and project.type == "static"
-        ):
-            target_type = "tileset"
-        if not target_type:
+        target_type = registry.project_type(action_id, values, project.type)
+        if target_type == project.type:
             return project
         current = store.document(project.id)
         if not current:
@@ -1449,7 +1655,6 @@ def create_app(
         body = dict(current["document"])
         body["type"] = target_type
         document = SpriteDocument.model_validate(body)
-        document.history.append({"operation": f"action_convert_to_{target_type}", "at": utcnow()})
         try:
             store.put_document(
                 project.id,
@@ -1527,7 +1732,7 @@ def create_app(
             "checked_at": state["checked_at"],
             "error": state["error"],
             "actions": action_states,
-            "schema_version": 6,
+            "schema_version": SCHEMA_VERSION,
         }
 
     # Stable human/CLI/agent entry surface.
@@ -1548,9 +1753,7 @@ def create_app(
     def action(action_id: str) -> ActionDescriptor:
         runtime = live_runtime()
         runtime_recipes = recipes_from_runtime(runtime)
-        descriptor = registry.view(
-            action_id, runtime, runtime_tool_ids(runtime), runtime_recipes
-        )
+        descriptor = registry.view(action_id, runtime, runtime_tool_ids(runtime), runtime_recipes)
         if not descriptor:
             raise HTTPException(404, _detail("action_not_found", "unknown Action"))
         return descriptor
@@ -1585,41 +1788,33 @@ def create_app(
             if normalized_inputs.get("source")
             else None
         )
+        policy = registry.execution(action_id)
+        has_pixel_plan = bool(policy.get("pixel_plan") and normalized_inputs.get("pixel_plan"))
         source_sequence_count = 0
-        if (
-            action_id in {"normal.generate", "sprite.pixelize"}
-            and source_row
-            and source_row.get("kind") == "FrameSeq"
-            and not normalized_inputs.get("pixel_plan")
-        ):
-            source_sequence_count = len(
-                frame_sequence_view(normalized_inputs["source"][0]).sequence.frames
-            )
-            limit = 240 if action_id == "normal.generate" else 32
-            if source_sequence_count > limit:
+        source_sequence: FrameSequenceView | None = None
+        if source_row and source_row.get("kind") == "FrameSeq" and not has_pixel_plan:
+            source_sequence = frame_sequence_view(normalized_inputs["source"][0])
+            source_sequence_count = len(source_sequence.sequence.frames)
+            limit = int(policy.get("sequence_limit") or 0)
+            if limit and source_sequence_count > limit:
                 raise HTTPException(
                     422,
                     _detail(
-                        "sprite_chunk_too_large" if action_id == "sprite.pixelize" else "sequence_too_large",
+                        str(policy.get("sequence_error") or "sequence_too_large"),
                         f"{action_id} accepts at most {limit} frames for this selected mode",
                     ),
                 )
-            # A one-frame FrameSeq remains a still-image request.  A temporal
-            # estimator only receives an actual sequence, never a fabricated
-            # duplicate image.
-            if source_sequence_count >= 2:
+            if source_sequence_count >= int(policy.get("sequence_mode_min_frames") or 2):
                 compile_inputs["__source_kind"] = ["FrameSeq"]
-        if action_id == "image.pixelize" and source_row and source_row.get("kind") == "FrameSeq":
-            sequence = frame_sequence_view(normalized_inputs["source"][0]).sequence
-            if len(sequence.frames) > 240:
-                raise HTTPException(
-                    422,
-                    _detail("sequence_too_large", "long sequence pixelization accepts at most 240 frames"),
+            flow_control = str(policy.get("continuous_flow_control") or "")
+            if (
+                flow_control
+                and values.get(flow_control) == "flow"
+                and not (
+                    source_sequence.sequence.temporal
+                    and source_sequence.sequence.temporal.source == "sampled_video"
+                    and source_sequence.sequence.temporal.sample_fps >= 8.0
                 )
-            if values.get("temporal_mode") == "flow" and not (
-                sequence.temporal
-                and sequence.temporal.source == "sampled_video"
-                and sequence.temporal.sample_fps >= 8.0
             ):
                 raise HTTPException(
                     422,
@@ -1628,8 +1823,7 @@ def create_app(
                         "continuous video flow requires a FrameSeq sampled from video at at least 8 FPS",
                     ),
                 )
-            compile_inputs["__source_kind"] = ["FrameSeq"]
-        if action_id == "normal.generate" and normalized_inputs.get("pixel_plan"):
+        if has_pixel_plan:
             if not source_row or source_row.get("kind") != "Image":
                 raise HTTPException(
                     422,
@@ -1649,22 +1843,20 @@ def create_app(
                 )
             except (TypeError, ValueError) as exc:
                 raise HTTPException(422, _detail("pixel_plan_source_invalid", str(exc))) from exc
-        ordered_sources: list[str] = []
-        if action_id in {"normal.generate", "sprite.pixelize"} and not normalized_inputs.get("pixel_plan"):
+        if policy.get("expand_source_frames") and not has_pixel_plan:
             try:
-                ordered_sources = source_frame_ids(
+                source_frame_ids(
                     normalized_inputs.get("source", []),
-                    limit=240 if action_id == "normal.generate" else 32,
+                    limit=int(policy.get("sequence_limit") or 0) or None,
                 )
             except ValueError as exc:
                 raise HTTPException(
-                    422, _detail("sprite_chunk_too_large", str(exc))
+                    422,
+                    _detail(str(policy.get("sequence_error") or "sequence_too_large"), str(exc)),
                 ) from exc
         runtime = selected_runtime(values)
         runtime_recipes = recipes_from_runtime(runtime)
-        descriptor = registry.view(
-            action_id, runtime, runtime_tool_ids(runtime), runtime_recipes
-        )
+        descriptor = registry.view(action_id, runtime, runtime_tool_ids(runtime), runtime_recipes)
         if not descriptor or not descriptor.available:
             raise HTTPException(
                 409,
@@ -1673,34 +1865,17 @@ def create_app(
                     "the selected Action is not available on a healthy runtime",
                 ),
             )
+        action_mode = registry.mode(action_id, compile_inputs)
         if not values.get("model") and descriptor.models:
-            normal_mode = (
-                "temporal" if compile_inputs.get("__source_kind") == ["FrameSeq"] else "single"
-            )
-            normal_action = action_id in {"normal.generate", "sprite.pixelize"}
-            binding = (
-                runtime_normal_estimators(runtime, runtime_recipes).get(normal_mode)
-                if normal_action
-                else runtime_defaults(runtime, runtime_recipes).get(action_id)
-            )
-            has_flux_recipe = any(
-                recipe.family == "comfy.flux2-klein" and action_id in recipe.actions
-                for recipe in runtime_recipes
-            )
-            if normal_action and not binding:
-                raise HTTPException(
-                    409,
-                    _detail(
-                        "normal_estimator_unconfigured",
-                        f"no compatible default {normal_mode} normal estimator is available on this runtime",
-                    ),
-                )
-            if action_id == "image.generate" and has_flux_recipe and not binding:
+            binding = runtime_mode_defaults(runtime, runtime_recipes).get(action_id, {}).get(
+                action_mode
+            ) or runtime_defaults(runtime, runtime_recipes).get(action_id)
+            if not binding:
                 raise HTTPException(
                     409,
                     _detail(
                         "default_model_unconfigured",
-                        "FLUX.2 Klein is installed but no default model is configured; select a model explicitly",
+                        f"no compatible default model is configured for {action_id}:{action_mode}",
                     ),
                 )
             preferred = next(
@@ -1734,7 +1909,7 @@ def create_app(
                 ),
             )
         selected_recipe = recipe_for_model(
-            runtime_recipes, model_id, action_id, compile_inputs
+            runtime_recipes, model_id, action_id, compile_inputs, mode=action_mode
         )
         if not selected_recipe:
             raise HTTPException(
@@ -1745,15 +1920,14 @@ def create_app(
                 ),
             )
         if (
-            action_id == "normal.generate"
-            and source_sequence_count > 32
-            and selected_recipe.family != "cooksprite.normal-temporal"
+            selected_recipe.max_frames is not None
+            and source_sequence_count > selected_recipe.max_frames
         ):
             raise HTTPException(
                 422,
                 _detail(
                     "temporal_model_required",
-                    "FrameSeq longer than 32 frames requires the NormalCrafter temporal estimator",
+                    f"the selected model accepts at most {selected_recipe.max_frames} frames",
                 ),
             )
         # Re-materialize the small built-in adapter on each run.  Existing
@@ -1781,6 +1955,9 @@ def create_app(
                 compile_inputs,
                 values,
                 request.params,
+                execution=policy,
+                prompt_compiler=PromptCompiler(registry),
+                action_mode=action_mode,
             )
             compiled = Compiler(
                 runtime_tools(runtime),
@@ -1827,30 +2004,18 @@ def create_app(
             provenance=provenance,
         )
 
-        def finalize_action() -> None:
-            if action_id == "sprite.pixelize":
-                finalize_sprite_pixelize(
-                    run_id,
-                    normalized_inputs["source"][0],
-                    ordered_sources,
-                    request.project,
-                )
-            elif action_id == "image.pixelize" and source_row and source_row.get("kind") == "FrameSeq":
-                finalize_pixelize_sequence(run_id, normalized_inputs["source"][0], request.project)
-            elif action_id in SEQUENCE_ACTIONS and action_id != "image.pixelize":
-                finalize_frame_sequence(run_id, action_id, request.project, values)
-            elif action_id == "normal.generate":
-                if normalized_inputs.get("pixel_plan"):
-                    finalize_pixel_plan_normal(
-                        run_id,
-                        normalized_inputs["source"][0],
-                        normalized_inputs["pixel_plan"][0],
-                        int(values["frame_index"]),
-                    )
-                else:
-                    order_normal_outputs(run_id, ordered_sources)
-
-        execute_plan(run_id, runtime, compiled, finalize_action)
+        execute_plan(
+            run_id,
+            runtime,
+            compiled,
+            action_finalizer(
+                run_id,
+                action_id,
+                normalized_inputs,
+                values,
+                request.project,
+            ),
+        )
         return run_view(run_id)
 
     @app.get("/api/v1/runs/{run_id}", response_model=RunView)
@@ -1922,8 +2087,16 @@ def create_app(
 
     @app.get("/api/v1/queue")
     def queue() -> dict[str, Any]:
-        rows = store.runs()
-        views = [run_view(row["id"]) for row in rows]
+        active_statuses = ("queued", "running", "cancel_requested")
+        rows = [
+            *store.runs(active_statuses),
+            *store.runs(TERMINAL_RUN_STATUSES, limit=RUN_HISTORY_LIMIT),
+        ]
+        artifact_ids = [
+            artifact_id for row in rows for artifact_id in json.loads(row.get("artifacts") or "[]")
+        ]
+        artifact_rows = store.artifacts_by_ids(artifact_ids)
+        views = [run_view(row["id"], row=row, artifact_rows=artifact_rows) for row in rows]
         runtime = live_runtime()
         runtime_queue: dict[str, Any] | None = None
         if runtime:
@@ -1955,37 +2128,6 @@ def create_app(
         if not project:
             raise HTTPException(404, _detail("project_not_found", "unknown project"))
         return project
-
-    @app.get("/api/v1/projects/{project_id}/directory", response_model=ProjectDirectoryView)
-    def get_project_directory(project_id: str) -> ProjectDirectoryView:
-        if not store.project(project_id):
-            raise HTTPException(404, _detail("project_not_found", "unknown project"))
-        return ProjectDirectoryView(project_id=project_id, path=str(store.project_directory(project_id)))
-
-    @app.post("/api/v1/projects/{project_id}/directory/open", response_model=ProjectDirectoryView)
-    def open_project_directory(project_id: str) -> ProjectDirectoryView:
-        if not store.project(project_id):
-            raise HTTPException(404, _detail("project_not_found", "unknown project"))
-        directory = store.project_directory(project_id)
-        system = platform.system()
-        if system == "Darwin":
-            command = ["open", str(directory)]
-        elif system == "Windows":
-            command = ["explorer", str(directory)]
-        else:
-            launcher = shutil.which("xdg-open")
-            command = [launcher, str(directory)] if launcher else []
-        if not command:
-            return ProjectDirectoryView(
-                project_id=project_id,
-                path=str(directory),
-                error="no graphical file browser launcher is available on the API host",
-            )
-        try:
-            subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except OSError as exc:
-            return ProjectDirectoryView(project_id=project_id, path=str(directory), error=str(exc))
-        return ProjectDirectoryView(project_id=project_id, path=str(directory), opened=True)
 
     @app.patch("/api/v1/projects/{project_id}", response_model=ProjectView)
     def patch_project(project_id: str, request: ProjectPatch) -> ProjectView:
@@ -2178,14 +2320,19 @@ def create_app(
                     project_id,
                     allow_incomplete=request.allow_incomplete,
                 )
-                artifact = store.put_artifact(
-                    result.data,
-                    "application/vnd.cooksprite+zip",
-                    "CookSpritePack",
-                    {"manifest": result.manifest, "run_id": run_id},
-                    project_id=project_id,
-                    title=f"{project.name}.cooksprite",
-                )
+                try:
+                    artifact = store.put_artifact_file(
+                        result.staging_path,
+                        result.sha256,
+                        result.size,
+                        "application/vnd.cooksprite+zip",
+                        "CookSpritePack",
+                        {"manifest": result.manifest, "run_id": run_id},
+                        project_id=project_id,
+                        title=f"{project.name}.cooksprite",
+                    )
+                finally:
+                    result.staging_path.unlink(missing_ok=True)
                 store.attach_run_artifact(run_id, artifact.id)
                 store.update_run(
                     run_id,
@@ -2216,6 +2363,20 @@ def create_app(
                         error=error,
                     ),
                 )
+            except Exception:
+                error = _detail("export_failed", "could not build export package")
+                store.update_run(
+                    run_id,
+                    status="failed",
+                    message="package failed",
+                    error=json.dumps(error),
+                    runtime_state=terminal_runtime_state(
+                        package_runtime_state(),
+                        phase="failed",
+                        message="package failed",
+                        error=error,
+                    ),
+                )
 
         supervisor.submit_job(run_id, package)
         return run_view(run_id)
@@ -2224,7 +2385,7 @@ def create_app(
     def gallery() -> list[GalleryItem]:
         return [GalleryItem.model_validate(item) for item in store.gallery()]
 
-    # Artifact library. Upload uses the raw request body to stay CLI/agent friendly.
+    # Artifact library. Upload streams raw bytes into the canonical Blob Store.
     @app.post("/api/v1/artifacts", response_model=ArtifactRef, status_code=201)
     async def upload_artifact(
         request: Request,
@@ -2235,10 +2396,16 @@ def create_app(
     ) -> ArtifactRef:
         if project_id and not store.project(project_id):
             raise HTTPException(404, _detail("project_not_found", "unknown project"))
-        data = await request.body()
-        if not data:
-            raise HTTPException(422, _detail("empty_artifact", "artifact request body is empty"))
-        return store.put_artifact(data, media_type, kind, project_id=project_id, title=title)
+        temporary, sha256, size = await stage_request_body(request)
+        return store.put_artifact_file(
+            temporary,
+            sha256,
+            size,
+            media_type,
+            kind,
+            project_id=project_id,
+            title=title,
+        )
 
     @app.get("/api/v1/artifacts", response_model=list[ArtifactRef])
     def artifacts(
@@ -2286,8 +2453,8 @@ def create_app(
             headers["Content-Disposition"] = (
                 f'attachment; filename="{row.get("title") or artifact_id}.cooksprite"'
             )
-        return BinaryResponse(
-            store.artifact_bytes(artifact_id),
+        return FileResponse(
+            store.artifact_path(artifact_id),
             media_type=row["media_type"],
             headers=headers,
         )
@@ -2360,9 +2527,11 @@ def create_app(
             )
         if expand:
             if expand not in {"frames", "sequence"}:
-                raise HTTPException(422, _detail("bridge_expand_invalid", "unknown bridge expansion"))
+                raise HTTPException(
+                    422, _detail("bridge_expand_invalid", "unknown bridge expansion")
+                )
             if row.get("kind") != "FrameSeq":
-                return BinaryResponse(store.artifact_bytes(artifact_id), media_type=row["media_type"])
+                return FileResponse(store.artifact_path(artifact_id), media_type=row["media_type"])
             sequence = frame_sequence_view(artifact_id)
             limit = 32 if expand == "frames" else 240
             if len(sequence.frames) > limit:
@@ -2391,7 +2560,11 @@ def create_app(
                     for frame in sequence.frames
                     if store.artifact(frame.id)
                 ]
-                canvas = raw_canvas[0] if raw_canvas and all(item == raw_canvas[0] for item in raw_canvas) else None
+                canvas = (
+                    raw_canvas[0]
+                    if raw_canvas and all(item == raw_canvas[0] for item in raw_canvas)
+                    else None
+                )
                 payload = {
                     "schema": "cooksprite.bridge-frame-sequence/v1",
                     "canvas": canvas,
@@ -2402,7 +2575,9 @@ def create_app(
                         {
                             "artifact": frame.id,
                             "sha256": frame.sha256,
-                            "canvas": json.loads(store.artifact(frame.id).get("meta") or "{}").get("canvas")
+                            "canvas": json.loads(store.artifact(frame.id).get("meta") or "{}").get(
+                                "canvas"
+                            )
                             if store.artifact(frame.id)
                             else None,
                             "url": bridge_for(runtime).download_url(frame.id, run_id),
@@ -2415,7 +2590,7 @@ def create_app(
                 json.dumps(payload, separators=(",", ":")).encode(),
                 media_type=media_type,
             )
-        return BinaryResponse(store.artifact_bytes(artifact_id), media_type=row["media_type"])
+        return FileResponse(store.artifact_path(artifact_id), media_type=row["media_type"])
 
     @app.post("/api/v1/bridge/runs/{run_id}/artifacts", response_model=ArtifactRef)
     async def bridge_upload(
@@ -2440,21 +2615,27 @@ def create_app(
         if kind not in {"Image", "NormalMap", "PixelGeometryPlan"}:
             raise HTTPException(
                 422,
-                _detail("artifact_type_invalid", "ComfyUI may persist only declared typed bridge outputs"),
+                _detail(
+                    "artifact_type_invalid",
+                    "ComfyUI may persist only declared typed bridge outputs",
+                ),
             )
-        data = await request.body()
-        if not data:
-            raise HTTPException(422, _detail("empty_artifact", "artifact request body is empty"))
+        temporary, sha256, size = await stage_request_body(request)
         media_type = "image/png"
+        canonical_plan: bytes | None = None
         if kind == "PixelGeometryPlan":
             try:
-                plan = PixelGeometryPlanManifest.model_validate_json(data)
+                if size > 4 * 1024 * 1024:
+                    raise ValueError("PixelGeometryPlan exceeds the 4 MiB bridge limit")
+                plan = PixelGeometryPlanManifest.model_validate_json(temporary.read_bytes())
                 validate_pixel_plan_integrity(plan)
             except Exception as exc:
+                temporary.unlink(missing_ok=True)
                 raise HTTPException(
                     422, _detail("pixel_plan_invalid", "PixelGeometryPlan payload is invalid")
                 ) from exc
-            data = plan.model_dump_json(by_alias=True, exclude_none=False).encode()
+            canonical_plan = plan.model_dump_json(by_alias=True, exclude_none=False).encode()
+            temporary.unlink(missing_ok=True)
             media_type = "application/vnd.cooksprite.pixel-geometry-plan+json"
         source_artifacts: list[str] = []
         if source_artifact:
@@ -2480,236 +2661,52 @@ def create_app(
             "source_artifacts": source_artifacts,
             "output_index": output_index,
         }
-        if canvas_width is not None and canvas_height is not None and canvas_width > 0 and canvas_height > 0:
+        if (
+            canvas_width is not None
+            and canvas_height is not None
+            and canvas_width > 0
+            and canvas_height > 0
+        ):
             meta["canvas"] = [int(canvas_width), int(canvas_height)]
         if kind == "PixelGeometryPlan":
             meta["system"] = True
-        artifact = store.put_artifact(
-            data,
-            media_type,
-            kind,
-            meta,
-            project_id=run.get("project_id"),
-        )
+        if canonical_plan is not None:
+            artifact = store.put_artifact(
+                canonical_plan,
+                media_type,
+                kind,
+                meta,
+                project_id=run.get("project_id"),
+            )
+        else:
+            artifact = store.put_artifact_file(
+                temporary,
+                sha256,
+                size,
+                media_type,
+                kind,
+                meta,
+                project_id=run.get("project_id"),
+            )
         store.attach_run_artifact(
             run_id,
             artifact.id,
-            allow_duplicate=run.get("action_id") in SEQUENCE_ACTIONS,
+            allow_duplicate=bool(
+                registry.execution(str(run.get("action_id") or "")).get("allow_duplicate_outputs")
+            ),
         )
-        return artifact
-
-    @app.post("/api/v1/internal/artifacts", response_model=ArtifactRef, include_in_schema=False)
-    async def legacy_internal_artifact(
-        request: Request,
-        run_id: str | None = None,
-        media_type: str = "image/png",
-        kind: str = "Image",
-        source_artifact: str | None = None,
-        output_index: int | None = None,
-    ) -> ArtifactRef:
-        if not app.state.allow_test_runtime:
-            raise HTTPException(404, _detail("route_not_found", "legacy bridge is disabled"))
-        run = store.run(run_id) if run_id else None
-        source_artifacts: list[str] = []
-        if source_artifact:
-            source_artifacts = [source_artifact]
-        elif run:
-            for supplied in json.loads(run.get("request") or "{}").get("inputs", {}).values():
-                source_artifacts.extend(supplied if isinstance(supplied, list) else [supplied])
-        artifact = store.put_artifact(
-            await request.body(),
-            media_type,
-            kind,
-            {
-                "run_id": run_id,
-                "action_id": run.get("action_id") if run else None,
-                "source_artifacts": source_artifacts,
-                "output_index": output_index,
-            },
-            project_id=run.get("project_id") if run else None,
-        )
-        if run_id and run:
-            store.attach_run_artifact(run_id, artifact.id, allow_duplicate=True)
         return artifact
 
     @app.post("/api/v1/artifacts/gc")
     def gc() -> dict[str, int]:
         return {"removed_blobs": store.gc()}
 
-    def _local_start_target(request: LocalStartCreate) -> tuple[str, str, int, str]:
-        parsed = urlsplit(request.base_url.strip())
-        hostname = (parsed.hostname or "").lower()
-        if hostname not in LOOPBACK_HOSTS:
-            raise HTTPException(
-                422,
-                _detail(
-                    "local_start_requires_loopback",
-                    "ComfyUI can be started here only for a loopback address",
-                ),
-            )
-        if parsed.scheme not in {"", "http"}:
-            raise HTTPException(
-                422,
-                _detail("local_start_scheme_invalid", "local ComfyUI startup requires http"),
-            )
-        host = request.host or parsed.hostname or "127.0.0.1"
-        port = int(request.port or parsed.port or 8188)
-        display_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
-        base_url = f"http://{display_host}:{port}"
-
-        directory = validate_comfy_directory(request.directory) if request.directory else None
-        if request.directory and not directory:
-            raise HTTPException(
-                422,
-                _detail("local_comfy_directory_invalid", "the supplied ComfyUI directory is not a valid checkout"),
-            )
-        if not directory:
-            for runtime in store.runtimes():
-                if (
-                    runtime.get("location", "remote") == "local"
-                    and str(runtime.get("base_url", "")).rstrip("/") == base_url.rstrip("/")
-                ):
-                    directory = validate_comfy_directory(runtime.get("directory"))
-                    if directory:
-                        break
-        directory = discover_comfy_directory(base_url, directory)
-        if not directory and port == 8188:
-            directory = validate_comfy_directory(default_managed_root)
-        if not directory:
-            raise HTTPException(
-                409,
-                _detail(
-                    "local_comfy_directory_not_found",
-                    "no local ComfyUI checkout was found; connect it once with its directory or install the managed runtime",
-                ),
-            )
-        return base_url, host, port, directory
-
-    @app.post("/api/v1/local/start", status_code=202)
-    def start_local_comfy(request: LocalStartCreate) -> dict[str, Any]:
-        base_url, host, port, directory = _local_start_target(request)
-        with setup_lock:
-            if setup_state["status"] in {"installing", "starting", "validating"}:
-                raise HTTPException(
-                    409, _detail("setup_in_progress", "local ComfyUI setup is already running")
-                )
-            setup_state.update(
-                status="starting",
-                progress=0.05,
-                message="starting local ComfyUI",
-                error=None,
-                directory=directory,
-                method=None,
-            )
-
-        def start_worker() -> None:
-            method = "already_running"
-            try:
-                try:
-                    app.state.comfy_factory(base_url).ping()
-                except Exception:  # noqa: BLE001 - the next step is the explicit local start.
-                    launch = launch_with_preference(directory, host=host, port=port)
-                    method = launch.method
-                    with setup_lock:
-                        setup_state.update(
-                            status="starting",
-                            progress=0.35,
-                            message=f"ComfyUI started with {method}; waiting for API",
-                            method=method,
-                        )
-                    report = wait_until_ready(base_url, timeout=300)
-                else:
-                    report = app.state.comfy_factory(base_url).doctor()
-
-                existing = next(
-                    (
-                        runtime
-                        for runtime in store.runtimes()
-                        if runtime.get("location", "remote") == "local"
-                        and str(runtime.get("base_url", "")).rstrip("/") == base_url.rstrip("/")
-                    ),
-                    None,
-                )
-                runtime_id = existing["id"] if existing else _runtime_id("Local ComfyUI", base_url)
-                store.put_runtime(
-                    runtime_id,
-                    existing["label"] if existing else "Local ComfyUI",
-                    base_url,
-                    existing.get("snapshot", "") if existing else "",
-                    json.loads(existing.get("tools") or "[]") if existing else [],
-                    runtime_assets(existing) if existing else [],
-                    "local",
-                    "local-process",
-                    directory,
-                )
-                runtime = store.runtime(runtime_id)
-                if not runtime:
-                    raise RuntimeError("local runtime registration failed")
-                with setup_lock:
-                    setup_state.update(
-                        status="validating",
-                        progress=0.85,
-                        message="validating local ComfyUI capabilities",
-                        method=method,
-                    )
-                snapshot, _, recipes = persist_runtime_report(runtime, report)
-                with setup_lock:
-                    setup_state.update(
-                        status="ready",
-                        progress=1.0,
-                        message=f"local ComfyUI is ready with {len(recipes)} compatible recipe(s)",
-                        error=None,
-                        method=method,
-                        snapshot=snapshot,
-                        runtime_id=runtime_id,
-                    )
-            except Exception as exc:  # noqa: BLE001 - normalized UI lifecycle boundary.
-                with setup_lock:
-                    setup_state.update(
-                        status="failed",
-                        progress=1.0,
-                        message="local ComfyUI startup failed",
-                        error=str(exc),
-                        method=method,
-                    )
-
-        threading.Thread(target=start_worker, daemon=True, name="cooksprite-local-comfy-start").start()
-        return local_setup_status()
-
     @app.post("/api/v1/comfyui/probe")
-    def probe_comfyui(request: ComfyProbeCreate | None = None) -> dict[str, Any]:
-        """Probe the explicitly supplied ComfyUI URL, local or remote.
+    def probe_comfyui(request: ComfyProbeCreate) -> dict[str, Any]:
+        """Read a ComfyUI endpoint without managing its filesystem or process."""
 
-        Runtime location is a connection choice, not something inferred by
-        this probe. Local installation/start controls are exposed only when
-        CookSprite can identify a local checkout for the same URL.
-        """
-
-        request = request or ComfyProbeCreate()
-        base_url = request.base_url.strip().rstrip("/")
-        configured = [
-            runtime
-            for runtime in store.runtimes()
-            if str(runtime.get("base_url", "")).rstrip("/") == base_url
-        ]
-        known_runtime = configured[0] if configured else None
-        known_directory = known_runtime.get("directory") if known_runtime else None
-        managed_installed = (default_managed_root / "install.json").is_file() and (
-            default_managed_root / "ComfyUI" / "main.py"
-        ).is_file()
-        default_local_url = f"http://127.0.0.1:{LocalSetupCreate.model_fields['port'].default}"
-        directory = discover_comfy_directory(base_url, known_directory)
-        managed = bool(
-            directory
-            and (
-                directory == str(default_managed_root / "ComfyUI")
-                or (known_runtime and known_runtime.get("location", "remote") == "local")
-            )
-        ) or base_url == default_local_url
+        base_url = request.base_url
         try:
-            # Keep the button responsive when the endpoint is offline. The
-            # full doctor call fans out to several ComfyUI endpoints and is
-            # only useful after this cheap liveness check.
             client = app.state.comfy_factory(base_url)
             ping = getattr(client, "ping", None)
             if callable(ping):
@@ -2735,132 +2732,18 @@ def create_app(
                 "nodes": len(report.get("object_info") or {}),
                 "cooksprite_nodes": len(present_nodes),
                 "nodes_installed": COOKSPRITE_NODE_CLASSES.issubset(present_nodes),
-                "directory_found": bool(directory),
-                "directory": directory,
-                "managed": managed,
+                "runtime_identity": report.get("runtime_info"),
             }
         except Exception as exc:  # noqa: BLE001 - probe returns a user-readable state.
             candidate = {
                 "base_url": base_url,
                 "status": "unreachable",
                 "error": str(exc),
-                "directory_found": bool(directory),
-                "directory": directory,
-                "managed": managed,
             }
-        status = candidate["status"]
-        if status == "unreachable":
-            if managed_installed and managed:
-                status = "unreachable"
-            elif managed:
-                status = "missing"
         return {
-            "status": status,
-            "managed_installed": managed_installed,
+            "status": candidate["status"],
             "candidates": [candidate],
         }
-
-    # Contributor/debug surface. Ordinary Web/CLI/Skill users do not need it.
-    @app.get("/api/v1/setup/local")
-    def local_setup_status() -> dict[str, Any]:
-        with setup_lock:
-            state = dict(setup_state)
-        if state["status"] in {"installed", "ready"} and state.get("directory") == str(default_managed_root):
-            runtime = store.runtime("local-managed")
-            if runtime and probe_runtime(runtime)["status"] == "ready":
-                state.update(
-                    status="ready",
-                    progress=1.0,
-                    message="managed ComfyUI is installed and online",
-                    error=None,
-                )
-            else:
-                state.update(
-                    status="installed",
-                    progress=1.0,
-                    message="managed ComfyUI is installed; start or reconnect it to run Actions",
-                )
-        return {
-            **state,
-            "default_directory": str(default_managed_root),
-        }
-
-    @app.post("/api/v1/setup/local", status_code=202)
-    def local_setup(request: LocalSetupCreate) -> dict[str, Any]:
-        with setup_lock:
-            if setup_state["status"] in {"installing", "starting", "validating"}:
-                raise HTTPException(
-                    409, _detail("setup_in_progress", "local setup is already running")
-                )
-            root = Path(request.directory or default_managed_root).expanduser().resolve()
-            setup_state.update(
-                status="installing",
-                progress=0.0,
-                message="preparing isolated ComfyUI",
-                error=None,
-                directory=str(root),
-            )
-
-        def progress(message: str, value: float) -> None:
-            with setup_lock:
-                setup_state.update(status="installing", message=message, progress=value)
-
-        def setup_worker() -> None:
-            runtime_id = "local-managed"
-            base_url = f"http://{request.host}:{request.port}"
-            try:
-                install_managed_comfy(
-                    root,
-                    progress=progress,
-                )
-                with setup_lock:
-                    setup_state.update(status="starting", progress=0.92, message="starting ComfyUI")
-                try:
-                    app.state.comfy_factory(base_url).ping()
-                except Exception:  # noqa: BLE001 - any failed heartbeat means start managed runtime.
-                    launch_managed_comfy(root, host=request.host, port=request.port)
-                report = wait_until_ready(base_url, timeout=300)
-                with setup_lock:
-                    setup_state.update(
-                        status="validating", progress=0.97, message="validating models and nodes"
-                    )
-                store.put_runtime(
-                    runtime_id,
-                    "Local ComfyUI",
-                    base_url,
-                    "",
-                    [],
-                    [
-                        {
-                            "schema": "cooksprite.runtime-assets/v1",
-                            "callback_url": default_callback_url,
-                            "recipes": [],
-                            "models": {},
-                        }
-                    ],
-                    "local",
-                    "local-process",
-                    str(root),
-                )
-                runtime = runtime_or_404(runtime_id)
-                _, _, recipes = persist_runtime_report(runtime, report)
-                if not recipes:
-                    raise RuntimeError(
-                        "ComfyUI started, but no compatible CookSprite recipe was found"
-                    )
-                with setup_lock:
-                    setup_state.update(
-                        status="ready",
-                        progress=1.0,
-                        message=f"ready with {len(recipes)} compatible recipe(s)",
-                        error=None,
-                    )
-            except Exception as exc:  # noqa: BLE001 - normalized setup boundary.
-                with setup_lock:
-                    setup_state.update(status="failed", message="setup failed", error=str(exc))
-
-        threading.Thread(target=setup_worker, daemon=True).start()
-        return local_setup_status()
 
     @app.post("/api/v1/runtimes")
     def create_runtime(request: RuntimeCreate) -> dict[str, Any]:
@@ -2881,33 +2764,39 @@ def create_app(
         same_endpoint = bool(existing and existing.get("base_url") == request.base_url)
         existing_assets = runtime_assets(existing) if same_endpoint else []
         existing_manifest = manifest_from_assets(existing_assets)
-        if request.callback_url or existing_manifest:
-            manifest = {
-                **existing_manifest,
-                "schema": existing_manifest.get("schema", "cooksprite.runtime-assets/v1"),
-                "callback_url": (request.callback_url or callback_for(existing)).rstrip("/"),
-            }
-            existing_assets = [
-                item
-                for item in existing_assets
-                if not (isinstance(item, dict) and item.get("schema") == manifest["schema"])
-            ]
-            existing_assets.insert(0, manifest)
-        directory = request.directory or (existing.get("directory") if same_endpoint and existing else None)
-        if request.location == "local":
-            directory = discover_comfy_directory(request.base_url, directory)
-        else:
-            directory = None
+        callback_url = request.callback_url or default_callback_url
+        manifest = {
+            **existing_manifest,
+            "schema": existing_manifest.get("schema", "cooksprite.runtime-assets/v1"),
+            "callback_url": callback_url,
+            "worker_managed": request.worker_managed,
+        }
+        # A deliberate worker re-registration authorizes one new identity
+        # after the ComfyUI host has synchronized through Git. It must doctor
+        # again before Actions can use its previous capability snapshot.
+        manifest.pop("worker_runtime_identity", None)
+        existing_assets = [
+            item
+            for item in existing_assets
+            if not (isinstance(item, dict) and item.get("schema") == manifest["schema"])
+        ]
+        existing_assets.insert(0, manifest)
+        reset_snapshot = request.worker_managed or bool(
+            bool(existing_manifest.get("worker_managed")) != request.worker_managed
+        )
         store.put_runtime(
             runtime_id,
             request.label,
             request.base_url,
-            existing.get("snapshot", "") if same_endpoint and existing else "",
-            json.loads(existing.get("tools", "[]")) if same_endpoint and existing else [],
+            existing.get("snapshot", "")
+            if same_endpoint and existing and not reset_snapshot
+            else "",
+            json.loads(existing.get("tools", "[]"))
+            if same_endpoint and existing and not reset_snapshot
+            else [],
             existing_assets,
             request.location,
             request.transport,
-            directory,
         )
         invalidate_runtime(runtime_id)
         return {
@@ -2916,8 +2805,10 @@ def create_app(
             "base_url": request.base_url,
             "location": request.location,
             "transport": request.transport,
-            "directory": directory,
-            "snapshot": existing.get("snapshot") if same_endpoint and existing else None,
+            "worker_managed": request.worker_managed,
+            "snapshot": existing.get("snapshot")
+            if same_endpoint and existing and not reset_snapshot
+            else None,
         }
 
     @app.delete("/api/v1/runtimes/{runtime_id}")
@@ -2956,11 +2847,12 @@ def create_app(
                     "error": state["error"],
                     "checked_at": state["checked_at"],
                     "callback_url": callback_for(row),
+                    "worker_managed": runtime_is_worker_managed(row),
+                    "runtime_identity": runtime_worker_identity(row),
                     "recipes": [recipe.dump() for recipe in recipes_from_runtime(row)],
                     "active": row["id"] == active_runtime_id,
                     "nodes_installed": nodes_installed,
                     "cooksprite_nodes": cooksprite_nodes,
-                    "node_install_available": bool(row.get("directory")),
                 }
             )
         return result
@@ -2994,6 +2886,7 @@ def create_app(
         return {
             "runtime_id": runtime_id,
             "defaults": runtime_defaults(runtime, recipes),
+            "mode_defaults": runtime_mode_defaults(runtime, recipes),
             "normal_estimators": runtime_normal_estimators(runtime, recipes),
             "model_bundles": bundles,
             "models": runtime_model_options(recipes),
@@ -3004,34 +2897,27 @@ def create_app(
                     "actions": recipe.actions,
                     "modes": recipe.modes,
                     "model_id": recipe.checkpoint or recipe.id,
+                    "params_schema": recipe.params_schema,
                 }
                 for recipe in recipes
             ],
         }
 
-    @app.put("/api/v1/runtimes/{runtime_id}/defaults/normal/{mode}")
-    def set_runtime_normal_estimator(
+    def update_runtime_mode_default(
         runtime_id: str,
+        action_id: str,
         mode: str,
         body: RuntimeDefaultBinding,
     ) -> dict[str, Any]:
-        if mode not in {"single", "temporal"}:
-            raise HTTPException(
-                422,
-                _detail("normal_estimator_mode_invalid", "normal estimator mode must be single or temporal"),
-            )
         runtime = runtime_or_404(runtime_id)
+        if action_id not in registry.action_ids:
+            raise HTTPException(404, _detail("action_not_found", "unknown Action"))
         recipes = recipes_from_runtime(runtime)
-        inputs = {"__source_kind": ["FrameSeq"]} if mode == "temporal" else {}
         compatible = [
             recipe
             for recipe in recipes
-            if supports(recipe, "normal.generate", inputs)
-            and (
-                recipe.family == "cooksprite.normal"
-                if mode == "single"
-                else recipe.family in {"cooksprite.normal", "cooksprite.normal-temporal"}
-            )
+            if action_id in recipe.actions
+            and mode in recipe.modes
             and str(recipe.checkpoint or recipe.id) == body.model_id
         ]
         if not compatible:
@@ -3039,40 +2925,64 @@ def create_app(
                 422,
                 _detail(
                     "default_model_incompatible",
-                    "the selected model is not compatible with this normal-estimation mode on this runtime",
+                    "the selected model is not compatible with this Action mode on this runtime",
                 ),
             )
-        estimators = runtime_normal_estimators(runtime, recipes)
-        estimators[mode] = {"model_id": body.model_id}
+        mode_defaults = runtime_mode_defaults(runtime, recipes)
+        mode_defaults.setdefault(action_id, {})[mode] = {"model_id": body.model_id}
         save_runtime_defaults(
             runtime,
             runtime_defaults(runtime, recipes),
-            normal_estimators=estimators,
+            mode_defaults=mode_defaults,
         )
         invalidate_runtime(runtime_id)
-        return {"runtime_id": runtime_id, "mode": mode, "default": estimators[mode]}
+        return {
+            "runtime_id": runtime_id,
+            "action_id": action_id,
+            "mode": mode,
+            "default": mode_defaults[action_id][mode],
+        }
+
+    @app.put("/api/v1/runtimes/{runtime_id}/defaults/{action_id}/modes/{mode}")
+    def set_runtime_mode_default(
+        runtime_id: str,
+        action_id: str,
+        mode: str,
+        body: RuntimeDefaultBinding,
+    ) -> dict[str, Any]:
+        return update_runtime_mode_default(runtime_id, action_id, mode, body)
+
+    @app.put("/api/v1/runtimes/{runtime_id}/defaults/normal/{mode}")
+    def set_runtime_normal_estimator(
+        runtime_id: str,
+        mode: str,
+        body: RuntimeDefaultBinding,
+    ) -> dict[str, Any]:
+        for action_id in registry.action_ids:
+            aliases = registry.execution(action_id).get("legacy_mode_aliases") or {}
+            recipe_mode = aliases.get(mode)
+            if recipe_mode:
+                result = update_runtime_mode_default(runtime_id, action_id, str(recipe_mode), body)
+                return {**result, "mode": mode}
+        raise HTTPException(
+            422,
+            _detail(
+                "normal_estimator_mode_invalid", "normal estimator mode must be single or temporal"
+            ),
+        )
 
     @app.put("/api/v1/runtimes/{runtime_id}/defaults/{action_id}")
     def set_runtime_default(
         runtime_id: str, action_id: str, body: RuntimeDefaultBinding
     ) -> dict[str, Any]:
         runtime = runtime_or_404(runtime_id)
-        if action_id not in ACTION_IDS:
+        if action_id not in registry.action_ids:
             raise HTTPException(404, _detail("action_not_found", "unknown Action"))
-        if action_id in {"normal.generate", "sprite.pixelize"}:
-            raise HTTPException(
-                422,
-                _detail(
-                    "normal_estimator_mode_required",
-                    "choose the single-image or temporal normal-estimation default explicitly",
-                ),
-            )
         recipes = recipes_from_runtime(runtime)
         compatible = [
             recipe
             for recipe in recipes
-            if supports(recipe, action_id)
-            and str(recipe.checkpoint or recipe.id) == body.model_id
+            if supports(recipe, action_id) and str(recipe.checkpoint or recipe.id) == body.model_id
         ]
         if not compatible:
             raise HTTPException(
@@ -3088,140 +2998,6 @@ def create_app(
         invalidate_runtime(runtime_id)
         return {"runtime_id": runtime_id, "action_id": action_id, "default": defaults[action_id]}
 
-    def _model_download_view(job: dict[str, Any]) -> dict[str, Any]:
-        with model_download_lock:
-            return dict(job)
-
-    def _update_model_download(download_id: str, **changes: Any) -> None:
-        with model_download_lock:
-            job = model_downloads.get(download_id)
-            if job:
-                job.update(changes)
-
-    def _run_model_download(
-        download_id: str,
-        runtime: dict[str, Any],
-        bundle_id: str,
-    ) -> None:
-        bundle = MODEL_BUNDLES[bundle_id]
-        files = list(bundle["files"])
-        total_files = max(1, len(files))
-        _update_model_download(
-            download_id,
-            status="downloading",
-            message="downloading model bundle",
-            progress=0.0,
-        )
-
-        def report_file(index: int, event: dict[str, Any]) -> None:
-            local = float(event.get("progress") or 0.0)
-            _update_model_download(
-                download_id,
-                current_file=event.get("current_file"),
-                bytes_done=int(event.get("bytes_done") or 0),
-                bytes_total=int(event.get("bytes_total") or 0),
-                progress=min(0.99, (index + local) / total_files),
-                message=str(event.get("message") or "downloading model"),
-            )
-
-        try:
-            for index, file in enumerate(files):
-                download_bundle_file(
-                    runtime,
-                    file,
-                    progress=lambda event, index=index: report_file(index, event),
-                )
-            _update_model_download(
-                download_id,
-                status="verifying",
-                progress=0.99,
-                current_file=None,
-                message="verifying model bundle with ComfyUI",
-            )
-            report = app.state.comfy_factory(runtime["base_url"]).doctor()
-            persist_runtime_report(runtime, report)
-            available = next(
-                (
-                    item
-                    for item in model_bundles(report)
-                    if item["id"] == bundle_id
-                ),
-                None,
-            )
-            if not available or not available["ready"]:
-                missing = [file["name"] for file in (available or {}).get("files", []) if not file.get("present")]
-                raise ModelDownloadError(
-                    "model bundle verification failed"
-                    + (f": missing {', '.join(missing)}" if missing else ""),
-                    code="model_bundle_incomplete",
-                )
-            _update_model_download(
-                download_id,
-                status="succeeded",
-                progress=1.0,
-                current_file=None,
-                bytes_done=0,
-                bytes_total=0,
-                message="model bundle is ready",
-                error=None,
-            )
-        except Exception as exc:  # noqa: BLE001 - report every downloader failure to Web.
-            code = getattr(exc, "code", "model_download_failed")
-            _update_model_download(
-                download_id,
-                status="failed",
-                message="model bundle download failed",
-                error={"code": str(code), "message": str(exc)},
-            )
-
-    @app.post("/api/v1/runtimes/{runtime_id}/model-bundles/{bundle_id}/download", status_code=202)
-    def download_model_bundle(runtime_id: str, bundle_id: str) -> dict[str, Any]:
-        runtime = runtime_or_404(runtime_id)
-        if bundle_id not in MODEL_BUNDLES:
-            raise HTTPException(404, _detail("model_bundle_not_found", "unknown model bundle"))
-        with model_download_lock:
-            existing = next(
-                (
-                    item
-                    for item in model_downloads.values()
-                    if item["runtime_id"] == runtime_id
-                    and item["bundle_id"] == bundle_id
-                    and item["status"] in {"queued", "downloading", "verifying"}
-                ),
-                None,
-            )
-            if existing:
-                return _model_download_view(existing)
-            download_id = f"model_download_{uuid.uuid4().hex}"
-            job = {
-                "id": download_id,
-                "runtime_id": runtime_id,
-                "bundle_id": bundle_id,
-                "status": "queued",
-                "current_file": None,
-                "bytes_done": 0,
-                "bytes_total": 0,
-                "progress": 0.0,
-                "message": "queued",
-                "error": None,
-            }
-            model_downloads[download_id] = job
-        threading.Thread(
-            target=_run_model_download,
-            args=(download_id, runtime, bundle_id),
-            name=f"cooksprite-model-{bundle_id}",
-            daemon=True,
-        ).start()
-        return _model_download_view(job)
-
-    @app.get("/api/v1/runtimes/{runtime_id}/model-downloads/{download_id}")
-    def model_download_status(runtime_id: str, download_id: str) -> dict[str, Any]:
-        with model_download_lock:
-            job = model_downloads.get(download_id)
-        if not job or job["runtime_id"] != runtime_id:
-            raise HTTPException(404, _detail("model_download_not_found", "unknown model download"))
-        return _model_download_view(job)
-
     @app.post("/api/v1/runtimes/{runtime_id}/doctor")
     def doctor(runtime_id: str) -> dict[str, Any]:
         runtime = runtime_or_404(runtime_id)
@@ -3231,22 +3007,16 @@ def create_app(
             invalidate_runtime(runtime_id)
             raise HTTPException(502, _detail("comfy_unavailable", str(exc))) from exc
         system = report.get("system_stats", {}).get("system", {})
-        is_test_runtime = (
-            system.get("device") == "protocol-stub"
-            or system.get("comfyui_version") in TEST_RUNTIME_VERSIONS
-        )
-        if is_test_runtime and not app.state.allow_test_runtime:
+        try:
+            snapshot, dynamic, recipes = persist_runtime_report(runtime, report)
+        except RuntimeIdentityError as exc:
             invalidate_runtime(runtime_id)
-            raise HTTPException(
-                422,
-                _detail(
-                    "test_runtime_not_allowed",
-                    "Fake Runtime is allowed only in an explicit test process",
-                ),
+            code = (
+                "worker_runtime_incompatible"
+                if runtime_is_worker_managed(runtime)
+                else "remote_callback_missing"
             )
-        snapshot, dynamic, recipes = persist_runtime_report(
-            runtime, report, is_test_runtime=is_test_runtime
-        )
+            raise HTTPException(409, _detail(code, str(exc))) from exc
         devices = report.get("system_stats", {}).get("devices") or []
         model_counts = {
             name: len(items)
@@ -3271,114 +3041,9 @@ def create_app(
             },
             "device": devices[0] if devices else None,
             "models": model_counts,
+            "worker_managed": runtime_is_worker_managed(runtime),
+            "runtime_identity": report.get("runtime_info"),
         }
-
-    @app.post("/api/v1/runtimes/{runtime_id}/nodes/install")
-    def install_runtime_nodes(runtime_id: str) -> dict[str, Any]:
-        """Install CookSprite nodes only when the ComfyUI checkout is local."""
-
-        runtime = runtime_or_404(runtime_id)
-        directory = validate_comfy_directory(runtime.get("directory"))
-        if not directory:
-            return {
-                "runtime_id": runtime_id,
-                "status": "manual_required",
-                "message": "Install CookSprite nodes on the remote ComfyUI host, then reconnect.",
-                "command": "cspr comfy install-nodes <ComfyUI directory>",
-                "restart_required": False,
-            }
-        target = install_node_pack(directory, install_dependencies=False)
-        return {
-            "runtime_id": runtime_id,
-            "status": "installed",
-            "directory": directory,
-            "node_directory": str(target),
-            "message": "CookSprite nodes installed; restart ComfyUI to load them.",
-            "restart_required": True,
-        }
-
-    @app.post("/api/v1/runtimes/{runtime_id}/restart", status_code=202)
-    def restart_runtime(runtime_id: str) -> dict[str, Any]:
-        """Restart a local ComfyUI process so newly installed nodes are loaded."""
-
-        runtime = runtime_or_404(runtime_id)
-        if runtime.get("location", "remote") != "local":
-            return {
-                "runtime_id": runtime_id,
-                "status": "manual_required",
-                "message": "Remote ComfyUI cannot be restarted from this CookSprite host.",
-                "restart_required": True,
-            }
-        base_url, host, port, directory = _local_start_target(
-            LocalStartCreate(base_url=runtime["base_url"], directory=runtime.get("directory"))
-        )
-        active_runs = store.active_run_count(runtime_id)
-        if active_runs:
-            raise HTTPException(
-                409,
-                _detail(
-                    "runtime_in_use",
-                    f"cannot restart ComfyUI while {active_runs} run(s) are active",
-                ),
-            )
-        with setup_lock:
-            if setup_state["status"] in {"installing", "starting", "validating"}:
-                raise HTTPException(
-                    409, _detail("setup_in_progress", "local ComfyUI lifecycle operation is already running")
-                )
-            setup_state.update(
-                status="starting",
-                progress=0.05,
-                message="restarting local ComfyUI",
-                error=None,
-                directory=directory,
-                method=None,
-                runtime_id=runtime_id,
-            )
-
-        def restart_worker() -> None:
-            try:
-                launch = restart_with_preference(directory, host=host, port=port)
-                with setup_lock:
-                    setup_state.update(
-                        status="starting",
-                        progress=0.35,
-                        message=f"ComfyUI restarted with {launch.method}; waiting for API",
-                        method=launch.method,
-                    )
-                report = wait_until_ready(base_url, timeout=300)
-                refreshed = store.runtime(runtime_id)
-                if not refreshed:
-                    raise RuntimeError("runtime was removed while ComfyUI was restarting")
-                with setup_lock:
-                    setup_state.update(
-                        status="validating",
-                        progress=0.85,
-                        message="validating restarted ComfyUI capabilities",
-                        method=launch.method,
-                    )
-                snapshot, _, recipes = persist_runtime_report(refreshed, report)
-                with setup_lock:
-                    setup_state.update(
-                        status="ready",
-                        progress=1.0,
-                        message=f"ComfyUI restarted with {len(recipes)} compatible recipe(s)",
-                        error=None,
-                        method=launch.method,
-                        snapshot=snapshot,
-                        runtime_id=runtime_id,
-                    )
-            except Exception as exc:  # noqa: BLE001 - normalized UI lifecycle boundary.
-                with setup_lock:
-                    setup_state.update(
-                        status="failed",
-                        progress=1.0,
-                        message="ComfyUI restart failed",
-                        error=str(exc),
-                    )
-
-        threading.Thread(target=restart_worker, daemon=True, name="cooksprite-comfy-restart").start()
-        return local_setup_status()
 
     @app.post("/api/v1/runtimes/{runtime_id}/recipes", status_code=201)
     def import_recipe(runtime_id: str, body: RecipeCreate) -> dict[str, Any]:
@@ -3389,7 +3054,7 @@ def create_app(
             raise HTTPException(
                 422, _detail("recipe_invalid", "recipe id cannot be empty or contain ':'")
             )
-        known_actions = set(ACTION_IDS)
+        known_actions = set(registry.action_ids)
         if not body.actions or not set(body.actions).issubset(known_actions):
             raise HTTPException(422, _detail("recipe_invalid", "recipe has unsupported Actions"))
         if not body.output or len(body.output) != 2:
@@ -3440,7 +3105,7 @@ def create_app(
             **manifest,
             "schema": "cooksprite.runtime-assets/v1",
             "recipes": [item.dump() for item in recipes],
-            "callback_url": callback_for(runtime),
+            "callback_url": callback_for(runtime, required=True),
         }
         assets = [
             item
@@ -3457,223 +3122,27 @@ def create_app(
             assets,
             runtime.get("location", "remote"),
             runtime.get("transport", "http"),
-            runtime.get("directory"),
         )
         invalidate_runtime(runtime_id)
         return recipe.dump()
 
-    @app.get("/api/v1/runtimes/{runtime_id}/tools")
-    def tools_for_runtime(runtime_id: str) -> list[dict[str, Any]]:
-        return [item.model_dump() for item in runtime_tools(runtime_or_404(runtime_id))]
-
-    @app.get("/api/v1/tools")
-    def tools() -> list[dict[str, Any]]:
-        return [item.model_dump() for item in registry.tools()]
-
-    @app.get("/api/v1/tool-packages")
-    def tool_package_manifests() -> list[dict[str, Any]]:
-        return registry.package_manifests()
-
-    @app.post("/api/v1/workflows", response_model=WorkflowRevision, status_code=201)
-    def create_workflow(body: WorkflowDefinition) -> WorkflowRevision:
-        runtime = runtime_or_404(body.runtime_id)
-        if not runtime["snapshot"]:
-            raise HTTPException(
-                409,
-                _detail("runtime_not_doctored", "run doctor before defining graphs"),
-            )
-        descriptors = {item.id: item for item in runtime_tools(runtime)}
-        unknown = [node.tool for node in body.nodes if node.tool not in descriptors]
-        if unknown:
-            raise HTTPException(
-                422,
-                _detail(
-                    "unknown_tool",
-                    "tool is not registered for runtime",
-                    tools=unknown,
-                ),
-            )
-        by_node = {node.id: node for node in body.nodes}
-        for name, reference in body.outputs.items():
-            node = by_node.get(reference.node or "")
-            descriptor = descriptors.get(node.tool) if node else None
-            port = next(
-                (
-                    item
-                    for item in (descriptor.outputs if descriptor else [])
-                    if item.name == reference.output
-                ),
-                None,
-            )
-            if not port or not port.persistable:
-                raise HTTPException(
-                    422,
-                    _detail(
-                        "nonpersistable_output",
-                        "only declared persistable outputs may leave a workflow",
-                        output=name,
-                    ),
-                )
-        revision = store.save_definition(
-            "workflow",
-            body.id,
-            body.runtime_id,
-            runtime["snapshot"],
-            body.model_dump(mode="json"),
-        )
-        return WorkflowRevision(
-            **body.model_dump(),
-            revision=revision,
-            runtime_snapshot=runtime["snapshot"],
-        )
-
-    @app.get("/api/v1/workflows")
-    def workflows() -> list[dict[str, Any]]:
-        return [workflow_from(row).model_dump() for row in store.definitions("workflow")]
-
-    @app.get("/api/v1/workflows/{workflow_id}/{revision}", response_model=WorkflowRevision)
-    def workflow(workflow_id: str, revision: int) -> WorkflowRevision:
-        row = store.definition("workflow", workflow_id, revision)
-        if not row:
-            raise HTTPException(404, _detail("workflow_not_found", "unknown workflow revision"))
-        return workflow_from(row)
-
-    @app.post("/api/v1/tasks", response_model=TaskRevision, status_code=201)
-    def create_task(body: TaskDefinition) -> TaskRevision:
-        runtime = runtime_or_404(body.runtime_id)
-        if not runtime["snapshot"]:
-            raise HTTPException(
-                409,
-                _detail("runtime_not_doctored", "run doctor before defining graphs"),
-            )
-        for node in body.nodes:
-            for candidate in node.candidates:
-                row = store.definition("workflow", node.workflow_id, candidate)
-                if not row:
-                    raise HTTPException(
-                        422,
-                        _detail(
-                            "workflow_candidate_missing",
-                            f"{node.workflow_id}@{candidate} is absent",
-                            node=node.id,
-                        ),
-                    )
-                if row["runtime_id"] != body.runtime_id or row["snapshot"] != runtime["snapshot"]:
-                    raise HTTPException(
-                        409,
-                        _detail(
-                            "runtime_snapshot_incompatible",
-                            "candidate is bound to another runtime snapshot",
-                            node=node.id,
-                        ),
-                    )
-        revision = store.save_definition(
-            "task",
-            body.id,
-            body.runtime_id,
-            runtime["snapshot"],
-            body.model_dump(mode="json"),
-        )
-        return TaskRevision(
-            **body.model_dump(),
-            revision=revision,
-            runtime_snapshot=runtime["snapshot"],
-        )
-
-    @app.get("/api/v1/tasks")
-    def tasks() -> list[dict[str, Any]]:
-        return [task_from(row).model_dump() for row in store.definitions("task")]
-
-    @app.get("/api/v1/tasks/{task_id}/{revision}", response_model=TaskRevision)
-    def task(task_id: str, revision: int) -> TaskRevision:
-        row = store.definition("task", task_id, revision)
-        if not row:
-            raise HTTPException(404, _detail("task_not_found", "unknown task revision"))
-        return task_from(row)
-
-    @app.post("/api/v1/runs", response_model=RunView, status_code=202)
-    def start_contributor_run(request: RunCreate) -> RunView:
-        runtime = runtime_or_404(request.runtime_id)
-        run_id = f"run_{uuid.uuid4().hex}"
-        try:
-            if request.target.kind == "workflow":
-                row = store.definition("workflow", request.target.id, request.target.revision)
-                if not row:
-                    raise CompileError("workflow revision not found")
-                workflow_revision = workflow_from(row)
-                assert_runtime(request.runtime_id, workflow_revision.runtime_snapshot)
-                compiled = Compiler(
-                    runtime_tools(runtime), bridge_for(runtime), run_id
-                ).compile_workflow(workflow_revision, request.inputs)
-            elif request.target.kind == "task":
-                row = store.definition("task", request.target.id, request.target.revision)
-                if not row:
-                    raise CompileError("task revision not found")
-                task_revision = task_from(row)
-                assert_runtime(request.runtime_id, task_revision.runtime_snapshot)
-                workflow_revisions = {}
-                for node in task_revision.nodes:
-                    for revision in node.candidates:
-                        workflow_revisions[(node.workflow_id, revision)] = workflow_from(
-                            store.definition("workflow", node.workflow_id, revision)
-                        )
-                compiled = Compiler(
-                    runtime_tools(runtime), bridge_for(runtime), run_id
-                ).compile_task(
-                    task_revision,
-                    workflow_revisions,
-                    request.inputs,
-                    request.candidate_selection,
-                )
-        except HTTPException:
-            raise
-        except Exception as exc:
-            raise HTTPException(422, _detail("graph_invalid", str(exc))) from exc
-        store.create_run(run_id, request.runtime_id, request=request.model_dump(mode="json"))
-        execute_plan(run_id, runtime, compiled)
-        return run_view(run_id)
-
     def recovered_finalizer(row: dict[str, Any]) -> Callable[[], None] | None:
-        action_id = row.get("action_id")
+        action_id = str(row.get("action_id") or "")
         request = json.loads(row.get("request") or "{}")
-        if action_id == "sprite.pixelize":
-            sources = (request.get("inputs") or {}).get("source") or []
-            source_ids = sources if isinstance(sources, list) else [sources]
-            expanded = source_frame_ids(source_ids, limit=32)
-            return lambda: finalize_sprite_pixelize(
-                row["id"],
-                source_ids[0],
-                expanded,
-                row.get("project_id") or request.get("project"),
-            )
-        if action_id == "image.pixelize":
-            sources = (request.get("inputs") or {}).get("source") or []
-            source_id = sources[0] if isinstance(sources, list) and sources else sources
-            source = store.artifact(source_id) if source_id else None
-            if source and source.get("kind") == "FrameSeq":
-                return lambda: finalize_pixelize_sequence(
-                    row["id"], source_id, row.get("project_id") or request.get("project")
-                )
-            return None
-        if action_id in SEQUENCE_ACTIONS:
-            return lambda: finalize_frame_sequence(
-                row["id"],
-                action_id,
-                row.get("project_id") or request.get("project"),
-                request.get("values") or {},
-            )
-        if action_id == "normal.generate":
-            sources = (request.get("inputs") or {}).get("source") or []
-            source_ids = sources if isinstance(sources, list) else [sources]
-            plans = (request.get("inputs") or {}).get("pixel_plan") or []
-            plan_id = plans[0] if isinstance(plans, list) and plans else plans
-            if plan_id and source_ids:
-                return lambda: finalize_pixel_plan_normal(
-                    row["id"], source_ids[0], plan_id, int((request.get("values") or {}).get("frame_index", 0))
-                )
-            expanded = source_frame_ids(source_ids, limit=32)
-            return lambda: order_normal_outputs(row["id"], expanded)
-        return None
+        raw_inputs = request.get("inputs") or {}
+        inputs = {
+            str(slot): [str(item) for item in value]
+            if isinstance(value, list)
+            else ([str(value)] if value else [])
+            for slot, value in raw_inputs.items()
+        }
+        return action_finalizer(
+            row["id"],
+            action_id,
+            inputs,
+            request.get("values") or {},
+            str(row.get("project_id") or request.get("project") or ""),
+        )
 
     for interrupted in store.runs(("queued", "running", "cancel_requested")):
         runtime = store.runtime(interrupted.get("runtime_id"))
@@ -3700,7 +3169,7 @@ def create_app(
     packaged_web = Path(__file__).resolve().parents[1] / "static"
     source_web = Path(__file__).resolve().parents[2] / "web" / "dist"
     web_root = packaged_web if (packaged_web / "index.html").is_file() else source_web
-    if (web_root / "index.html").is_file():
+    if serve_frontend and (web_root / "index.html").is_file():
 
         @app.get("/{spa_path:path}", include_in_schema=False)
         def web_app(spa_path: str) -> FileResponse:
@@ -3712,6 +3181,3 @@ def create_app(
             return FileResponse(web_root / "index.html")
 
     return app
-
-
-app = create_app()

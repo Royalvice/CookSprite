@@ -6,18 +6,14 @@ from typing import ClassVar
 
 from fastapi.testclient import TestClient
 
-from cli.__main__ import (
-    _runtime_registration_payload,
-    _start_frontend,
-    _stop_frontend,
-    parser,
-)
+from cli.__main__ import parser
 from cooksprite.api.app import create_app
 from cooksprite.comfy.client import ComfyError
 from cooksprite.dev import check_generated, check_tool_packages
 from cooksprite.execution import ExecutionPlan
 from cooksprite.store import Store
 from cooksprite.supervisor import RunSupervisor
+from cooksprite.tool_packages import tool_packages
 
 
 class ProgressComfy:
@@ -165,7 +161,7 @@ def test_server_restart_marks_unsubmitted_run_as_explicitly_retryable(tmp_path):
         project_id="prj_missing",
         request={"project": "prj_missing"},
     )
-    client = TestClient(create_app(tmp_path, allow_test_runtime=True))
+    client = TestClient(create_app(tmp_path))
     run = client.get("/api/v1/runs/run_interrupted").json()
     assert run["status"] == "failed"
     assert run["error"]["code"] == "run_interrupted"
@@ -174,114 +170,77 @@ def test_server_restart_marks_unsubmitted_run_as_explicitly_retryable(tmp_path):
 def test_registry_projections_and_node_package_manifest_are_in_sync(tmp_path):
     assert check_generated()
     report = check_tool_packages()
-    assert report["tools"] == 15
-    client = TestClient(create_app(tmp_path, allow_test_runtime=True))
-    packages = client.get("/api/v1/tool-packages").json()
-    assert {item["id"] for item in packages} == {
+    assert report["tools"] == 14
+    client = TestClient(create_app(tmp_path))
+    assert {item.id for item in tool_packages.manifests} == {
         "bridge",
         "image",
         "pixel",
-        "alpha",
         "frames",
         "normal",
     }
-    assert all(item["lowerings"] or item.get("sealed_graphs") for item in packages)
+    assert all(item.lowerings or item.sealed_graphs for item in tool_packages.manifests)
+    assert "/api/v1/tool-packages" not in client.get("/api/v1/openapi.json").json()["paths"]
 
 
 def test_cli_exposes_headless_run_artifact_and_project_export_paths():
     root = parser()
     export = root.parse_args(["project", "export", "prj_test", "--wait"])
-    assert export.action == "export"
+    assert export.command == "project"
+    assert export.project_action == "export"
     assert export.wait is True
-    wait = root.parse_args(["run", "wait", "run_test"])
-    assert wait.action == "wait"
-    download = root.parse_args(["artifact", "download", "art_test", "--out", "sprite.png"])
-    assert download.action == "download"
+    wait = root.parse_args(["run", "control", "run_test", "wait"])
+    assert wait.run_action == "control"
+    assert wait.control_action == "wait"
+    download = root.parse_args(
+        ["artifact", "get", "art_test", "download", "--out", "sprite.png"]
+    )
+    assert download.artifact_action == "get"
+    assert download.get_action == "download"
 
 
-def test_cli_start_defaults_to_api_frontend_and_managed_comfy():
+def test_cli_start_serves_the_packaged_frontend_without_a_second_process():
     root = parser()
-    start = root.parse_args(["start"])
-    assert start.no_comfy is False
+    start = root.parse_args(["service", "start"])
     assert start.no_frontend is False
     assert start.port == 8000
-    assert start.frontend_port == 5173
     assert start.data_dir is None
-    assert start.runtime is None
-    payload = _runtime_registration_payload(
-        start,
-        comfy_url="http://127.0.0.1:8188",
-        runtime_location="local",
-        runtime_transport="http",
-        api_base="http://127.0.0.1:8000",
+    assert start.public_api_url is None
+    assert start.restart is False
+    override = root.parse_args(
+        ["service", "start", "--public-api-url", "https://api.example.test/api/v1"]
     )
-    assert "id" not in payload
-    explicit = root.parse_args(["start", "--runtime", "rt_named"])
-    explicit_payload = _runtime_registration_payload(
-        explicit,
-        comfy_url="http://127.0.0.1:8188",
-        runtime_location="local",
-        runtime_transport="http",
-        api_base="http://127.0.0.1:8000",
-    )
-    assert explicit_payload["id"] == "rt_named"
-    no_comfy = root.parse_args(["start", "--no-comfy", "--frontend-port", "5174"])
-    assert no_comfy.no_comfy is True
-    assert no_comfy.frontend_port == 5174
+    assert override.public_api_url == "https://api.example.test/api/v1"
 
 
-def test_frontend_remains_in_start_supervisor_process_group(monkeypatch, tmp_path):
-    web = tmp_path / "web"
-    web.mkdir()
-    (web / "package.json").write_text("{}", encoding="utf-8")
-    args = parser().parse_args(
-        ["start", "--no-comfy", "--frontend-dir", str(web), "--npm", "npm"]
-    )
-    captured = {}
+def test_api_frontend_routes_can_be_disabled_explicitly(monkeypatch, tmp_path):
+    client = TestClient(create_app(tmp_path / "with-web"))
+    assert client.get("/").status_code == 200
 
-    class Process:
-        terminated = False
+    client = TestClient(create_app(tmp_path / "without-web", serve_frontend=False))
+    assert client.get("/").status_code == 404
 
-        @staticmethod
-        def poll():
-            return None
-
-        def terminate(self):
-            self.terminated = True
-
-        @staticmethod
-        def wait(timeout):
-            assert timeout == 5
-
-        @staticmethod
-        def kill():
-            raise AssertionError("graceful frontend shutdown should succeed")
-
-    process = Process()
-
-    def popen(command, **kwargs):
-        captured["command"] = command
-        captured["kwargs"] = kwargs
-        return process
-
-    monkeypatch.setattr("cli.__main__.shutil.which", lambda _name: "/usr/bin/npm")
-    monkeypatch.setattr("cli.__main__.subprocess.Popen", popen)
-
-    assert _start_frontend(args, frontend_port=5173, api_port=8000) is process
-    assert "start_new_session" not in captured["kwargs"]
-    _stop_frontend(process)
-    assert process.terminated is True
+    monkeypatch.setenv("COOKSPRITE_SERVE_FRONTEND", "0")
+    client = TestClient(create_app(tmp_path / "reload-without-web"))
+    assert client.get("/").status_code == 404
 
 
-def test_cli_exposes_two_environment_lock_and_sync_commands():
+def test_cli_exposes_worker_lifecycle_and_remote_runtime_registration():
     root = parser()
-    comfy_lock = root.parse_args(["comfy", "lock"])
-    assert comfy_lock.action == "lock"
-    comfy_sync = root.parse_args(["comfy", "sync", "/tmp/comfy-runtime", "--update-lock"])
-    assert comfy_sync.action == "sync"
-    assert comfy_sync.update_lock is True
-    env_sync = root.parse_args(
-        ["env", "sync", "--project-dir", ".", "--comfy-dir", "/tmp/comfy-runtime"]
+    worker_sync = root.parse_args(["comfy", "worker", "sync"])
+    assert worker_sync.command == "comfy"
+    assert worker_sync.worker_action == "sync"
+    imported = root.parse_args(
+        [
+            "comfy",
+            "connect",
+            "import",
+            "--url",
+            "http://runtime.example.test:8188",
+            "--callback-url",
+            "https://api.example.test/api/v1",
+            "--worker-managed",
+        ]
     )
-    assert env_sync.action == "sync"
-    assert env_sync.comfy_dir == "/tmp/comfy-runtime"
+    assert imported.worker_managed is True
+    assert imported.location == "remote"

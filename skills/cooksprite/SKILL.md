@@ -11,8 +11,8 @@ guess hidden prompt text. The Action registry is the source of truth.
 ## Discover
 
 ```bash
-cspr actions --json
-cspr action describe image.generate --json
+cspr action --json
+cspr action show image.generate --json
 ```
 
 Read `accepts`, `controls`, `models`, and `available` before running. A control
@@ -85,7 +85,7 @@ content is an ordered JSON manifest; child frames remain independent `Image`
 artifacts. Expand it before selecting or editing frames:
 
 ```bash
-cspr artifact sequence art_sequence_x
+cspr artifact get art_sequence_x sequence
 ```
 
 The response contains `sequence.action`, `sequence.view`,
@@ -100,8 +100,8 @@ references. PUT with the prior ETag. On HTTP 409, fetch again and reconcile;
 never silently overwrite another editor.
 
 ```bash
-cspr document get prj_x --out document.json
-cspr document put prj_x document.json --etag <etag>
+cspr project manage prj_x document get --out document.json
+cspr project manage prj_x document put document.json --etag <etag>
 ```
 
 After the user has curated a track, materialize that exact document track as
@@ -109,7 +109,7 @@ the reusable hand-off `FrameSeq`. This is the sequence to pass to normals or
 another Action; do not keep passing the raw generation candidates.
 
 ```bash
-cspr project sequence prj_x --clip walk --view level --direction s
+cspr project manage prj_x sequence --clip walk --view level --direction s
 ```
 
 ## Export

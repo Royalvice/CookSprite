@@ -28,7 +28,7 @@ def _identity() -> dict[str, object]:
         "comfy_url": "http://127.0.0.1:39197",
         "updated_at": "2026-08-22T00:00:00+00:00",
         "source_origin": "https://secret@example.invalid/CookSprite.git",
-        "source_dir": "/private/h20/source",
+        "source_dir": "/private/worker/source",
         "pid": 99999,
         "command": ["secret"],
     }

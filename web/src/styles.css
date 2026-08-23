@@ -650,7 +650,6 @@ h2 { font-size: 21px; }
 .project-switcher, .project-create-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: end; margin-top: 14px; }
 .project-switcher label, .project-create-form label { display: grid; gap: 4px; min-width: 0; color: var(--muted); font-size: 9px; font-weight: 800; }
 .project-switcher select, .project-create-form input { width: 100%; min-height: 46px; border: 1px solid var(--line); background: var(--bg); color: var(--text); padding: 8px 10px; }
-.project-directory { display: block; margin-top: 10px; overflow-wrap: anywhere; color: var(--aux) !important; font-family: "SFMono-Regular", monospace; }
 .runtime-list { display: grid; gap: 6px; margin: 18px 0; }
 .runtime-list article { display: flex; align-items: center; min-width: 0; gap: 10px; border: 1px solid var(--line); background: var(--bg); padding: 10px; }
 .runtime-list article.active { border-color: var(--aux); background: color-mix(in srgb, var(--aux) 7%, var(--bg)); }
@@ -668,19 +667,26 @@ h2 { font-size: 21px; }
 .runtime-actions .text-button.danger:hover { border-color: var(--danger); color: var(--text); }
 .runtime-list article.offline .runtime-status, .runtime-list article .runtime-error { color: var(--danger); }
 .runtime-empty { border: 1px dashed var(--line); margin: 18px 0; padding: 15px; color: var(--muted); }
-.local-probe-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; margin: 18px 0; border: 1px solid var(--aux); background: color-mix(in srgb, var(--aux) 6%, var(--bg)); padding: 16px; }
-.local-probe-card > div:first-child { display: grid; gap: 6px; min-width: 0; }
-.local-probe-card span { color: var(--muted); overflow-wrap: anywhere; }
 .runtime-endpoint-card { display: grid; gap: 12px; margin: 18px 0; border: 1px solid var(--aux); background: color-mix(in srgb, var(--aux) 6%, var(--bg)); padding: 16px; }
 .runtime-endpoint-card label { display: grid; gap: 5px; color: var(--muted); font-size: 9px; font-weight: 800; }
-.runtime-endpoint-card input { min-height: 44px; border: 1px solid var(--line); background: var(--bg); color: var(--text); padding: 9px 10px; }
+.runtime-endpoint-card input, .runtime-endpoint-card select { min-height: 44px; border: 1px solid var(--line); background: var(--bg); color: var(--text); padding: 9px 10px; }
 .runtime-endpoint-card small { color: var(--muted); overflow-wrap: anywhere; }
+.runtime-connection-grid { display: grid; grid-template-columns: minmax(160px, .5fr) minmax(160px, .42fr) minmax(240px, 1fr); gap: 8px; }
+.runtime-connection-grid .runtime-url { grid-column: span 2; }
+.runtime-connection-grid .callback-url { grid-column: 1 / -1; }
+.worker-toggle { grid-template-columns: auto minmax(0, 1fr) !important; align-items: start; border-top: 1px solid var(--line); padding-top: 12px; }
+.worker-toggle input { width: 18px; min-height: 18px; margin: 1px 0 0; accent-color: var(--primary); }
+.worker-toggle span { display: grid; gap: 3px; }
+.worker-toggle small { font-weight: 500; }
 .runtime-endpoint-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .runtime-endpoint-actions .arcade-button { min-height: 44px; }
 .probe-result { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 12px; border: 1px solid var(--line); background: var(--bg); padding: 10px; }
 .probe-result span { font-size: 10px; }
-.probe-result.missing { border-color: var(--warning); }
-.probe-result.unreachable, .probe-result.installed { border-color: var(--danger); }
+.probe-result.unreachable { border-color: var(--danger); }
+.worker-command-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, .9fr); gap: 12px; align-items: center; margin: 18px 0; border: 1px solid color-mix(in srgb, var(--confirm) 55%, var(--line)); background: color-mix(in srgb, var(--confirm) 6%, var(--bg)); padding: 14px; }
+.worker-command-card > div { display: grid; gap: 4px; }
+.worker-command-card span { color: var(--muted); font-size: 10px; }
+.worker-command-card code { color: var(--confirm); overflow-wrap: anywhere; font: 9px "Fusion Pixel", monospace; line-height: 1.7; }
 .capability-summary { margin-top: 18px; border: 1px solid var(--line); background: var(--bg); padding: 12px; }
 .capability-summary > header { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .capability-summary > header span { color: var(--muted); font: 9px "SFMono-Regular", monospace; }
@@ -694,18 +700,7 @@ h2 { font-size: 21px; }
 .capability-items div { display: grid; min-width: 0; gap: 1px; }
 .capability-items b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 9px; }
 .capability-items small { color: var(--muted); font-size: 8px; }
-.managed-setup-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; margin: 18px 0; border: 1px solid var(--aux); background: color-mix(in srgb, var(--aux) 6%, var(--bg)); padding: 16px; }
-.managed-setup-card > div:first-child { display: grid; gap: 6px; min-width: 0; }
-.managed-setup-card span, .managed-setup-card small { color: var(--muted); overflow-wrap: anywhere; }
-.setup-progress { grid-column: 1 / -1; position: relative; min-height: 34px; overflow: hidden; border: 1px solid var(--line); background: var(--bg); }
-.setup-progress i { position: absolute; inset: 0 auto 0 0; background: color-mix(in srgb, var(--confirm) 20%, transparent); transition: width .25s ease; }
-.setup-progress span { position: relative; z-index: 1; display: flex; align-items: center; min-height: 32px; padding: 0 10px; color: var(--text); font-size: 9px; }
-.setup-progress.failed { border-color: var(--danger); }
 .settings-section > h3 { margin: 22px 0 10px; font-size: 12px; }
-.runtime-form { display: grid; grid-template-columns: 160px minmax(220px, 1fr) minmax(150px, .55fr) auto; gap: 8px; }
-.runtime-form label { display: grid; gap: 4px; color: var(--muted); font-size: 9px; font-weight: 800; }
-.runtime-form input { min-height: 42px; border: 1px solid var(--line); background: var(--bg); color: var(--text); padding: 8px; }
-.runtime-form .arcade-button { align-self: end; min-height: 42px; }
 .runtime-defaults { margin-top: 18px; border: 1px solid var(--line); background: var(--bg); padding: 12px; }
 .runtime-defaults h3 { margin: 0 0 10px; }
 .runtime-default-form { display: grid; grid-template-columns: minmax(150px, .7fr) minmax(240px, 1.3fr) auto; gap: 8px; align-items: end; }
@@ -717,16 +712,13 @@ h2 { font-size: 21px; }
 .runtime-model-bundles h3 { margin: 0; }
 .model-bundle-card { display: grid; gap: 8px; border: 1px solid var(--line); background: var(--bg); padding: 10px; }
 .model-bundle-card.ready { border-color: var(--confirm); }
-.model-bundle-heading, .model-bundle-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.model-bundle-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
 .model-bundle-heading > div { display: grid; gap: 3px; min-width: 0; }
-.model-bundle-heading small, .model-bundle-actions small { color: var(--muted); overflow-wrap: anywhere; }
+.model-bundle-heading small { color: var(--muted); overflow-wrap: anywhere; }
 .model-bundle-files { display: grid; gap: 3px; color: var(--muted); font: 8px "Fusion Pixel", monospace; overflow-wrap: anywhere; }
 .model-bundle-files .present { color: var(--confirm); }
-.model-download-progress { min-height: 12px; }
-.model-download-progress i { display: block; height: 100%; }
+.readonly-inventory { color: var(--muted); font-size: 9px; }
 .inline-status { margin: 10px 0 !important; color: var(--aux) !important; font-family: "SFMono-Regular", monospace; }
-.copy-command { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); background: var(--bg); padding: 9px 10px; }
-.copy-command code { min-width: 0; flex: 1; color: var(--aux); overflow-wrap: anywhere; font-size: 9px; }
 .settings-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
 .settings-grid fieldset { display: grid; gap: 7px; border: 0; margin: 0; padding: 0; }
 .settings-grid legend { margin-bottom: 8px; color: var(--muted); font-size: 9px; font-weight: 800; }
@@ -853,16 +845,16 @@ h2 { font-size: 21px; }
   .runtime-list article > .runtime-actions { grid-column: 3; grid-row: 1 / -1; margin-left: 0; }
   .runtime-list article .runtime-status { grid-column: 2; margin-left: 0; justify-self: start; }
   .runtime-list article .text-button, .runtime-list article > svg:last-child { grid-column: 3; grid-row: 1 / -1; margin-left: 0; }
-  .settings-grid, .runtime-form, .runtime-default-form, .runtime-default-form.with-normal-mode, .normal-estimator-advanced > div, .managed-setup-card, .project-switcher, .project-create-form, .local-probe-card { grid-template-columns: 1fr; }
+  .settings-grid, .runtime-connection-grid, .runtime-default-form, .runtime-default-form.with-normal-mode, .normal-estimator-advanced > div, .worker-command-card, .project-switcher, .project-create-form { grid-template-columns: 1fr; }
+  .runtime-connection-grid .runtime-url, .runtime-connection-grid .callback-url { grid-column: auto; }
   .probe-result { grid-template-columns: 1fr; }
   .capability-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .setup-progress { grid-column: 1; }
   .storage-row { display: grid; gap: 4px; }
 }
 
 @media (min-width: 768px) and (max-width: 1000px) {
-  .runtime-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .runtime-form .arcade-button { grid-column: 1 / -1; }
+  .runtime-connection-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .runtime-connection-grid .runtime-url, .runtime-connection-grid .callback-url { grid-column: 1 / -1; }
 }
 
 @media (max-width: 340px) {

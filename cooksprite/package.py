@@ -1,15 +1,19 @@
-"""Build the canonical .cooksprite package without altering media bytes."""
+"""Build the canonical .cooksprite package without buffering media in memory."""
 
 from __future__ import annotations
 
-import io
+import hashlib
 import json
+import os
+import shutil
 import zipfile
 from dataclasses import dataclass
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .store import Store
+
+_COPY_CHUNK_BYTES = 1024 * 1024
 
 
 class PackageError(ValueError):
@@ -18,20 +22,48 @@ class PackageError(ValueError):
         super().__init__("; ".join(issues))
 
 
-@dataclass
+@dataclass(frozen=True)
 class PackageResult:
-    data: bytes
+    """A fully flushed, content-addressed ZIP staging file ready for promotion."""
+
+    staging_path: Path
+    sha256: str
+    size: int
     manifest: dict[str, Any]
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(_COPY_CHUNK_BYTES):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _archive_file(archive: zipfile.ZipFile, member: str, source: Path) -> None:
+    """Write one media blob into a ZIP member in bounded-size chunks."""
+
+    with source.open("rb") as input_handle, archive.open(
+        member, mode="w", force_zip64=True
+    ) as output_handle:
+        shutil.copyfileobj(input_handle, output_handle, length=_COPY_CHUNK_BYTES)
+
+
 def build_package(store: Store, project_id: str, allow_incomplete: bool = False) -> PackageResult:
+    """Build a package directly inside the Blob Store staging area.
+
+    The result is not a second project mirror and is not held in Python memory.
+    Its caller must promote it with Store.put_artifact_file or remove the staged
+    file on a later failure.
+    """
+
     project = store.project(project_id)
     document_row = store.document(project_id)
     if not project or not document_row:
         raise PackageError(["project_not_found"])
     document = document_row["document"]
     issues: list[str] = []
-    files: dict[str, bytes] = {}
+    files: dict[str, Path] = {}
     provenance: dict[str, Any] = {"project": project_id, "artifacts": []}
 
     def include(artifact_id: str | None, folder: str, stem: str) -> str | None:
@@ -44,8 +76,13 @@ def build_package(store: Store, project_id: str, allow_incomplete: bool = False)
         if row["media_type"] != "image/png":
             issues.append(f"artifact_must_be_png:{artifact_id}")
             return None
+        try:
+            source = store.artifact_path(artifact_id)
+        except FileNotFoundError:
+            issues.append(f"missing_artifact_blob:{artifact_id}")
+            return None
         path = str(PurePosixPath(folder) / f"{stem}.png")
-        files[path] = store.artifact_bytes(artifact_id)
+        files[path] = source
         provenance["artifacts"].append(
             {
                 "id": artifact_id,
@@ -147,10 +184,29 @@ def build_package(store: Store, project_id: str, allow_incomplete: bool = False)
     manifest["integrity_warnings"] = sorted(set(issues))
     if issues and not allow_incomplete:
         raise PackageError(manifest["integrity_warnings"])
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
-        archive.writestr("provenance.json", json.dumps(provenance, ensure_ascii=False, indent=2))
-        for path, data in sorted(files.items()):
-            archive.writestr(path, data)
-    return PackageResult(data=buffer.getvalue(), manifest=manifest)
+
+    staging = store.new_artifact_upload_path()
+    try:
+        with staging.open("xb") as handle:
+            with zipfile.ZipFile(
+                handle,
+                mode="w",
+                compression=zipfile.ZIP_DEFLATED,
+                allowZip64=True,
+            ) as archive:
+                archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+                archive.writestr("provenance.json", json.dumps(provenance, ensure_ascii=False, indent=2))
+                for path, source in sorted(files.items()):
+                    _archive_file(archive, path, source)
+            handle.flush()
+            if os.name != "nt":
+                os.fsync(handle.fileno())
+        return PackageResult(
+            staging_path=staging,
+            sha256=_sha256_file(staging),
+            size=staging.stat().st_size,
+            manifest=manifest,
+        )
+    except Exception:
+        staging.unlink(missing_ok=True)
+        raise

@@ -75,10 +75,18 @@ class ComfyClient:
             if workflow_templates.is_success
             else {},
             # This endpoint is optional for external/user-owned ComfyUI.  A
-            # worker-managed H20 runtime validates it explicitly at a higher
+            # worker-managed runtime validates it explicitly at a higher
             # layer rather than treating an absent endpoint as an HTTP failure.
             "runtime_info": runtime_info,
         }
+
+    def runtime_info(self) -> dict[str, Any] | None:
+        response = httpx.get(self.base_url + "/cooksprite/runtime-info", timeout=5)
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        value = response.json()
+        return value if isinstance(value, dict) else None
 
     def submit(self, graph: dict[str, Any], client_id: str | None = None) -> str:
         body: dict[str, Any] = {"prompt": graph}

@@ -212,13 +212,18 @@ def _wait(client: TestClient, run_id: str) -> dict:
 
 
 def _client(tmp_path) -> TestClient:
-    app = create_app(tmp_path, LongSequenceComfy, allow_test_runtime=True)
+    app = create_app(tmp_path, LongSequenceComfy)
     LongSequenceComfy.store = app.state.store
     LongSequenceComfy.submitted = []
     client = TestClient(app)
     response = client.post(
         "/api/v1/runtimes",
-        json={"id": "rt_sequence", "label": "Sequence Test", "base_url": "http://sequence-test"},
+        json={
+            "id": "rt_sequence",
+            "label": "Sequence Test",
+            "base_url": "http://sequence-test",
+            "location": "local",
+        },
     )
     assert response.status_code == 200
     assert client.post("/api/v1/runtimes/rt_sequence/doctor").status_code == 200
@@ -317,8 +322,6 @@ def test_long_sequence_pixelization_streams_plan_and_reuses_it_for_one_normal_ke
     assert store.artifact(plan_id)["kind"] == "PixelGeometryPlan"
     assert plan_id not in {artifact["id"] for artifact in client.get("/api/v1/artifacts").json()}
     assert plan_id not in {artifact["id"] for artifact in client.get(f"/api/v1/projects/{project['id']}/artifacts").json()}
-    project_manifest = json.loads((store.project_directory(project["id"]) / "project.json").read_text())
-    assert plan_id not in {artifact["id"] for artifact in project_manifest["artifacts"]}
 
     normal = client.post(
         "/api/v1/actions/normal.generate/runs",

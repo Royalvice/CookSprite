@@ -103,7 +103,9 @@ def _comfy_python(comfy: Path) -> Path:
     for workspace in (_workspace_for_comfy_cli(comfy), comfy):
         for environment in (workspace / ".venv", workspace / "venv"):
             candidates.append(environment / ("Scripts" if os.name == "nt" else "bin") / executable)
-    candidates += [Path(value) for value in (shutil.which("python3"), shutil.which("python")) if value]
+    candidates += [
+        Path(value) for value in (shutil.which("python3"), shutil.which("python")) if value
+    ]
     if sys.executable:
         candidates.append(Path(sys.executable))
     for candidate in candidates:
@@ -136,7 +138,7 @@ def launch_with_preference(
     *,
     host: str = "127.0.0.1",
     port: int = 8188,
-    cuda_device: int | None = None,
+    arguments: tuple[str, ...] = (),
 ) -> LaunchResult:
     """Start local ComfyUI with comfy-cli first, then direct Python fallback."""
 
@@ -157,8 +159,7 @@ def launch_with_preference(
             str(port),
             "--disable-auto-launch",
         ]
-        if cuda_device is not None:
-            command += ["--cuda-device", str(cuda_device)]
+        command.extend(arguments)
         try:
             process = _spawn_local(command, workspace, workspace / "comfy-cli.log")
             (workspace / "comfy.pid").write_text(str(process.pid) + "\n", encoding="utf-8")
@@ -176,13 +177,14 @@ def launch_with_preference(
         str(port),
         "--disable-auto-launch",
     ]
-    if cuda_device is not None:
-        command += ["--cuda-device", str(cuda_device)]
+    command.extend(arguments)
     try:
         process = _spawn_local(command, comfy, workspace / "comfy.log")
     except OSError as exc:
         if cli_error:
-            raise RuntimeError(f"comfy-cli and direct Python launch both failed: {cli_error}; {exc}") from exc
+            raise RuntimeError(
+                f"comfy-cli and direct Python launch both failed: {cli_error}; {exc}"
+            ) from exc
         raise RuntimeError(f"failed to start ComfyUI with {python}: {exc}") from exc
     (workspace / "comfy.pid").write_text(str(process.pid) + "\n", encoding="utf-8")
     return LaunchResult(process.pid, "python", tuple(command))
@@ -213,7 +215,11 @@ def _listening_pids(port: int) -> list[int]:
         )
     except (OSError, subprocess.SubprocessError):
         return []
-    return [int(line[1:]) for line in result.stdout.splitlines() if line.startswith("p") and line[1:].isdigit()]
+    return [
+        int(line[1:])
+        for line in result.stdout.splitlines()
+        if line.startswith("p") and line[1:].isdigit()
+    ]
 
 
 def _terminate_pid(pid: int) -> bool:
@@ -290,19 +296,6 @@ def stop_with_preference(root: str | Path, *, port: int = 8188) -> str:
     return "none"
 
 
-def restart_with_preference(
-    root: str | Path,
-    *,
-    host: str = "127.0.0.1",
-    port: int = 8188,
-    cuda_device: int | None = None,
-) -> LaunchResult:
-    """Restart a local ComfyUI checkout and use the same launch preference."""
-
-    stop_with_preference(root, port=port)
-    return launch_with_preference(root, host=host, port=port, cuda_device=cuda_device)
-
-
 def _pick_python(requested: str | None = None) -> str:
     candidates = [requested] if requested else []
     candidates += ["python3.11", "python3.12", sys.executable]
@@ -376,7 +369,7 @@ def check_dependencies() -> Path:
     if not _lock_is_current():
         raise RuntimeError(
             "managed ComfyUI dependency lock is missing or stale; "
-            "run `cspr dev sync` then `cspr comfy lock`"
+            "run `cspr dev package sync` then `cspr dev package lock`"
         )
     return COMFY_REQUIREMENTS_LOCK
 
@@ -403,9 +396,10 @@ def lock_dependencies(*, progress: Progress | None = None) -> Path:
             "--python-version",
             COMFY_PYTHON_VERSION,
             "--output-file",
-            str(COMFY_REQUIREMENTS_LOCK),
-            str(COMFY_REQUIREMENTS_INPUT),
-        ]
+            COMFY_REQUIREMENTS_LOCK.name,
+            COMFY_REQUIREMENTS_INPUT.name,
+        ],
+        cwd=COMFY_REQUIREMENTS_INPUT.parent,
     )
     body = COMFY_REQUIREMENTS_LOCK.read_text(encoding="utf-8")
     COMFY_REQUIREMENTS_LOCK.write_text(_lock_header() + body, encoding="utf-8")
@@ -528,9 +522,7 @@ def _write_staged_json(path: Path, value: Mapping[str, str]) -> None:
             os.fsync(handle.fileno())
 
 
-def _populate_node_pack(
-    staging: Path, runtime_identity: Mapping[str, object] | None
-) -> None:
+def _populate_node_pack(staging: Path, runtime_identity: Mapping[str, object] | None) -> None:
     """Build a complete, not-yet-visible custom-node package in ``staging``."""
 
     source = Path(__file__).parents[1] / "nodes"
@@ -543,7 +535,9 @@ def _populate_node_pack(
         relative = source_file.relative_to(source)
         if relative == Path("__init__.py"):
             continue
-        target_relative = Path("__init__.py") if relative == Path("cooksprite_nodes.py") else relative
+        target_relative = (
+            Path("__init__.py") if relative == Path("cooksprite_nodes.py") else relative
+        )
         target = staging / target_relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_file, target)
@@ -557,7 +551,9 @@ def _populate_node_pack(
     for path in paths:
         if path.is_file():
             _fsync_file(path)
-    for path in sorted((path for path in paths if path.is_dir()), key=lambda item: len(item.parts), reverse=True):
+    for path in sorted(
+        (path for path in paths if path.is_dir()), key=lambda item: len(item.parts), reverse=True
+    ):
         _fsync_directory(path)
     _fsync_directory(staging)
 
@@ -597,7 +593,7 @@ def install_node_pack(
 ) -> Path:
     """Atomically install the complete CookSprite node pack into stopped ComfyUI.
 
-    Callers that manage a live runtime must first stop it (the H20 worker
+    Callers that manage a live runtime must first stop it (the worker lifecycle
     enforces this before calling here).  Dependencies are synchronized before
     the swap, so a failed dependency resolution leaves the active pack intact.
     """
@@ -634,7 +630,7 @@ def install(
 
     Model selection and download are deliberately outside this installer. This
     function is never called at CookSprite startup; it is the explicit setup
-    transaction used by the CLI or the local Settings screen.
+    transaction used only by the `cspr comfy worker install` lifecycle.
     """
 
     root = Path(root).expanduser().resolve()
@@ -679,9 +675,7 @@ def install(
         "node_pack_version": NODE_PACK_VERSION,
         "python": str(python),
         "dependency_lock": COMFY_REQUIREMENTS_LOCK.name,
-        "dependency_lock_sha256": hashlib.sha256(
-            COMFY_REQUIREMENTS_LOCK.read_bytes()
-        ).hexdigest(),
+        "dependency_lock_sha256": hashlib.sha256(COMFY_REQUIREMENTS_LOCK.read_bytes()).hexdigest(),
         "model": None,
     }
     (root / "install.json").write_text(
@@ -689,19 +683,6 @@ def install(
     )
     _progress(progress, "installation complete", 1.0)
     return target
-
-
-def launch(
-    root: str | Path,
-    *,
-    host: str = "127.0.0.1",
-    port: int = 8188,
-    cuda_device: int | None = None,
-) -> int:
-    root = Path(root).expanduser().resolve()
-    if not (root / "ComfyUI" / "main.py").is_file():
-        raise RuntimeError("managed ComfyUI is not installed")
-    return launch_with_preference(root, host=host, port=port, cuda_device=cuda_device).pid
 
 
 def wait_until_ready(url: str, timeout: float = 180) -> dict:
@@ -714,7 +695,3 @@ def wait_until_ready(url: str, timeout: float = 180) -> dict:
             error = exc
             time.sleep(1)
     raise RuntimeError(f"ComfyUI did not become ready: {error}")
-
-
-def doctor(url: str):
-    return ComfyClient(url).doctor()

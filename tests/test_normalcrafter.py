@@ -14,7 +14,6 @@ from cooksprite.action_graphs import (
 from cooksprite.api.app import create_app
 from cooksprite.bridge import ArtifactBridge
 from cooksprite.catalog import builtin_tools
-from cooksprite.comfy.models import comfy_model_path
 from cooksprite.compiler import Compiler
 from cooksprite.nodes.normalcrafter.geometry import (
     prepare_rgba,
@@ -178,10 +177,15 @@ def test_normalcrafter_temporal_recipe_compiles_to_the_standard_artifact_bridge(
 
 
 def test_normal_estimator_defaults_prefer_normalcrafter_but_allow_explicit_lotus(tmp_path):
-    client = TestClient(create_app(tmp_path, _DefaultsComfy, allow_test_runtime=True))
+    client = TestClient(create_app(tmp_path, _DefaultsComfy))
     response = client.post(
         "/api/v1/runtimes",
-        json={"id": "rt-test", "label": "Test", "base_url": "http://test"},
+        json={
+            "id": "rt-test",
+            "label": "Test",
+            "base_url": "http://test",
+            "location": "local",
+        },
     )
     assert response.status_code == 200
     assert client.post("/api/v1/runtimes/rt-test/doctor").status_code == 200
@@ -205,8 +209,8 @@ def test_normal_estimator_defaults_prefer_normalcrafter_but_allow_explicit_lotus
         "/api/v1/runtimes/rt-test/defaults/normal.generate",
         json={"model_id": LOTUS_NORMAL_MODEL},
     )
-    assert generic.status_code == 422
-    assert generic.json()["detail"]["code"] == "normal_estimator_mode_required"
+    assert generic.status_code == 200
+    assert generic.json()["default"] == {"model_id": LOTUS_NORMAL_MODEL}
 
 
 def test_normalcrafter_geometry_preserves_aspect_ratio_alpha_and_vector_normals():
@@ -265,20 +269,3 @@ def test_normalcrafter_registers_a_discoverable_comfy_model_folder(tmp_path, mon
     monkeypatch.setitem(__import__("sys").modules, "folder_paths", fake)
     register_model_folder()
     assert seen == {"normalcrafter": (str(tmp_path / "models" / "normalcrafter"), True)}
-
-
-def test_normalcrafter_nested_bundle_paths_cannot_collide(tmp_path):
-    root = tmp_path / "ComfyUI"
-    root.mkdir()
-    (root / "main.py").write_text("# ComfyUI\n", encoding="utf-8")
-    (root / "nodes.py").write_text("# ComfyUI\n", encoding="utf-8")
-    (root / "comfy").mkdir()
-    file = NORMALCRAFTER_BUNDLE["files"][-1]
-    assert comfy_model_path(root, file) == (
-        root
-        / "models"
-        / "normalcrafter"
-        / "normalcrafter-v1"
-        / "vae"
-        / "diffusion_pytorch_model.safetensors"
-    )

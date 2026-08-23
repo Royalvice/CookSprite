@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { PhX as X } from "@phosphor-icons/vue";
 import { RouterView } from "vue-router";
 import AppHeader from "./components/AppHeader.vue";
@@ -9,19 +9,24 @@ import { useStudioStore } from "./stores/studio";
 const store = useStudioStore();
 const queueOpen = ref(false);
 let queueTimer = 0;
-let runtimeTimer = 0;
-const refreshOnFocus = () => { void store.refreshRuntime(); };
+const refreshOnFocus = () => {
+  void Promise.all([store.refreshQueue(), store.refreshRuntime()]);
+};
+
+watch(queueOpen, (open) => {
+  window.clearInterval(queueTimer);
+  if (!open) return;
+  void store.refreshQueue();
+  queueTimer = window.setInterval(store.refreshQueue, 15_000);
+});
 
 onMounted(async () => {
   document.documentElement.dataset.theme = localStorage.getItem("cooksprite.theme") || "neon";
   await store.initialize();
-  queueTimer = window.setInterval(store.refreshQueue, 2500);
-  runtimeTimer = window.setInterval(store.refreshRuntime, 3000);
   window.addEventListener("focus", refreshOnFocus);
 });
 onBeforeUnmount(() => {
   window.clearInterval(queueTimer);
-  window.clearInterval(runtimeTimer);
   window.removeEventListener("focus", refreshOnFocus);
 });
 </script>

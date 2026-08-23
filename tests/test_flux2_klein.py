@@ -199,9 +199,12 @@ def test_complete_9b_is_the_runtime_default_without_silent_4b_fallback(tmp_path)
         def ping(self):
             return None
 
-    app = create_app(tmp_path, FluxComfy, allow_test_runtime=True)
+    app = create_app(tmp_path, FluxComfy)
     client = TestClient(app)
-    assert client.post("/api/v1/runtimes", json={"id": "rt_flux", "base_url": "http://flux"}).status_code == 200
+    assert client.post(
+        "/api/v1/runtimes",
+        json={"id": "rt_flux", "base_url": "http://flux", "location": "local"},
+    ).status_code == 200
     assert client.post("/api/v1/runtimes/rt_flux/doctor").status_code == 200
     defaults = client.get("/api/v1/runtimes/rt_flux/defaults").json()
     assert defaults["defaults"]["image.generate"] == {

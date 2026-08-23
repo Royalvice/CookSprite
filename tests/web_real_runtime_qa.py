@@ -8,10 +8,11 @@ diffusion pass.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-from playwright.sync_api import Locator, Page, expect, sync_playwright
+from playwright.sync_api import Locator, Page, expect
+
+from web_qa_harness import browser_qa, wait_for_app
 
 BASE = "http://127.0.0.1:5173"
 SHOTS = Path(__file__).parents[1] / "web" / "test-results" / "real-runtime"
@@ -73,31 +74,11 @@ def assert_page_geometry(page: Page, label: str) -> None:
 
 def run() -> None:
     SHOTS.mkdir(parents=True, exist_ok=True)
-    errors: list[str] = []
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(viewport={"width": 1440, "height": 1000})
-        page.on(
-            "console",
-            lambda message: (
-                errors.append(f"console:{message.type}:{message.text}")
-                if message.type == "error"
-                else None
-            ),
-        )
-        page.on("pageerror", lambda error: errors.append(f"pageerror:{error}"))
-        page.on(
-            "requestfailed",
-            lambda request: errors.append(f"requestfailed:{request.url}:{request.failure}"),
-        )
-        page.on(
-            "response",
-            lambda response: (
-                errors.append(f"http:{response.status}:{response.url}")
-                if response.status >= 400 and "/hdri/" not in response.url
-                else None
-            ),
-        )
+    with browser_qa(
+        collect_http_errors=True,
+        ignored_http_fragments=("/hdri/",),
+    ) as qa:
+        page = qa.page
 
         health = page.request.get(f"{BASE}/api/v1/health").json()
         assert health["runtime"] == "ready", health
@@ -111,7 +92,12 @@ def run() -> None:
         project = next((item for item in projects if item["name"] == "Real Local Acceptance"), None)
         assert project, projects
 
-        page.goto(f"{BASE}/studio/{project['id']}", wait_until="networkidle")
+        wait_for_app(
+            page,
+            f"{BASE}/studio/{project['id']}",
+            selectors=(".studio-view",),
+            wait_until="networkidle",
+        )
         if page.get_by_role("button", name="切换到中文").count():
             page.get_by_role("button", name="切换到中文").click()
         expect(page.locator(".topbar .runtime-chip.ready")).to_be_visible(timeout=15_000)
@@ -256,7 +242,12 @@ def run() -> None:
             page.screenshot(path=SHOTS / f"06-normal-{width}.png", full_page=True)
 
         page.set_viewport_size({"width": 1440, "height": 1000})
-        page.goto(f"{BASE}/settings", wait_until="networkidle")
+        wait_for_app(
+            page,
+            f"{BASE}/settings",
+            selectors=(".settings-view",),
+            wait_until="networkidle",
+        )
         expect(
             page.locator(".runtime-list article").filter(has_text="Local ComfyUI")
         ).to_contain_text("就绪")
@@ -271,8 +262,7 @@ def run() -> None:
         assert_page_geometry(page, "settings-768")
         page.screenshot(path=SHOTS / "08-settings-768.png", full_page=True)
 
-        assert not errors, json.dumps(errors, ensure_ascii=False, indent=2)
-        browser.close()
+        qa.assert_clean()
 
 
 if __name__ == "__main__":

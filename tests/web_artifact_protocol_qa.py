@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-from playwright.sync_api import expect, sync_playwright
+from playwright.sync_api import expect
 
-ROOT = Path(__file__).resolve().parents[1]
+from web_qa_harness import BrowserName, browser_qa, wait_for_app
+
 BASE = "http://127.0.0.1:5173"
 ARTIFACT_MIME = "application/x-cooksprite-artifact"
 
@@ -29,45 +29,39 @@ def capture_drag_payload(source, target) -> dict:
     return captured
 
 
-def cross_browser_smoke(browser_type) -> None:
-    browser = browser_type.launch(headless=True)
-    page = browser.new_page(viewport={"width": 1024, "height": 900})
-    page.goto(f"{BASE}/studio", wait_until="networkidle")
-    if page.get_by_role("button", name="切换到中文").count():
-        page.get_by_role("button", name="切换到中文").click()
-    page.get_by_role("button", name="角色", exact=True).hover()
-    source = page.locator(".hover-example .artifact-visual[data-artifact-kind=Image]")
-    target = page.locator(".artifact-input-panel .drop-target").first
-    expect(source).to_be_visible()
-    source.drag_to(target)
-    expect(target).to_contain_text("EXAMPLE · ACTOR")
-    assert page.locator("img").evaluate_all(
-        "images => images.every(image => Boolean(image.closest('.artifact-visual')))"
-    )
-    assert page.evaluate("document.body.scrollWidth <= window.innerWidth")
-    browser.close()
+def cross_browser_smoke(browser_name: BrowserName) -> None:
+    with browser_qa(browser_name=browser_name, viewport=(1024, 900)) as qa:
+        page = qa.page
+        wait_for_app(
+            page,
+            f"{BASE}/studio",
+            selectors=(".studio-view",),
+            wait_until="networkidle",
+        )
+        if page.get_by_role("button", name="切换到中文").count():
+            page.get_by_role("button", name="切换到中文").click()
+        page.get_by_role("button", name="角色", exact=True).hover()
+        source = page.locator(".hover-example .artifact-visual[data-artifact-kind=Image]")
+        target = page.locator(".artifact-input-panel .drop-target").first
+        expect(source).to_be_visible()
+        source.drag_to(target)
+        expect(target).to_contain_text("EXAMPLE · ACTOR")
+        assert page.locator("img").evaluate_all(
+            "images => images.every(image => Boolean(image.closest('.artifact-visual')))"
+        )
+        assert page.evaluate("document.body.scrollWidth <= window.innerWidth")
+        qa.assert_clean()
 
 
 def run() -> None:
-    failures: list[str] = []
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(viewport={"width": 1440, "height": 1000})
-        page.on(
-            "console",
-            lambda message: (
-                failures.append(f"console:{message.type}:{message.text}")
-                if message.type == "error"
-                else None
-            ),
+    with browser_qa() as qa:
+        page = qa.page
+        wait_for_app(
+            page,
+            f"{BASE}/studio",
+            selectors=(".studio-view",),
+            wait_until="networkidle",
         )
-        page.on("pageerror", lambda error: failures.append(f"pageerror:{error}"))
-        page.on(
-            "requestfailed",
-            lambda request: failures.append(f"requestfailed:{request.url}:{request.failure}"),
-        )
-
-        page.goto(f"{BASE}/studio", wait_until="networkidle")
         if page.get_by_role("button", name="切换到中文").count():
             page.get_by_role("button", name="切换到中文").click()
         expect(page.get_by_text("未配置", exact=True)).to_be_visible()
@@ -179,11 +173,10 @@ def run() -> None:
         output = Path("/tmp/cooksprite-artifact-protocol.png")
         page.screenshot(path=output, full_page=True)
         assert output.exists()
-        assert not failures, json.dumps(failures, ensure_ascii=False, indent=2)
-        browser.close()
+        qa.assert_clean()
 
-        cross_browser_smoke(playwright.firefox)
-        cross_browser_smoke(playwright.webkit)
+    cross_browser_smoke("firefox")
+    cross_browser_smoke("webkit")
 
 
 if __name__ == "__main__":

@@ -14,6 +14,41 @@ from typing import Any
 NORMALCRAFTER_BUNDLE_ID = "normalcrafter-v1"
 NORMALCRAFTER_MODEL = NORMALCRAFTER_BUNDLE_ID
 NORMALCRAFTER_REVISION = "7e24d68d86ae008fe08ef50b4e51cd2fc2c8cf57"
+NORMALCRAFTER_PARAMS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "max_resolution": {
+            "type": "integer",
+            "title": "Maximum resolution",
+            "default": 1024,
+            "minimum": 256,
+            "maximum": 1024,
+            "multipleOf": 64,
+        },
+        "window_size": {
+            "type": "integer",
+            "title": "Window size",
+            "default": 14,
+            "minimum": 2,
+            "maximum": 32,
+        },
+        "time_step_size": {
+            "type": "integer",
+            "title": "Time step",
+            "default": 10,
+            "minimum": 1,
+            "maximum": 32,
+        },
+        "decode_chunk_size": {
+            "type": "integer",
+            "title": "Decode chunk",
+            "default": 7,
+            "minimum": 1,
+            "maximum": 32,
+        },
+    },
+    "additionalProperties": False,
+}
 
 NORMALCRAFTER_PROVENANCE: dict[str, Any] = {
     "model": {

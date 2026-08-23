@@ -20,7 +20,12 @@ def test_signed_bridge_is_run_scoped_and_persists_typed_outputs(tmp_path):
     assert (
         client.post(
             "/api/v1/runtimes",
-            json={"id": "rt_bridge", "label": "Bridge", "base_url": "http://comfy.invalid"},
+            json={
+                "id": "rt_bridge",
+                "label": "Bridge",
+                "base_url": "http://comfy.invalid",
+                "location": "local",
+            },
         ).status_code
         == 200
     )
@@ -60,12 +65,17 @@ def test_signed_bridge_is_run_scoped_and_persists_typed_outputs(tmp_path):
     assert app.state.store.run("run_bridge")["artifacts"] != "[]"
 
 
-def test_bridge_rejects_expired_signature_and_legacy_route_in_product(tmp_path):
+def test_bridge_rejects_expired_signature_and_has_no_legacy_route(tmp_path):
     app = create_app(tmp_path)
     client = TestClient(app)
     client.post(
         "/api/v1/runtimes",
-        json={"id": "rt_bridge", "label": "Bridge", "base_url": "http://comfy.invalid"},
+        json={
+            "id": "rt_bridge",
+            "label": "Bridge",
+            "base_url": "http://comfy.invalid",
+            "location": "local",
+        },
     )
     app.state.store.create_run("run_bridge", "rt_bridge", request={"inputs": {}})
     bridge = ArtifactBridge.from_data_dir(tmp_path, "http://api.test/api/v1")
@@ -76,4 +86,5 @@ def test_bridge_rejects_expired_signature_and_legacy_route_in_product(tmp_path):
         content=b"image",
     )
     assert expired.status_code == 403
-    assert client.post("/api/v1/internal/artifacts", content=b"image").status_code == 404
+    assert "/api/v1/internal/artifacts" not in app.openapi()["paths"]
+    assert client.post("/api/v1/internal/artifacts", content=b"image").status_code in {404, 405}

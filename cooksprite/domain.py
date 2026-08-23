@@ -144,11 +144,6 @@ class ToolPackageManifest(BaseModel):
         return self
 
 
-class DefinitionRef(BaseModel):
-    id: str
-    revision: int = Field(ge=1)
-
-
 class ToolNode(BaseModel):
     id: str
     tool: str
@@ -194,19 +189,6 @@ class TaskRevision(TaskDefinition):
     revision: int
     runtime_snapshot: str
     model_config = ConfigDict(extra="forbid")
-
-
-class RunTarget(BaseModel):
-    kind: Literal["workflow", "task"]
-    id: str
-    revision: int = Field(ge=1)
-
-
-class RunCreate(BaseModel):
-    target: RunTarget
-    runtime_id: str
-    inputs: dict[str, ValueRef] = Field(default_factory=dict)
-    candidate_selection: dict[str, int] = Field(default_factory=dict)
 
 
 class LocalizedText(BaseModel):
@@ -281,6 +263,7 @@ class ModelOption(BaseModel):
     runtime_id: str
     family: str
     modes: list[str] = Field(default_factory=list)
+    params_schema: dict[str, Any] = Field(default_factory=dict)
 
 
 class ActionDescriptor(BaseModel):
@@ -289,6 +272,7 @@ class ActionDescriptor(BaseModel):
     accepts: dict[str, ActionInput] = Field(default_factory=dict)
     produces: list[PersistableType]
     controls: list[ActionControl] = Field(default_factory=list)
+    presentation: str = "generic"
     available: bool = False
     unavailable_reason: str | None = None
     models: list[ModelOption] = Field(default_factory=list)
@@ -467,7 +451,6 @@ class ProjectView(BaseModel):
     id: str
     name: str
     type: ProjectType
-    directory: str | None = None
     favorite: bool = False
     published: bool = False
     cover_artifact_id: str | None = None
@@ -532,7 +515,7 @@ class TileSetDocument(BaseModel):
 
 
 class SpriteDocument(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
     schema_id: Literal["cooksprite.sprite-document/v1"] = Field(
         default="cooksprite.sprite-document/v1", alias="schema", serialization_alias="schema"
@@ -542,8 +525,6 @@ class SpriteDocument(BaseModel):
     static: StaticDocument | None = None
     character: CharacterDocument | None = None
     tileset: TileSetDocument | None = None
-    history: list[dict[str, Any]] = Field(default_factory=list)
-
     @model_validator(mode="after")
     def primary_shape(self) -> SpriteDocument:
         if self.type == "static" and self.static is None:

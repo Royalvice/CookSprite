@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc --noEmit && vite build",
+    "build": "npm run check:api && vue-tsc --noEmit && vite build",
+    "generate:api": "openapi-typescript src/api/openapi.generated.json -o src/api/schema.generated.ts",
+    "check:api": "openapi-typescript src/api/openapi.generated.json -o src/api/schema.generated.ts --check",
     "preview": "vite preview",
     "test": "vitest run"
   },
@@ -23,6 +25,7 @@
     "@vitejs/plugin-vue": "^6.0.8",
     "@vue/test-utils": "^2.4.6",
     "jsdom": "^30.0.1",
+    "openapi-typescript": "^7.13.0",
     "typescript": "^5.6.3",
     "vite": "^8.2.1",
     "vitest": "^4.1.10",

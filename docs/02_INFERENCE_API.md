@@ -1,19 +1,16 @@
 # 02 · Action and API contract
 
-The public base path is `/api/v1`. Ordinary Web, CLI, and agent clients should
-start with Actions; Tool/Workflow/Task endpoints are a contributor surface.
+The public base path is `/api/v1`. Web, CLI, and agents use stable Actions and
+typed Artifact IDs. They do not create generic graph definitions or call
+ComfyUI directly.
 
-## Action descriptor
+## Actions and Runs
 
-`GET /actions` and `GET /actions/{id}` return the same minimal contract:
+`GET /actions` and `GET /actions/{id}` expose the stable product contract:
 
 ```json
 {
   "id": "animation.generate",
-  "i18n": {
-    "zh-CN": {"name": "创作动画", "description": "从角色图生成动作候选帧"},
-    "en": {"name": "Create animation", "description": "Generate motion candidates from a character image"}
-  },
   "accepts": {"character": {"type": "Image", "required": false, "max": 1}},
   "produces": ["FrameSeq"],
   "controls": [],
@@ -22,29 +19,8 @@ start with Actions; Tool/Workflow/Task endpoints are a contributor surface.
 }
 ```
 
-`type` can be one artifact kind or a list when an input deliberately accepts
-multiple kinds. Users do not choose file formats: the UI only highlights inputs
-compatible with the dragged Artifact. An option may contain an `example`
-`ArtifactRef`; examples use the same storage, rendering, and drag contract as
-user-created material. `available` requires the validated runtime snapshot,
-required node schemas, and a current live probe.
-
-Stable IDs in `cooksprite/actions.yaml`:
-
-| Action | Purpose | Output |
-|---|---|---|
-| `image.generate` | text-to-image or one-reference image-to-image | `Image` |
-| `animation.generate` | action/view/direction frame candidates | `FrameSeq` |
-| `frame.redraw` | replacement variants while retaining the source | `ImageBatch` |
-| `sheet.slice` | grid-based SpriteSheet extraction | `FrameSeq` |
-| `video.sample` | GIF/video sampling | `FrameSeq` |
-| `normal.generate` | same-size normal maps for image/sequence/sheet | `NormalMap` |
-
-Packaging is deliberately not an inference Action. Use
-`POST /projects/{id}/exports` to validate and build the canonical
-`CookSpritePack`.
-
-## Run an Action
+`available` requires a live Runtime plus a validated Recipe; a model filename
+alone is never enough. A client starts an Action with:
 
 ```http
 POST /api/v1/actions/animation.generate/runs
@@ -58,40 +34,108 @@ Content-Type: application/json
     "view": "level",
     "direction": "s",
     "count": 8,
-    "model": "rt_local:core-image-<checkpoint-hash>"
+    "model": "rt_remote:core-image-<checkpoint-hash>"
   }
 }
 ```
 
-The response is `202 RunView`. Follow it through
-`GET /runs/{id}/events` (SSE) or `GET /runs/{id}`. Cancel and retry use
-`POST /runs/{id}/cancel` and `POST /runs/{id}/retry`. `GET /queue` normalizes
-CookSprite run state and also includes the current private Comfy queue snapshot.
-No Comfy prompt ID or filesystem path is public.
+The response is `202 RunView`. Read it through `GET /runs/{id}` or the SSE
+stream `GET /runs/{id}/events`; cancel/retry use `POST /runs/{id}/cancel` and
+`POST /runs/{id}/retry`. `GET /queue` projects CookSprite Run state plus the
+current private Comfy queue status. No Comfy prompt ID, filesystem path, raw
+graph, or temporary URL is public.
 
-`GET /health` reports `runtime: unconfigured | offline | ready`, `runtime_id`,
-`checked_at`, and a readable live-probe error. A stored capability snapshot is
-not proof that ComfyUI is currently online.
+Internally, each Action lowers through private versioned Task/Workflow/Tool
+structures. Public `/tools`, `/workflows`, `/tasks`, and generic `POST /runs`
+do not exist.
 
-Every live `RunView` also carries `runtime_state`. It is the provider-neutral
-projection of the connected ComfyUI event stream, so Web and CLI clients do not
-need to parse ComfyUI WebSocket payloads:
+## Projects and Artifacts
+
+- `POST/GET /projects`, `GET/PATCH /projects/{id}`
+- `GET/PUT /projects/{id}/document` with ETag / `If-Match`
+- `GET /projects/{id}/artifacts`
+- `POST /projects/{id}/sequences`, `/publish`, and `/exports`
+- `GET /gallery`
+
+Project state lives in SQLite. It has no automatic project directory or copied
+artifact tree.
+
+Upload raw bytes with:
+
+```text
+POST /artifacts?project_id=<id>&kind=<kind>&media_type=<mime>
+```
+
+The server streams the request into a same-filesystem staging blob, hashes it
+incrementally, enforces the configured upload limit, fsyncs it, and atomically
+promotes it to `<data-dir>/artifacts/<sha256>`. Repeated content returns the
+same Artifact reference. Artifact content and bridge downloads are streamed
+from disk. `GET /artifacts/{id}/sequence` expands a typed `FrameSeq` manifest.
+
+## Runtime control plane
+
+Runtime operations only register and inspect existing ComfyUI endpoints:
+
+```text
+POST /comfyui/probe                 body: {"base_url": "http(s)://..."}
+POST /runtimes                      explicit Runtime registration
+POST /runtimes/{id}/doctor          snapshot and Recipe validation
+POST /runtimes/{id}/select
+GET  /runtimes/{id}/capabilities
+GET/PUT /runtimes/{id}/defaults
+POST /runtimes/{id}/recipes         controlled Recipe import
+```
+
+Probe always needs an explicit URL. It never discovers a directory, starts a
+process, installs a node, downloads a model, or assumes loopback means a
+remote endpoint.
+
+A remote registration requires an explicit `callback_url` that the ComfyUI
+host can reach:
 
 ```json
 {
-  "phase": "sampling",
-  "message": "Sampler · 12/20",
-  "model_status": "ready",
-  "current": {"label": "Sampler", "kind": "sampling", "status": "executing", "step": 12, "total": 20, "progress": 0.6},
-  "queue_remaining": 0
+  "label": "Remote",
+  "base_url": "http://runtime.example.test:8288",
+  "location": "remote",
+  "transport": "http",
+  "callback_url": "https://api.example.test/api/v1",
+  "worker_managed": true
 }
 ```
 
-Queue status, model loading, cached/completed nodes, node progress, success,
-interruption, and structured runtime errors are updated through the same SSE
-stream. Errors retain a stable `code` such as `out_of_memory` plus the readable
-provider message and optional node/trace detail; the browser never connects to
-ComfyUI directly.
+`worker_managed` is valid for either a local or remote Runtime. Its first
+successful doctor records the worker identity; later identity drift returns
+HTTP 409 `worker_runtime_incompatible` until explicit re-registration. This
+prevents a Git/node/lock change from silently using a stale Recipe snapshot.
+
+The API has no endpoint to start/restart ComfyUI, install nodes, download model
+bundles, manage a Runtime host filesystem, or run a second Worker service.
+Managed operations are local `cspr comfy worker` commands on the ComfyUI host.
+
+## Artifact bridge
+
+The only compute-to-control-plane media channel is:
+
+```text
+CS_LoadArtifact  → signed GET /bridge/artifacts/{artifact_id}
+CS_StoreArtifact → signed POST /bridge/runs/{run_id}/artifacts
+```
+
+Signatures are short-lived and scoped to one Run, declared input/output, and
+typed kind. The API accepts only declared bridge output kinds and associates the
+stored Artifact with the Run/Project in the active API. ComfyUI output/view/temp folders
+cannot become an Artifact URL or a Project asset by themselves.
+
+## Controlled recipes
+
+Doctor discovers node schemas and model folders. A Recipe is the only advanced
+graph-facing registration surface: it imports an existing API-format workflow,
+declares semantic slots, supported stable Actions/modes, and one typed output.
+The shared Recipe Assembler validates it against the doctor snapshot and builds
+the private lowering. It is not a public free-form DAG API.
+
+## Errors
 
 Errors use a stable detail object:
 
@@ -99,82 +143,6 @@ Errors use a stable detail object:
 {"detail":{"code":"artifact_type_mismatch","message":"...","slot":"source"}}
 ```
 
-## Project and document
-
-- `POST/GET /projects`, `GET/PATCH /projects/{id}`
-- `GET/PUT /projects/{id}/document`
-- `GET /projects/{id}/artifacts`
-- `POST /projects/{id}/sequences` materializes one curated document track as a reusable `FrameSeq`
-- `POST /projects/{id}/publish`
-- `POST /projects/{id}/exports`
-- `GET /gallery`
-
-Document GET returns an `ETag`. PUT must send `If-Match`; stale edits receive
-`409 document_conflict`. This is the only mutable animation authority.
-
-## Artifacts
-
-Upload bytes directly with `POST /artifacts?project_id=...&kind=...&media_type=...`.
-List, download, trash, restore, and garbage-collect through `/artifacts`.
-Animation, sheet slicing, and video sampling return one `FrameSeq` artifact:
-
-```json
-{"schema":"cooksprite.frame-sequence/v1","action":"walk","view":"level","direction":"s","frames":["art_frame_01","art_frame_02"]}
-```
-
-Each frame remains an independent `Image`. Expand the ordered manifest and its
-typed frame references with `GET /artifacts/{id}/sequence`.
-Application drag-and-drop carries only:
-
-```json
-{"artifact_id":"art_x","kind":"Image"}
-```
-
-The receiver fetches bytes/metadata through the API and validates the kind.
-
-OpenAPI is available at `/api/v1/openapi.json`; contract tests assert these routes.
-
-## Contributor execution
-
-Contributor `POST /runs` accepts only an immutable Workflow or Task target, so
-both `kind` and `revision` are explicit. A standalone Tool is descriptive and
-cannot run without a Workflow that declares persistable outputs. Actions,
-Workflows, and Tasks all compile to the same private execution plan and use the
-same ComfyUI submission, cancellation, failure normalization, and typed artifact
-storage path. Product clients should continue to use Actions.
-
-## Runtime recipes
-
-Doctor reads live node schemas and model folders from ComfyUI. A model is not
-shown merely because a filename exists: CookSprite emits a selectable model
-only when one small `Recipe` proves the complete node/model/input contract.
-Core checkpoints are discovered as text-to-image, image-to-image, and
-image-to-image sequence recipes. Contributor workflows can be registered with
-`POST /runtimes/{id}/recipes`; their API-format graph, semantic slots, output,
-actions, and input modes are validated against that runtime snapshot.
-
-The private artifact bridge uses short-lived HMAC URLs scoped to one Run and
-one declared input/output kind. `CS_LoadArtifact` and `CS_StoreArtifact` are the
-only bridge nodes. This works unchanged when the CookSprite API and ComfyUI are
-co-located on another Linux machine; the browser still calls only `/api/v1`.
-
-## Prompt Packet policy
-
-Clients submit stable option IDs and user text. The CookSprite API owns prompt
-policy and deterministically produces final model text before it assembles a
-Recipe; ComfyUI receives only that final text. Prompt policy is not a ComfyUI
-node, and changing a template never requires reinstalling the CookSprite node
-pack on a Runtime.
-
-Each asset category selects its own concise composition and style packet. A
-Recipe may replace the private graph, checkpoint, or input mechanism, but it
-receives the same final text and must satisfy the same typed output/bridge
-contract. Image generation never silently applies pixelization or cutout:
-those are explicit Actions. Changing a Runtime from localhost to another Linux
-device therefore changes only the selected Runtime/Recipe; it does not change
-the Web, CLI, or Skill request shape.
-
-Project-shape changes are enforced at this same API boundary, not by Web-only
-logic. `animation.generate` converts a non-character project to `character`;
-`image.generate` with `category=terrain` converts a `static` project to
-`tileset`. CLI and agent callers therefore receive the same document semantics.
+Relevant control-plane errors include `remote_callback_missing`,
+`worker_runtime_incompatible`, `runtime_not_doctored`, `comfy_unavailable`,
+and `artifact_too_large`.

@@ -43,6 +43,11 @@ class CookSpriteClient:
     def get(self, path: str, **kwargs: Any) -> httpx.Response:
         return self.http.get(path, **kwargs)
 
+    def stream(self, method: str, path: str, **kwargs: Any):
+        """Open a streaming response without buffering its body in the CLI process."""
+
+        return self.http.stream(method, path, **kwargs)
+
     def post(self, path: str, **kwargs: Any) -> httpx.Response:
         return self.http.post(path, **kwargs)
 

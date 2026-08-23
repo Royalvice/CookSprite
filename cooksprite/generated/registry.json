@@ -874,6 +874,7 @@
         }
       },
       "id": "image.generate",
+      "presentation": "image-create",
       "produces": [
         "Image"
       ]
@@ -889,57 +890,15 @@
       "controls": [
         {
           "advanced": false,
-          "default": "",
-          "i18n": {
-            "en": {
-              "description": "Optional motion",
-              "name": "Motion prompt"
-            },
-            "zh-CN": {
-              "description": "可补充动作、节奏和角色要求",
-              "name": "动画描述"
-            }
-          },
-          "id": "prompt",
-          "max": null,
-          "min": null,
-          "options": [],
-          "options_range": null,
-          "step": null,
-          "type": "text"
-        },
-        {
-          "advanced": false,
-          "default": true,
-          "i18n": {
-            "en": {
-              "description": "Use the CookSprite prompt template; off sends your exact text unchanged",
-              "name": "Prompt Template"
-            },
-            "zh-CN": {
-              "description": "开启后使用 CookSprite 提示词模板；关闭后原文直传",
-              "name": "提示词模板"
-            }
-          },
-          "id": "prompt_compile",
-          "max": null,
-          "min": null,
-          "options": [],
-          "options_range": null,
-          "step": null,
-          "type": "toggle"
-        },
-        {
-          "advanced": false,
           "default": "walk",
           "i18n": {
             "en": {
-              "description": "Choose a motion",
-              "name": "Action"
+              "description": "",
+              "name": "Target action"
             },
             "zh-CN": {
-              "description": "选择要创作的动作",
-              "name": "动作"
+              "description": "",
+              "name": "目标动作"
             }
           },
           "id": "action",
@@ -1076,12 +1035,12 @@
           "default": "level",
           "i18n": {
             "en": {
-              "description": "This sequence targets one view",
-              "name": "View"
+              "description": "",
+              "name": "Target view"
             },
             "zh-CN": {
-              "description": "本次动画只对应一个视角",
-              "name": "视角"
+              "description": "",
+              "name": "目标视角"
             }
           },
           "id": "view",
@@ -1128,12 +1087,12 @@
           "default": "s",
           "i18n": {
             "en": {
-              "description": "This sequence targets one real direction",
-              "name": "Direction"
+              "description": "",
+              "name": "Target direction"
             },
             "zh-CN": {
-              "description": "本次动画只对应一个真实方向",
-              "name": "方向"
+              "description": "",
+              "name": "目标方向"
             }
           },
           "id": "direction",
@@ -1267,6 +1226,48 @@
         },
         {
           "advanced": false,
+          "default": "",
+          "i18n": {
+            "en": {
+              "description": "Optional motion",
+              "name": "Motion prompt"
+            },
+            "zh-CN": {
+              "description": "可补充动作、节奏和角色要求",
+              "name": "动画描述"
+            }
+          },
+          "id": "prompt",
+          "max": null,
+          "min": null,
+          "options": [],
+          "options_range": null,
+          "step": null,
+          "type": "text"
+        },
+        {
+          "advanced": false,
+          "default": true,
+          "i18n": {
+            "en": {
+              "description": "Use the CookSprite prompt template; off sends your exact text unchanged",
+              "name": "Prompt Template"
+            },
+            "zh-CN": {
+              "description": "开启后使用 CookSprite 提示词模板；关闭后原文直传",
+              "name": "提示词模板"
+            }
+          },
+          "id": "prompt_compile",
+          "max": null,
+          "min": null,
+          "options": [],
+          "options_range": null,
+          "step": null,
+          "type": "toggle"
+        },
+        {
+          "advanced": false,
           "default": 8,
           "i18n": {
             "en": {
@@ -1319,6 +1320,7 @@
         }
       },
       "id": "animation.generate",
+      "presentation": "animation-create",
       "produces": [
         "FrameSeq"
       ]
@@ -1407,6 +1409,7 @@
         }
       },
       "id": "frame.redraw",
+      "presentation": "frame-redraw",
       "produces": [
         "ImageBatch"
       ]
@@ -1915,6 +1918,7 @@
         }
       },
       "id": "sheet.slice",
+      "presentation": "generic",
       "produces": [
         "FrameSeq"
       ]
@@ -2318,6 +2322,7 @@
         }
       },
       "id": "video.sample",
+      "presentation": "generic",
       "produces": [
         "FrameSeq"
       ]
@@ -2415,6 +2420,7 @@
         }
       },
       "id": "normal.generate",
+      "presentation": "normal",
       "produces": [
         "NormalMap"
       ]
@@ -2432,6 +2438,103 @@
         }
       },
       "controls": [
+        {
+          "advanced": false,
+          "default": "32",
+          "i18n": {
+            "en": {
+              "description": "Number of colors in the Oklab palette",
+              "name": "Palette"
+            },
+            "zh-CN": {
+              "description": "Oklab 调色板颜色数量",
+              "name": "调色板"
+            }
+          },
+          "id": "palette_budget",
+          "max": null,
+          "min": null,
+          "options": [
+            {
+              "categories": [],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "8 colors"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "8 色"
+                }
+              },
+              "id": "8"
+            },
+            {
+              "categories": [],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "16 colors"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "16 色"
+                }
+              },
+              "id": "16"
+            },
+            {
+              "categories": [],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "32 colors"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "32 色"
+                }
+              },
+              "id": "32"
+            },
+            {
+              "categories": [],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "64 colors"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "64 色"
+                }
+              },
+              "id": "64"
+            },
+            {
+              "categories": [],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "128 colors"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "128 色"
+                }
+              },
+              "id": "128"
+            }
+          ],
+          "options_range": null,
+          "step": null,
+          "type": "select"
+        },
         {
           "advanced": false,
           "default": 1,
@@ -2501,103 +2604,6 @@
         },
         {
           "advanced": false,
-          "default": "32",
-          "i18n": {
-            "en": {
-              "description": "Number of colors in the Oklab palette",
-              "name": "Palette"
-            },
-            "zh-CN": {
-              "description": "Oklab 调色板颜色数量",
-              "name": "调色板"
-            }
-          },
-          "id": "palette_budget",
-          "max": null,
-          "min": null,
-          "options": [
-            {
-              "categories": [],
-              "example": null,
-              "i18n": {
-                "en": {
-                  "description": "",
-                  "name": "8 colors"
-                },
-                "zh-CN": {
-                  "description": "",
-                  "name": "8 色"
-                }
-              },
-              "id": "8"
-            },
-            {
-              "categories": [],
-              "example": null,
-              "i18n": {
-                "en": {
-                  "description": "",
-                  "name": "16 colors"
-                },
-                "zh-CN": {
-                  "description": "",
-                  "name": "16 色"
-                }
-              },
-              "id": "16"
-            },
-            {
-              "categories": [],
-              "example": null,
-              "i18n": {
-                "en": {
-                  "description": "",
-                  "name": "32 colors"
-                },
-                "zh-CN": {
-                  "description": "",
-                  "name": "32 色"
-                }
-              },
-              "id": "32"
-            },
-            {
-              "categories": [],
-              "example": null,
-              "i18n": {
-                "en": {
-                  "description": "",
-                  "name": "64 colors"
-                },
-                "zh-CN": {
-                  "description": "",
-                  "name": "64 色"
-                }
-              },
-              "id": "64"
-            },
-            {
-              "categories": [],
-              "example": null,
-              "i18n": {
-                "en": {
-                  "description": "",
-                  "name": "128 colors"
-                },
-                "zh-CN": {
-                  "description": "",
-                  "name": "128 色"
-                }
-              },
-              "id": "128"
-            }
-          ],
-          "options_range": null,
-          "step": null,
-          "type": "select"
-        },
-        {
-          "advanced": false,
           "default": false,
           "i18n": {
             "en": {
@@ -2650,6 +2656,7 @@
         }
       },
       "id": "sprite.pixelize",
+      "presentation": "pixel-normal",
       "produces": [
         "Image",
         "FrameSeq",
@@ -2676,6 +2683,7 @@
         }
       },
       "id": "image.views",
+      "presentation": "image-views",
       "produces": [
         "ImageBatch"
       ]
@@ -2692,31 +2700,6 @@
         }
       },
       "controls": [
-        {
-          "advanced": false,
-          "default": "128",
-          "i18n": {
-            "en": {
-              "description": "Output longest edge while preserving aspect ratio",
-              "name": "Pixel size"
-            },
-            "zh-CN": {
-              "description": "输出最长边，自动保持原图长宽比",
-              "name": "像素尺寸"
-            }
-          },
-          "id": "target_size",
-          "max": null,
-          "min": null,
-          "options": [],
-          "options_range": [
-            16,
-            512,
-            16
-          ],
-          "step": null,
-          "type": "select"
-        },
         {
           "advanced": false,
           "default": "32",
@@ -2811,6 +2794,31 @@
             }
           ],
           "options_range": null,
+          "step": null,
+          "type": "select"
+        },
+        {
+          "advanced": false,
+          "default": "128",
+          "i18n": {
+            "en": {
+              "description": "Output longest edge while preserving aspect ratio",
+              "name": "Pixel size"
+            },
+            "zh-CN": {
+              "description": "输出最长边，自动保持原图长宽比",
+              "name": "像素尺寸"
+            }
+          },
+          "id": "target_size",
+          "max": null,
+          "min": null,
+          "options": [],
+          "options_range": [
+            16,
+            512,
+            16
+          ],
           "step": null,
           "type": "select"
         },
@@ -2950,6 +2958,7 @@
         }
       },
       "id": "image.pixelize",
+      "presentation": "pixelize",
       "produces": [
         "Image",
         "FrameSeq"
@@ -2975,6 +2984,7 @@
         }
       },
       "id": "image.cutout",
+      "presentation": "generic",
       "produces": [
         "Image"
       ]
@@ -3553,99 +3563,6 @@
         "image.pixelize:image-to-image",
         "image.pixelize:frames-to-frames",
         "sprite.pixelize:image-to-sprite-pair"
-      ]
-    },
-    {
-      "id": "alpha",
-      "license": "MIT",
-      "lowerings": {
-        "cooksprite.remove_background": "CS_RemoveBackground"
-      },
-      "node_classes": [
-        "CS_RemoveBackground"
-      ],
-      "recipes": [
-        "cooksprite.alpha"
-      ],
-      "requirements": [
-        "rembg>=2.0.78,<3",
-        "onnxruntime-gpu>=1.23.2,<1.24",
-        "Pillow>=10,<13"
-      ],
-      "sealed_graphs": {},
-      "tasks": [
-        "image.cutout"
-      ],
-      "tools": [
-        {
-          "id": "cooksprite.remove_background",
-          "inputs": [
-            {
-              "name": "image",
-              "persistable": false,
-              "required": true,
-              "type": "Image"
-            }
-          ],
-          "outputs": [
-            {
-              "name": "image",
-              "persistable": true,
-              "required": true,
-              "type": "Image"
-            },
-            {
-              "name": "mask",
-              "persistable": false,
-              "required": true,
-              "type": "Mask"
-            }
-          ],
-          "package_id": "alpha",
-          "params_schema": {
-            "alpha_matting": {
-              "type": "boolean"
-            },
-            "alpha_matting_background_threshold": {
-              "max": 255,
-              "min": 0,
-              "type": "integer"
-            },
-            "alpha_matting_erode_size": {
-              "max": 64,
-              "min": 0,
-              "type": "integer"
-            },
-            "alpha_matting_foreground_threshold": {
-              "max": 255,
-              "min": 0,
-              "type": "integer"
-            },
-            "batch_size": {
-              "max": 64,
-              "min": 1,
-              "type": "integer"
-            },
-            "model": {
-              "default": "u2net",
-              "enum": [
-                "u2net",
-                "u2netp",
-                "isnet-anime",
-                "birefnet-general"
-              ],
-              "type": "string"
-            }
-          },
-          "schema_hash": "18bd4162abb45b4ed870b3546389ed34407c6dd9bdf9cef9b327197d97d186bd",
-          "source": "cooksprite",
-          "title": "Remove image background with rembg",
-          "version": 1
-        }
-      ],
-      "version": "1.0.0",
-      "workflows": [
-        "image.cutout:image-to-image"
       ]
     },
     {

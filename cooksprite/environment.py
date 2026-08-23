@@ -36,16 +36,10 @@ def lock_project(path: str | Path | None = None) -> Path:
     return root / "uv.lock"
 
 
-def sync_project(path: str | Path | None = None) -> Path:
-    root = _project_root(path)
-    subprocess.run([_uv(), "sync", "--frozen"], cwd=root, check=True)
-    return root / ".venv"
-
-
 def check_project(path: str | Path | None = None) -> bool:
     root = _project_root(path)
     subprocess.run([_uv(), "lock", "--check"], cwd=root, check=True)
     return True
 
 
-__all__ = ["EnvironmentError", "check_project", "lock_project", "sync_project"]
+__all__ = ["EnvironmentError", "check_project", "lock_project"]

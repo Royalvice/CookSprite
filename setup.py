@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -14,11 +15,19 @@ ROOT = Path(__file__).resolve().parent
 
 class CookSpriteBuild(build_py):
     def run(self) -> None:
-        subprocess.run(["npm", "ci"], cwd=ROOT / "web", check=True)
-        subprocess.run(["npm", "run", "build"], cwd=ROOT / "web", check=True)
+        # Release builds consume the already-tested static bundle shipped in
+        # ``cooksprite/static``.  Rebuilding Vue during every wheel build
+        # would require Node/network access and make a Python package build
+        # needlessly slow.  Contributors can opt into a fresh bundle with
+        # ``COOKSPRITE_BUILD_WEB=1`` before packaging.
+        if os.environ.get("COOKSPRITE_BUILD_WEB") == "1":
+            subprocess.run(["npm", "ci"], cwd=ROOT / "web", check=True)
+            subprocess.run(["npm", "run", "build"], cwd=ROOT / "web", check=True)
         super().run()
         package_root = Path(self.build_lib) / "cooksprite"
-        shutil.copytree(ROOT / "web" / "dist", package_root / "static", dirs_exist_ok=True)
+        built_web = ROOT / "web" / "dist"
+        if built_web.is_dir():
+            shutil.copytree(built_web, package_root / "static", dirs_exist_ok=True)
         skill_root = package_root / "skill"
         skill_root.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / "skills" / "cooksprite" / "SKILL.md", skill_root / "SKILL.md")
