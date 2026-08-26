@@ -39,6 +39,10 @@ def test_registry_exposes_four_view_methods_and_five_h3_actions():
     actions = next(control for control in animation.controls if control.id == "action")
     assert [option.id for option in actions.options] == ["idle", "walk", "run", "jump", "roll"]
 
+    idle_prompt = registry.execution("animation.generate")["prompt"]["action_prompts"]["idle"]
+    assert "pronounced chest and shoulder breathing" in idle_prompt
+    assert "readable side-to-side weight shift" in idle_prompt
+
 
 def test_klein_view_graphs_use_three_independent_512_square_branches():
     multi = klein_multi_angles_graph()

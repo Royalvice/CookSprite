@@ -178,7 +178,7 @@ actions:
       prompt:
         template: "{action_prompt} Preserve the exact identity, proportions, colors, materials, clothing, armor and silhouette from the reference image. Locked orthographic camera, fixed distance, full-body framing, stable plain background, no floor, no cast shadow, no scenery, no text, no logo, no border. Keep the character centered, in place, with a stable foot baseline and no camera movement."
         action_prompts:
-          idle: "Create a seamless idle loop: gentle breathing, subtle weight shift, and minimal ear or cloth motion."
+          idle: "Create a clearly visible seamless idle loop: pronounced chest and shoulder breathing, a readable side-to-side weight shift, subtle arm and head movement, and visible ear or cloak motion. Use distinct but natural pose changes through the cycle, then return exactly to the starting stance without leaving the frame."
           walk: "Create a seamless in-place walk loop: alternate steps clearly, return each foot to the same baseline, and keep the torso centered."
           run: "Create a seamless in-place run loop: fast alternating strides, readable arm swing, brief airborne phase, and no forward travel."
           jump: "Create an in-place jump loop: crouch, take off, rise, hang briefly, descend, and land back on the same baseline without forward travel."
