@@ -66,6 +66,8 @@ def test_tripview_slices_three_columns_and_normalizes_to_512_square():
     assert graph["slice"]["inputs"]["columns"] == 3
     assert [graph[f"panel_{index}"]["inputs"]["batch_index"] for index in (1, 2, 3)] == [0, 1, 2]
     for index in (1, 2, 3):
+        assert graph[f"panel_crop_{index}"]["inputs"]["width"] == 448
+        assert graph[f"panel_crop_{index}"]["inputs"]["x"] == 32
         assert graph[f"panel_scale_{index}"]["inputs"]["width"] == 256
         assert graph[f"panel_scale_{index}"]["inputs"]["height"] == 512
         assert graph[f"panel_pad_{index}"]["inputs"]["left"] == 128
@@ -80,6 +82,8 @@ def test_quadview_discards_closeup_and_normalizes_three_full_body_panels():
     assert graph["slice"]["inputs"]["columns"] == 4
     assert [graph[f"panel_{index}"]["inputs"]["batch_index"] for index in (1, 2, 3)] == [1, 2, 3]
     for index in (1, 2, 3):
+        assert graph[f"panel_crop_{index}"]["inputs"]["width"] == 288
+        assert graph[f"panel_crop_{index}"]["inputs"]["x"] == 48
         assert graph[f"panel_scale_{index}"]["inputs"]["width"] == 192
         assert graph[f"panel_scale_{index}"]["inputs"]["height"] == 512
         assert graph[f"panel_pad_{index}"]["inputs"]["left"] == 160

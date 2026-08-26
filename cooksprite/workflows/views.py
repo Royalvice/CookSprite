@@ -176,12 +176,24 @@ def _append_panel_normalization(
     refs: list[str] = []
     inner_width = 256 if panel_width == 512 else 192
     pad = (512 - inner_width) // 2
+    edge_crop = 32 if panel_width == 512 else 48
     for index, panel_index in enumerate(panel_indices, start=1):
         pick = f"panel_{index}"
+        crop = f"panel_crop_{index}"
         scale = f"panel_scale_{index}"
         pad_node = f"panel_pad_{index}"
         normalized[pick] = {"class_type": "ImageFromBatch", "inputs": {"image": ["slice", 0], "batch_index": panel_index, "length": 1}}
-        normalized[scale] = {"class_type": "ImageScale", "inputs": {"image": [pick, 0], "upscale_method": "lanczos", "width": inner_width, "height": 512, "crop": "disabled"}}
+        normalized[crop] = {
+            "class_type": "ImageCrop",
+            "inputs": {
+                "image": [pick, 0],
+                "width": panel_width - edge_crop * 2,
+                "height": 1024,
+                "x": edge_crop,
+                "y": 0,
+            },
+        }
+        normalized[scale] = {"class_type": "ImageScale", "inputs": {"image": [crop, 0], "upscale_method": "lanczos", "width": inner_width, "height": 512, "crop": "disabled"}}
         normalized[pad_node] = {"class_type": "ImagePadForOutpaint", "inputs": {"image": [scale, 0], "left": pad, "top": 0, "right": pad, "bottom": 0, "feathering": 0}}
         refs.append(pad_node)
     normalized["batch_12"] = {"class_type": "ImageBatch", "inputs": {"image1": [refs[0], 0], "image2": [refs[1], 0]}}
