@@ -48,7 +48,7 @@ PersistableType = Literal[
     "SpritePair",
     "CookSpritePack",
 ]
-ClipAction = Literal["idle", "walk", "run", "attack", "cast", "hit", "jump", "death"]
+ClipAction = Literal["idle", "walk", "run", "attack", "cast", "hit", "jump", "death", "roll"]
 ViewId = Literal["level", "top45"]
 Direction = Literal["n", "ne", "e", "se", "s", "sw", "w", "nw"]
 
@@ -300,7 +300,7 @@ class ArtifactPatch(BaseModel):
 class FrameSequenceTemporal(BaseModel):
     """Bounded provenance needed to choose a temporal pixel strategy."""
 
-    source: Literal["sampled_video"]
+    source: Literal["sampled_video", "generated_video"]
     sample_fps: float = Field(gt=0.0, le=240.0)
 
 
@@ -311,6 +311,9 @@ class FrameSequenceManifest(BaseModel):
     action: ClipAction | None = None
     view: ViewId | None = None
     direction: Direction | None = None
+    # Generated sequences set this explicitly (H3 uses ``linear``).  Keeping
+    # it optional preserves the v1 wire shape for hand-authored manifests.
+    loop: Literal["none", "linear", "pingpong"] | None = None
     frames: list[str] = Field(min_length=1)
     # Only sampled videos opt into temporal continuity.  Hand-authored Sprite
     # sequences deliberately leave this empty, so automatic pixelization does

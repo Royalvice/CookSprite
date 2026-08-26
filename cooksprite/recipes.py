@@ -31,6 +31,13 @@ from .workflows.normalcrafter import (
     NORMALCRAFTER_PARAMS_SCHEMA,
     NORMALCRAFTER_PROVENANCE,
 )
+from .workflows.minimax_h3 import minimax_h3_first_last_graph
+from .workflows.views import (
+    klein_multi_angles_graph,
+    pure_prompt_graph,
+    quadview_krea_graph,
+    tripview_graph,
+)
 
 RUNTIME_ASSETS_SCHEMA = "cooksprite.runtime-assets/v1"
 RECIPE_SLOT_TYPES = {
@@ -134,6 +141,41 @@ NORMALCRAFTER_SEQUENCE_NODES = {
 }
 NORMALCRAFTER_BATCH_NODES = NORMALCRAFTER_SEQUENCE_NODES | {"CS_NormalCrafterBatch"}
 OFFICIAL_ALPHA_MODEL = "birefnet.safetensors"
+VIEW_COMMON_NODES = {
+    "UNETLoader",
+    "CLIPLoader",
+    "VAELoader",
+    "ImageScale",
+    "VAEEncode",
+    "ReferenceLatent",
+    "ConditioningZeroOut",
+    "CLIPTextEncode",
+    "KSamplerSelect",
+    "Flux2Scheduler",
+    "BasicScheduler",
+    "CFGGuider",
+    "SamplerCustomAdvanced",
+    "EmptyFlux2LatentImage",
+    "VAEDecode",
+    "ImageBatch",
+    "ImageFromBatch",
+    "ImagePadForOutpaint",
+    "CS_SliceSpriteSheet",
+}
+H3_NODES = {
+    "UNETLoader",
+    "CLIPLoader",
+    "VAELoader",
+    "ImageScale",
+    "MiniMaxH3ImageToVideo",
+    "RandomNoise",
+    "KSamplerSelect",
+    "BasicScheduler",
+    "BasicGuider",
+    "EmptyMiniMaxH3LatentAV",
+    "SamplerCustomAdvanced",
+    "VAEDecode",
+}
 T2I_ONLY_CHECKPOINTS = frozenset(
     {
         "z_image_turbo_bf16.safetensors",
@@ -167,6 +209,7 @@ class Recipe:
     model_files: list[dict[str, Any]] = field(default_factory=list)
     provenance: dict[str, Any] = field(default_factory=dict)
     params_schema: dict[str, Any] = field(default_factory=dict)
+    expose_dimensions: bool = True
 
     def dump(self) -> dict[str, Any]:
         return asdict(self)
@@ -208,9 +251,12 @@ def _model_map(report: dict[str, Any]) -> dict[str, list[str]]:
 def _choices(report: dict[str, Any], node_id: str, name: str) -> set[str]:
     spec = (report.get("object_info") or {}).get(node_id) or {}
     value = ((spec.get("input") or {}).get("required") or {}).get(name) or []
-    choices = (
-        value[0] if isinstance(value, list) and value and isinstance(value[0], list) else value
-    )
+    if isinstance(value, list) and value and isinstance(value[0], list):
+        choices = value[0]
+    elif isinstance(value, list) and len(value) > 1 and isinstance(value[1], dict):
+        choices = value[1].get("options") or value
+    else:
+        choices = value
     return {str(item) for item in choices} if isinstance(choices, list) else set()
 
 
@@ -514,6 +560,171 @@ def _flux2_recipes(report: dict[str, Any]) -> list[Recipe]:
     return result
 
 
+def _view_recipe(
+    report: dict[str, Any],
+    *,
+    recipe_id: str,
+    label: str,
+    workflow: dict[str, Any],
+    required_nodes: set[str],
+    required_choices: tuple[tuple[str, str, str], ...],
+    provenance: dict[str, Any],
+    checkpoint: str,
+    output_type: str = "ImageBatch",
+) -> Recipe | None:
+    nodes = set((report.get("object_info") or {}).keys())
+    if not required_nodes.issubset(nodes):
+        return None
+    for node_id, name, expected in required_choices:
+        if expected not in _choices(report, node_id, name):
+            return None
+    return Recipe(
+        id=recipe_id,
+        label=label,
+        family="comfy.views",
+        actions=["image.views"],
+        modes=["i2i"],
+        checkpoint=checkpoint,
+        workflow=workflow,
+        slots={"source": "source_scale.image"},
+        slot_types={"source": "Image"},
+        output=["batch_123", 0],
+        output_name="images",
+        output_type=output_type,
+        source="discovered",
+        provenance=provenance,
+        expose_dimensions=False,
+    )
+
+
+def _view_recipes(report: dict[str, Any]) -> list[Recipe]:
+    """Discover all four declared single-image view adapters."""
+
+    common_choices = (
+        ("UNETLoader", "unet_name", "flux-2-klein-9b-fp8.safetensors"),
+        ("CLIPLoader", "clip_name", "qwen_3_8b_fp8mixed.safetensors"),
+        ("CLIPLoader", "type", "flux2"),
+        ("VAELoader", "vae_name", "flux2-vae.safetensors"),
+    )
+    result: list[Recipe] = []
+    multi = _view_recipe(
+        report,
+        recipe_id="views-multi-angles-klein9b",
+        label="Klein 9B · Multi-Angles LoRA",
+        workflow=klein_multi_angles_graph(),
+        required_nodes=VIEW_COMMON_NODES | {"LoraLoaderModelOnly"},
+        required_choices=common_choices
+        + (("LoraLoaderModelOnly", "lora_name", "multiple-angles-flux-klein-9b.safetensors"),),
+        provenance={"method": "multi_angles_klein9b", "lora": "multiple-angles-flux-klein-9b.safetensors"},
+        checkpoint="flux-2-klein-9b-fp8.safetensors",
+    )
+    if multi:
+        result.append(multi)
+
+    trip = _view_recipe(
+        report,
+        recipe_id="views-tripview-klein9b",
+        label="Klein 9B · TripView LoRA",
+        workflow=tripview_graph(),
+        required_nodes=VIEW_COMMON_NODES | {"LoraLoaderModelOnly"},
+        required_choices=common_choices
+        + (("LoraLoaderModelOnly", "lora_name", "charactersheet_tripleview_klein9b_v1.safetensors"),),
+        provenance={"method": "tripview_klein9b", "lora": "charactersheet_tripleview_klein9b_v1.safetensors"},
+        checkpoint="flux-2-klein-9b-fp8.safetensors",
+    )
+    if trip:
+        result.append(trip)
+
+    krea = _view_recipe(
+        report,
+        recipe_id="views-quadview-krea2",
+        label="Krea-2 · QuadView LoRA",
+        workflow=quadview_krea_graph(),
+        required_nodes={
+            "UNETLoader",
+            "CLIPLoader",
+            "VAELoader",
+            "FluxKontextImageScale",
+            "TextEncodeKrea2OstrisEdit",
+            "FluxKontextMultiReferenceLatentMethod",
+            "Krea2OstrisEditModelPatch",
+            "LoraLoaderModelOnly",
+            "EmptyLatentImage",
+            "KSampler",
+            "VAEDecode",
+            "CS_SliceSpriteSheet",
+            "ImageFromBatch",
+            "ImageScale",
+            "ImagePadForOutpaint",
+            "ImageBatch",
+        },
+        required_choices=(
+            ("UNETLoader", "unet_name", "krea2_turbo_bf16.safetensors"),
+            ("CLIPLoader", "clip_name", "qwen3vl_4b_bf16.safetensors"),
+            ("CLIPLoader", "type", "krea2"),
+            ("VAELoader", "vae_name", "qwen_image_vae.safetensors"),
+            ("LoraLoaderModelOnly", "lora_name", "charactersheet_quadview_krea2_v1.safetensors"),
+        ),
+        provenance={"method": "quadview_krea2", "lora": "charactersheet_quadview_krea2_v1.safetensors"},
+        checkpoint="krea2_turbo_bf16.safetensors",
+    )
+    if krea:
+        result.append(krea)
+
+    pure = _view_recipe(
+        report,
+        recipe_id="views-pure-prompt-klein9b",
+        label="Klein 9B · Reference I2I Prompt",
+        workflow=pure_prompt_graph(),
+        required_nodes=VIEW_COMMON_NODES - {"CS_SliceSpriteSheet", "ImageFromBatch", "ImagePadForOutpaint"},
+        required_choices=common_choices,
+        provenance={"method": "pure_prompt_klein9b", "lora": None},
+        checkpoint="flux-2-klein-9b-fp8.safetensors",
+    )
+    if pure:
+        result.append(pure)
+    return result
+
+
+def _h3_recipe(report: dict[str, Any]) -> Recipe | None:
+    nodes = set((report.get("object_info") or {}).keys())
+    if not H3_NODES.issubset(nodes):
+        return None
+    choices = (
+        ("UNETLoader", "unet_name", "minimax_h3_fl2va_pruned_int8_convrot.safetensors"),
+        ("CLIPLoader", "clip_name", "qwen3vl_32b_minimax_h3_int8_convrot.safetensors"),
+        ("CLIPLoader", "type", "minimax"),
+        ("VAELoader", "vae_name", "minimax_h3_video_vae_fp16.safetensors"),
+        ("KSamplerSelect", "sampler_name", "res_multistep"),
+    )
+    if any(expected not in _choices(report, node_id, name) for node_id, name, expected in choices):
+        return None
+    return Recipe(
+        id="animation-minimax-h3-fl2va-first-last",
+        label="MiniMax H3 · FL2VA first/last frame",
+        family="comfy.minimax-h3",
+        actions=["animation.generate"],
+        modes=["i2v"],
+        priority=200,
+        checkpoint="minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+        workflow=minimax_h3_first_last_graph(),
+        slots={"source": "source_scale.image", "prompt": "h3.prompt", "seed": "noise.noise_seed"},
+        slot_types={"source": "Image", "prompt": "Text", "seed": "Number"},
+        output=["decode", 0],
+        output_name="images",
+        output_type="ImageBatch",
+        source="discovered",
+        provenance={
+            "method": "minimax_h3_fl2va_first_last",
+            "fps": 24,
+            "length": 124,
+            "temporal_source": "generated_video",
+            "loop": "linear",
+        },
+        expose_dimensions=False,
+    )
+
+
 def discover_recipes(report: dict[str, Any]) -> list[Recipe]:
     """Build only recipes whose complete structural requirements are present."""
 
@@ -600,6 +811,9 @@ def discover_recipes(report: dict[str, Any]) -> list[Recipe]:
                 recipes.append(recipe)
 
     recipes.extend(_flux2_recipes(report))
+    recipes.extend(_view_recipes(report))
+    if (h3 := _h3_recipe(report)) is not None:
+        recipes.append(h3)
 
     lotus_bundle = MODEL_BUNDLES[LOTUS_NORMAL_BUNDLE_ID]
     if LOTUS_NORMAL_NODES.issubset(nodes) and all(
@@ -775,7 +989,7 @@ def imported_recipe_is_compatible(recipe: Recipe, report: dict[str, Any]) -> boo
 def recipe_contract_is_valid(recipe: Recipe) -> bool:
     """Validate the small semantic contract used by the generic assembler."""
 
-    if recipe.checkpoint in T2I_ONLY_CHECKPOINTS and any(mode != "t2i" for mode in recipe.modes):
+    if recipe.family in {"comfy.core-checkpoint", "comfy.image.unet"} and recipe.checkpoint in T2I_ONLY_CHECKPOINTS and any(mode != "t2i" for mode in recipe.modes):
         return False
     if not recipe.workflow:
         return True
@@ -839,7 +1053,9 @@ def _runtime_recipe_allowed(recipe: Recipe) -> bool:
     """Prevent stale manifests from reviving unsupported model modes."""
 
     return not (
-        recipe.checkpoint in T2I_ONLY_CHECKPOINTS and any(mode != "t2i" for mode in recipe.modes)
+        recipe.family in {"comfy.core-checkpoint", "comfy.image.unet"}
+        and recipe.checkpoint in T2I_ONLY_CHECKPOINTS
+        and any(mode != "t2i" for mode in recipe.modes)
     )
 
 
@@ -866,6 +1082,7 @@ def recipe_for_model(
     action_id: str,
     inputs: dict[str, list[str]],
     mode: str | None = None,
+    selector_value: str | None = None,
 ) -> Recipe | None:
     """Resolve one model identity to the Recipe matching the current input mode."""
 
@@ -873,15 +1090,17 @@ def recipe_for_model(
     legacy = next((recipe for recipe in recipes if recipe.id == model_id), None)
     if legacy:
         selected_model = str(legacy.checkpoint or legacy.id)
-    return next(
-        (
-            recipe
-            for recipe in recipes
-            if str(recipe.checkpoint or recipe.id) == selected_model
-            and supports(recipe, action_id, inputs, mode=mode)
-        ),
-        None,
-    )
+    candidates = [
+        recipe
+        for recipe in recipes
+        if str(recipe.checkpoint or recipe.id) == selected_model
+        and supports(recipe, action_id, inputs, mode=mode)
+    ]
+    if selector_value is not None:
+        candidates = [
+            recipe for recipe in candidates if recipe.provenance.get("method") == selector_value
+        ]
+    return max(candidates, key=lambda item: item.priority, default=None)
 
 
 def recipe_mode(action_id: str, inputs: dict[str, list[str]]) -> str:

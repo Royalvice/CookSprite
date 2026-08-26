@@ -118,7 +118,7 @@ def with_dimension_slots(recipe: Recipe) -> Recipe:
     family branch or changing the raw workflow contract.
     """
 
-    if not recipe.workflow:
+    if not recipe.workflow or not recipe.expose_dimensions:
         return recipe
     slots = dict(recipe.slots)
     slot_types = dict(recipe.slot_types)

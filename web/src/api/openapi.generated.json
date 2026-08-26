@@ -338,7 +338,8 @@
               "cast",
               "hit",
               "jump",
-              "death"
+              "death",
+              "roll"
             ],
             "title": "Action",
             "type": "string"
@@ -643,7 +644,8 @@
                   "cast",
                   "hit",
                   "jump",
-                  "death"
+                  "death",
+                  "roll"
                 ],
                 "type": "string"
               },
@@ -681,6 +683,22 @@
             "minItems": 1,
             "title": "Frames",
             "type": "array"
+          },
+          "loop": {
+            "anyOf": [
+              {
+                "enum": [
+                  "none",
+                  "linear",
+                  "pingpong"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loop"
           },
           "schema": {
             "const": "cooksprite.frame-sequence/v1",
@@ -730,7 +748,10 @@
             "type": "number"
           },
           "source": {
-            "const": "sampled_video",
+            "enum": [
+              "sampled_video",
+              "generated_video"
+            ],
             "title": "Source",
             "type": "string"
           }
@@ -1691,7 +1712,8 @@
               "cast",
               "hit",
               "jump",
-              "death"
+              "death",
+              "roll"
             ],
             "title": "Action",
             "type": "string"

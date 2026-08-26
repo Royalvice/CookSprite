@@ -20,7 +20,7 @@ const accepts = computed<ArtifactKind[]>(() => {
   return declared ? (Array.isArray(declared) ? declared : [declared]) : [];
 });
 const visibleControls = computed(() => (action.value?.controls || []).filter((control) => !["prompt", "prompt_compile", "view", "direction"].includes(control.id)));
-const motionActions = new Set(["idle", "walk", "run", "jump", "death"]);
+const motionActions = new Set(["idle", "walk", "run", "jump", "roll"]);
 function optionsFor(control: ActionControl) {
   return control.id === "action" ? control.options.filter((option) => motionActions.has(option.id)) : control.options;
 }

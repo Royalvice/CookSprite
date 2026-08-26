@@ -27,6 +27,7 @@ const stage = ref<StudioStage>("create");
 const imageValues = ref<Record<string, unknown>>({});
 const animationValues = ref<Record<string, unknown>>({});
 const animationTask = ref<AnimationTask>("walk");
+const viewMethod = ref("multi_angles_klein9b");
 const inputs = ref<Record<string, string | string[]>>({});
 const selectedArtifact = ref<ArtifactRef | null>(null);
 const transientPreview = ref<ArtifactRef | null>(null);
@@ -58,6 +59,8 @@ const normalParams = ref<Record<string, unknown>>({});
 const imageAction = computed(() => store.actions.find((item) => item.presentation === "image-create"));
 const animationAction = computed(() => store.actions.find((item) => item.presentation === "animation-create"));
 const viewsAction = computed(() => store.actions.find((item) => item.presentation === "image-views"));
+const viewMethodControl = computed(() => viewsAction.value?.controls.find((item) => item.id === "method"));
+const viewMethods = computed(() => viewMethodControl.value?.options || []);
 const normalAction = computed(() => store.actions.find((item) => item.presentation === "normal"));
 const spritePixelAction = computed(() => store.actions.find((item) => item.presentation === "pixel-normal"));
 const activeAction = computed(() => stage.value === "animate" ? animationAction.value : imageAction.value);
@@ -268,6 +271,12 @@ watch(imageAction, (action) => { if (action) fillDefaults(imageValues.value, act
 watch([imageAction, () => store.activeRuntimeId], () => { void applyImageRuntimeDefault(); }, { immediate: true });
 watch(() => [imageValues.value.category, imageValues.value.style], normalizeImageStyleForCategory, { immediate: true });
 watch(animationAction, (action) => { if (action) fillDefaults(animationValues.value, action); }, { immediate: true });
+watch(viewMethodControl, (control) => {
+  const selected = String(viewMethod.value || "");
+  if (control && (!selected || !control.options.some((option) => option.id === selected))) {
+    viewMethod.value = String(control.default || "multi_angles_klein9b");
+  }
+}, { immediate: true });
 watch(spritePixelAction, (action) => { if (action) fillDefaults(normalPixelValues.value, action); }, { immediate: true });
 watch(
   [normalRunAction, normalInputMode, normalEstimatorOptions, () => store.activeRuntimeId],
@@ -346,7 +355,7 @@ function readArtifactDimensions(artifact: ArtifactRef | null) {
 
 watch(() => activeArtifact.value?.id, () => readArtifactDimensions(activeArtifact.value || null), { immediate: true });
 
-watch([stage, imageValues, animationValues, animationTask, normalPixelize, normalPixelValues, normalModel, normalParams, inputs, canvasCleared, fitToCanvas, () => selectedArtifact.value?.id, () => store.activeSequence?.artifact.id], persistWorkspace, { deep: true });
+watch([stage, imageValues, animationValues, animationTask, viewMethod, normalPixelize, normalPixelValues, normalModel, normalParams, inputs, canvasCleared, fitToCanvas, () => selectedArtifact.value?.id, () => store.activeSequence?.artifact.id], persistWorkspace, { deep: true });
 
 onMounted(async () => {
   const projectId = route.params.projectId as string | undefined;
@@ -449,18 +458,16 @@ async function runAnimation() {
   reveal.value = true;
   try {
     if (animationTask.value === "views") {
-      if (viewsAction.value) await store.runAction(viewsAction.value.id, { source: character.value.id }, {});
+      if (viewsAction.value) await store.runAction(viewsAction.value.id, { source: character.value.id }, { method: viewMethod.value });
       return;
     }
     if (!animationAction.value) return;
     const values = {
       ...animationValues.value,
       action: animationTask.value,
-      prompt: "",
-      prompt_compile: false,
+      prompt_compile: true,
       view: "level",
       direction: "s",
-      count: 8,
     };
     await store.runAction(animationAction.value.id, { character: character.value.id }, values);
   }
@@ -550,6 +557,7 @@ function persistWorkspace() {
     imageValues: imageValues.value,
     animationValues: animationValues.value,
     animationTask: animationTask.value,
+    viewMethod: viewMethod.value,
     normalPixelize: normalPixelize.value,
     normalPixelValues: normalPixelValues.value,
     normalModel: normalModel.value,
@@ -570,7 +578,9 @@ async function restoreWorkspace() {
   if (state.imageValues && typeof state.imageValues === "object") Object.assign(imageValues.value, state.imageValues);
   if (state.animationValues && typeof state.animationValues === "object") Object.assign(animationValues.value, state.animationValues);
   const savedAnimationTask = String(state.animationTask || animationValues.value.action || "walk");
-  if (["views", "idle", "walk", "run", "jump", "death"].includes(savedAnimationTask)) animationTask.value = savedAnimationTask as AnimationTask;
+  if (["views", "idle", "walk", "run", "jump", "roll"].includes(savedAnimationTask)) animationTask.value = savedAnimationTask as AnimationTask;
+  const savedViewMethod = String(state.viewMethod || "");
+  if (viewMethods.value.some((option) => option.id === savedViewMethod)) viewMethod.value = savedViewMethod;
   normalPixelize.value = state.normalPixelize === true;
   if (state.normalPixelValues && typeof state.normalPixelValues === "object") Object.assign(normalPixelValues.value, state.normalPixelValues);
   if (typeof state.normalModel === "string") normalModel.value = state.normalModel;
@@ -707,10 +717,13 @@ function downloadPack(artifact: ArtifactRef) { const anchor = document.createEle
             :running="running"
             :can-run="animationTaskCanRun"
             :action-ready="animationTaskReady"
+            :view-method="viewMethod"
+            :view-methods="viewMethods"
             @artifact="acceptArtifact('character', $event)"
             @files="importFiles($event, 'character')"
             @clear="clearAnimationSource"
             @select-task="selectAnimationTask"
+            @select-view-method="(method) => { viewMethod = method; }"
             @run="runAnimation"
           />
           <div v-if="reveal" class="card-reveal animation-reveal" aria-hidden="true"><i></i><span>{{ $t("studio.cooking") }}</span><i></i></div>

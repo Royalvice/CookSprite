@@ -1,7 +1,7 @@
 schema: cooksprite.actions/v1
 control_sets:
   animation_target:
-    - {id: action, type: select, default: walk, i18n: {zh-CN: {name: 目标动作}, en: {name: Target action}}, options: [{id: idle, example_key: motion.idle, i18n: {zh-CN: {name: 待机}, en: {name: Idle}}}, {id: walk, example_key: motion.walk, i18n: {zh-CN: {name: 行走}, en: {name: Walk}}}, {id: run, example_key: motion.run, i18n: {zh-CN: {name: 奔跑}, en: {name: Run}}}, {id: attack, example_key: motion.attack, i18n: {zh-CN: {name: 攻击}, en: {name: Attack}}}, {id: cast, example_key: motion.cast, i18n: {zh-CN: {name: 施法}, en: {name: Cast}}}, {id: hit, example_key: motion.hit, i18n: {zh-CN: {name: 受击}, en: {name: Hit}}}, {id: jump, example_key: motion.jump, i18n: {zh-CN: {name: 跳跃}, en: {name: Jump}}}, {id: death, example_key: motion.death, i18n: {zh-CN: {name: 倒下}, en: {name: Death}}}]}
+    - {id: action, type: select, default: walk, i18n: {zh-CN: {name: 目标动作}, en: {name: Target action}}, options: [{id: idle, example_key: motion.idle, i18n: {zh-CN: {name: 待机}, en: {name: Idle}}}, {id: walk, example_key: motion.walk, i18n: {zh-CN: {name: 行走}, en: {name: Walk}}}, {id: run, example_key: motion.run, i18n: {zh-CN: {name: 奔跑}, en: {name: Run}}}, {id: jump, example_key: motion.jump, i18n: {zh-CN: {name: 跳跃}, en: {name: Jump}}}, {id: roll, example_key: motion.roll, i18n: {zh-CN: {name: 翻滚}, en: {name: Roll}}}]}
     - {id: view, type: select, default: level, i18n: {zh-CN: {name: 目标视角}, en: {name: Target view}}, options: [{id: level, i18n: {zh-CN: {name: 平视正交}, en: {name: Level orthographic}}}, {id: top45, i18n: {zh-CN: {name: 45° 俯视}, en: {name: Top-45 orthographic}}}]}
     - {id: direction, type: select, default: s, i18n: {zh-CN: {name: 目标方向}, en: {name: Target direction}}, options: [{id: n, i18n: {zh-CN: {name: 北}, en: {name: North}}}, {id: ne, i18n: {zh-CN: {name: 东北}, en: {name: North-east}}}, {id: e, i18n: {zh-CN: {name: 东}, en: {name: East}}}, {id: se, i18n: {zh-CN: {name: 东南}, en: {name: South-east}}}, {id: s, i18n: {zh-CN: {name: 南}, en: {name: South}}}, {id: sw, i18n: {zh-CN: {name: 西南}, en: {name: South-west}}}, {id: w, i18n: {zh-CN: {name: 西}, en: {name: West}}}, {id: nw, i18n: {zh-CN: {name: 西北}, en: {name: North-west}}}]}
   palette_budget:
@@ -167,15 +167,22 @@ actions:
     execution:
       capability: video
       project_type: character
-      postprocess: pixelize
       artifact_aliases: {character: source}
       finalizer: frame_sequence
-      allow_duplicate_outputs: true
+      temporal_source: generated_video
+      temporal_fps: 24
+      loop: linear
       modes:
         - {when_input: character, mode: i2v}
         - {mode: t2v}
       prompt:
-        template: "{caption}. Create one consistent {action} animation in place, viewed from {view} toward {direction}. Locked orthographic camera, fixed distance, full-body framing, stable background and shared foot pivot."
+        template: "{action_prompt} Preserve the exact identity, proportions, colors, materials, clothing, armor and silhouette from the reference image. Locked orthographic camera, fixed distance, full-body framing, stable plain background, no floor, no cast shadow, no scenery, no text, no logo, no border. Keep the character centered, in place, with a stable foot baseline and no camera movement."
+        action_prompts:
+          idle: "Create a seamless idle loop: gentle breathing, subtle weight shift, and minimal ear or cloth motion."
+          walk: "Create a seamless in-place walk loop: alternate steps clearly, return each foot to the same baseline, and keep the torso centered."
+          run: "Create a seamless in-place run loop: fast alternating strides, readable arm swing, brief airborne phase, and no forward travel."
+          jump: "Create an in-place jump loop: crouch, take off, rise, hang briefly, descend, and land back on the same baseline without forward travel."
+          roll: "Create an in-place roll loop: tuck, roll fully on the spot, recover, and return to a stable standing pose without leaving the frame."
     control_sets: [animation_target]
     controls:
       - id: prompt
@@ -190,15 +197,6 @@ actions:
         i18n:
           zh-CN: {name: 提示词模板, description: 开启后使用 CookSprite 提示词模板；关闭后原文直传}
           en: {name: Prompt Template, description: Use the CookSprite prompt template; off sends your exact text unchanged}
-      - id: count
-        type: number
-        default: 8
-        min: 1
-        max: 16
-        step: 1
-        i18n:
-          zh-CN: {name: 每轨候选帧, description: 生成后可人工挑选}
-          en: {name: Frames per track, description: Candidates to curate after generation}
       - id: seed
         type: seed
         default: -1
@@ -206,6 +204,16 @@ actions:
         i18n:
           zh-CN: {name: 随机种子, description: -1 表示随机}
           en: {name: Seed, description: -1 means random}
+      - id: count
+        type: number
+        default: 8
+        min: 1
+        max: 124
+        step: 1
+        advanced: true
+        i18n:
+          zh-CN: {name: 候选帧数（兼容）, description: 旧工作流兼容参数；H3 固定输出 124 帧}
+          en: {name: Candidate frames (compatibility), description: Legacy compatibility value; H3 always outputs 124 frames}
   - id: frame.redraw
     i18n:
       zh-CN: {name: 重绘帧, description: 保留原帧并生成可替换变体}
@@ -366,8 +374,28 @@ actions:
     presentation: image-views
     execution:
       capability: image
-      modes: [{mode: i2i-sequence}]
-    controls: []
+      project_type: character
+      finalizer: view_batch
+      model_optional: true
+      recipe_selector: method
+      recipe_bindings:
+        multi_angles_klein9b: views-multi-angles-klein9b
+        tripview_klein9b: views-tripview-klein9b
+        quadview_krea2: views-quadview-krea2
+        pure_prompt_klein9b: views-pure-prompt-klein9b
+      modes: [{when_input: source, mode: i2i}]
+    controls:
+      - id: method
+        type: select
+        default: multi_angles_klein9b
+        i18n:
+          zh-CN: {name: 三视图方法, description: 选择从单图生成正面、侧面和背面的工作流}
+          en: {name: View method, description: Choose the workflow for front, side and back views}
+        options:
+          - {id: multi_angles_klein9b, i18n: {zh-CN: {name: Klein 多角度 LoRA}, en: {name: Klein Multi-Angles LoRA}}}
+          - {id: tripview_klein9b, i18n: {zh-CN: {name: Klein TripView LoRA}, en: {name: Klein TripView LoRA}}}
+          - {id: quadview_krea2, i18n: {zh-CN: {name: Krea-2 QuadView LoRA}, en: {name: Krea-2 QuadView LoRA}}}
+          - {id: pure_prompt_klein9b, i18n: {zh-CN: {name: Klein 纯 Prompt I2I}, en: {name: Klein Prompt-only I2I}}}
 
   - id: image.pixelize
     i18n:

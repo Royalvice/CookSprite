@@ -16,7 +16,7 @@ STILL_ASSETS = {
     "still.effect": "effect.svg",
     "still.smooth": "smooth.svg",
 }
-MOTIONS = ("idle", "walk", "run", "attack", "cast", "hit", "jump", "death")
+MOTIONS = ("idle", "walk", "run", "attack", "cast", "hit", "jump", "death", "roll")
 
 
 def register_action_examples(store: Store) -> dict[str, ArtifactRef]:

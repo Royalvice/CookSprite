@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import {
   PhArrowBendDownRight as Fall,
   PhArrowLineUp as Jump,
@@ -12,11 +13,11 @@ import {
   PhPersonSimpleWalk as PersonSimpleWalk,
   PhSparkle as Sparkle,
 } from "@phosphor-icons/vue";
-import type { ArtifactRef } from "../api/generated";
+import type { ActionOption, ArtifactRef } from "../api/generated";
 import ArtifactVisual from "./ArtifactVisual.vue";
 import DropTarget from "./DropTarget.vue";
 
-export type AnimationTask = "views" | "idle" | "walk" | "run" | "jump" | "death";
+export type AnimationTask = "views" | "idle" | "walk" | "run" | "jump" | "roll";
 
 const props = defineProps<{
   source?: ArtifactRef;
@@ -24,13 +25,17 @@ const props = defineProps<{
   running: boolean;
   canRun: boolean;
   actionReady: boolean;
+  viewMethod: string;
+  viewMethods: ActionOption[];
 }>();
+const { locale } = useI18n();
 
 const emit = defineEmits<{
   artifact: [payload: { artifact_id: string; kind?: string }];
   files: [files: File[]];
   clear: [];
   selectTask: [task: AnimationTask];
+  selectViewMethod: [method: string];
   run: [];
 }>();
 
@@ -40,7 +45,7 @@ const tasks = [
   { id: "walk" as const, icon: PersonSimpleWalk, accent: "walk" },
   { id: "run" as const, icon: PersonSimpleRun, accent: "run" },
   { id: "jump" as const, icon: Jump, accent: "jump" },
-  { id: "death" as const, icon: Fall, accent: "death" },
+  { id: "roll" as const, icon: Fall, accent: "roll" },
 ];
 
 const runLabel = computed(() => props.task === "views" ? "animation.generateViews" : "animation.generateMotion");
@@ -117,6 +122,12 @@ const disabledReason = computed(() => {
             <i aria-hidden="true"></i>
           </button>
         </div>
+        <label v-if="task === 'views' && viewMethods.length" class="animation-method-select">
+          <span>{{ $t("animation.viewMethod") }}</span>
+          <select :value="viewMethod" data-testid="view-method-select" @change="emit('selectViewMethod', ($event.target as HTMLSelectElement).value)">
+            <option v-for="method in viewMethods" :key="method.id" :value="method.id">{{ method.i18n[locale as 'zh-CN' | 'en'].name }}</option>
+          </select>
+        </label>
       </section>
     </div>
 

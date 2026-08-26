@@ -956,51 +956,6 @@
               "i18n": {
                 "en": {
                   "description": "",
-                  "name": "Attack"
-                },
-                "zh-CN": {
-                  "description": "",
-                  "name": "攻击"
-                }
-              },
-              "id": "attack"
-            },
-            {
-              "categories": [],
-              "example": null,
-              "i18n": {
-                "en": {
-                  "description": "",
-                  "name": "Cast"
-                },
-                "zh-CN": {
-                  "description": "",
-                  "name": "施法"
-                }
-              },
-              "id": "cast"
-            },
-            {
-              "categories": [],
-              "example": null,
-              "i18n": {
-                "en": {
-                  "description": "",
-                  "name": "Hit"
-                },
-                "zh-CN": {
-                  "description": "",
-                  "name": "受击"
-                }
-              },
-              "id": "hit"
-            },
-            {
-              "categories": [],
-              "example": null,
-              "i18n": {
-                "en": {
-                  "description": "",
                   "name": "Jump"
                 },
                 "zh-CN": {
@@ -1016,14 +971,14 @@
               "i18n": {
                 "en": {
                   "description": "",
-                  "name": "Death"
+                  "name": "Roll"
                 },
                 "zh-CN": {
                   "description": "",
-                  "name": "倒下"
+                  "name": "翻滚"
                 }
               },
-              "id": "death"
+              "id": "roll"
             }
           ],
           "options_range": null,
@@ -1267,27 +1222,6 @@
           "type": "toggle"
         },
         {
-          "advanced": false,
-          "default": 8,
-          "i18n": {
-            "en": {
-              "description": "Candidates to curate after generation",
-              "name": "Frames per track"
-            },
-            "zh-CN": {
-              "description": "生成后可人工挑选",
-              "name": "每轨候选帧"
-            }
-          },
-          "id": "count",
-          "max": 16.0,
-          "min": 1.0,
-          "options": [],
-          "options_range": null,
-          "step": 1.0,
-          "type": "number"
-        },
-        {
           "advanced": true,
           "default": -1,
           "i18n": {
@@ -1307,6 +1241,27 @@
           "options_range": null,
           "step": null,
           "type": "seed"
+        },
+        {
+          "advanced": true,
+          "default": 8,
+          "i18n": {
+            "en": {
+              "description": "Legacy compatibility value; H3 always outputs 124 frames",
+              "name": "Candidate frames (compatibility)"
+            },
+            "zh-CN": {
+              "description": "旧工作流兼容参数；H3 固定输出 124 帧",
+              "name": "候选帧数（兼容）"
+            }
+          },
+          "id": "count",
+          "max": 124.0,
+          "min": 1.0,
+          "options": [],
+          "options_range": null,
+          "step": 1.0,
+          "type": "number"
         }
       ],
       "i18n": {
@@ -1491,51 +1446,6 @@
               "i18n": {
                 "en": {
                   "description": "",
-                  "name": "Attack"
-                },
-                "zh-CN": {
-                  "description": "",
-                  "name": "攻击"
-                }
-              },
-              "id": "attack"
-            },
-            {
-              "categories": [],
-              "example": null,
-              "i18n": {
-                "en": {
-                  "description": "",
-                  "name": "Cast"
-                },
-                "zh-CN": {
-                  "description": "",
-                  "name": "施法"
-                }
-              },
-              "id": "cast"
-            },
-            {
-              "categories": [],
-              "example": null,
-              "i18n": {
-                "en": {
-                  "description": "",
-                  "name": "Hit"
-                },
-                "zh-CN": {
-                  "description": "",
-                  "name": "受击"
-                }
-              },
-              "id": "hit"
-            },
-            {
-              "categories": [],
-              "example": null,
-              "i18n": {
-                "en": {
-                  "description": "",
                   "name": "Jump"
                 },
                 "zh-CN": {
@@ -1551,14 +1461,14 @@
               "i18n": {
                 "en": {
                   "description": "",
-                  "name": "Death"
+                  "name": "Roll"
                 },
                 "zh-CN": {
                   "description": "",
-                  "name": "倒下"
+                  "name": "翻滚"
                 }
               },
-              "id": "death"
+              "id": "roll"
             }
           ],
           "options_range": null,
@@ -2000,51 +1910,6 @@
               "i18n": {
                 "en": {
                   "description": "",
-                  "name": "Attack"
-                },
-                "zh-CN": {
-                  "description": "",
-                  "name": "攻击"
-                }
-              },
-              "id": "attack"
-            },
-            {
-              "categories": [],
-              "example": null,
-              "i18n": {
-                "en": {
-                  "description": "",
-                  "name": "Cast"
-                },
-                "zh-CN": {
-                  "description": "",
-                  "name": "施法"
-                }
-              },
-              "id": "cast"
-            },
-            {
-              "categories": [],
-              "example": null,
-              "i18n": {
-                "en": {
-                  "description": "",
-                  "name": "Hit"
-                },
-                "zh-CN": {
-                  "description": "",
-                  "name": "受击"
-                }
-              },
-              "id": "hit"
-            },
-            {
-              "categories": [],
-              "example": null,
-              "i18n": {
-                "en": {
-                  "description": "",
                   "name": "Jump"
                 },
                 "zh-CN": {
@@ -2060,14 +1925,14 @@
               "i18n": {
                 "en": {
                   "description": "",
-                  "name": "Death"
+                  "name": "Roll"
                 },
                 "zh-CN": {
                   "description": "",
-                  "name": "倒下"
+                  "name": "翻滚"
                 }
               },
-              "id": "death"
+              "id": "roll"
             }
           ],
           "options_range": null,
@@ -2671,7 +2536,90 @@
           "type": "Image"
         }
       },
-      "controls": [],
+      "controls": [
+        {
+          "advanced": false,
+          "default": "multi_angles_klein9b",
+          "i18n": {
+            "en": {
+              "description": "Choose the workflow for front",
+              "name": "View method"
+            },
+            "zh-CN": {
+              "description": "选择从单图生成正面、侧面和背面的工作流",
+              "name": "三视图方法"
+            }
+          },
+          "id": "method",
+          "max": null,
+          "min": null,
+          "options": [
+            {
+              "categories": [],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Klein Multi-Angles LoRA"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "Klein 多角度 LoRA"
+                }
+              },
+              "id": "multi_angles_klein9b"
+            },
+            {
+              "categories": [],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Klein TripView LoRA"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "Klein TripView LoRA"
+                }
+              },
+              "id": "tripview_klein9b"
+            },
+            {
+              "categories": [],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Krea-2 QuadView LoRA"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "Krea-2 QuadView LoRA"
+                }
+              },
+              "id": "quadview_krea2"
+            },
+            {
+              "categories": [],
+              "example": null,
+              "i18n": {
+                "en": {
+                  "description": "",
+                  "name": "Klein Prompt-only I2I"
+                },
+                "zh-CN": {
+                  "description": "",
+                  "name": "Klein 纯 Prompt I2I"
+                }
+              },
+              "id": "pure_prompt_klein9b"
+            }
+          ],
+          "options_range": null,
+          "step": null,
+          "type": "select"
+        }
+      ],
       "i18n": {
         "en": {
           "description": "Create a batch of views from one reference image",

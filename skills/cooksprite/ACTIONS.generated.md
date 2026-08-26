@@ -4,13 +4,13 @@
 | Action | Inputs | Values | Outputs |
 | --- | --- | --- | --- |
 | `image.generate` | `reference:Image` | `category`, `style`, `prompt`, `prompt_compile`, `resolution`, `strength`, `count`, `seed` | `Image` |
-| `animation.generate` | `character:Image` | `action`, `view`, `direction`, `prompt`, `prompt_compile`, `count`, `seed` | `FrameSeq` |
+| `animation.generate` | `character:Image` | `action`, `view`, `direction`, `prompt`, `prompt_compile`, `seed`, `count` | `FrameSeq` |
 | `frame.redraw` | `frame:Image` | `prompt`, `strength`, `count` | `ImageBatch` |
 | `sheet.slice` | `sheet:SpriteSheet` | `action`, `view`, `direction`, `columns`, `rows`, `frame_width`, `frame_height`, `margin`, `spacing`, `exclude_empty` | `FrameSeq` |
 | `video.sample` | `video:Video` | `action`, `view`, `direction`, `sample_fps`, `max_frames` | `FrameSeq` |
 | `normal.generate` | `source:['Image', 'FrameSeq', 'SpriteSheet']`, `pixel_plan:PixelGeometryPlan` | `strength`, `flip_y`, `frame_index` | `NormalMap` |
 | `sprite.pixelize` | `source:['Image', 'FrameSeq', 'SpriteSheet']` | `palette_budget`, `strength`, `flip_y`, `target_size`, `outline`, `outline_color` | `Image`, `FrameSeq`, `NormalMap` |
-| `image.views` | `source:Image` | - | `ImageBatch` |
+| `image.views` | `source:Image` | `method` | `ImageBatch` |
 | `image.pixelize` | `source:['Image', 'FrameSeq']` | `palette_budget`, `target_size`, `outline`, `outline_color`, `temporal_mode` | `Image`, `FrameSeq` |
 | `image.cutout` | `source:Image` | - | `Image` |
 

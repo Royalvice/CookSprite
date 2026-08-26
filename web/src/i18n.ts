@@ -191,6 +191,7 @@ export const i18n = createI18n({
         readyHint: "CookSprite API 会自动选择工作流和内部参数",
         generateViews: "生成三视图",
         generateMotion: "生成{action}候选帧",
+        viewMethod: "三视图工作流",
         viewResults: "本次三视图",
         viewResultsHint: "选择任意一张继续制作，也可以直接拖到其它图片输入。",
         savedSequences: "已有动画",
@@ -201,7 +202,7 @@ export const i18n = createI18n({
           walk: { name: "行走", description: "清晰落脚、适合循环的行走动作" },
           run: { name: "奔跑", description: "更强摆臂和腾空感的奔跑动作" },
           jump: { name: "跳跃", description: "起跳、腾空和落地关键阶段" },
-          death: { name: "倒下", description: "失衡到落地的非循环动作" },
+          roll: { name: "翻滚", description: "原地完成翻滚并回到稳定姿态" },
         },
       },
       frames: {
@@ -477,6 +478,7 @@ export const i18n = createI18n({
         readyHint: "CookSprite API chooses the workflow and internal parameters",
         generateViews: "Create three views",
         generateMotion: "Create {action} candidates",
+        viewMethod: "View workflow",
         viewResults: "Three-view results",
         viewResultsHint: "Choose one to continue or drag it into another image input.",
         savedSequences: "Saved animations",
@@ -487,7 +489,7 @@ export const i18n = createI18n({
           walk: { name: "Walk", description: "Readable footfalls for a clean loop" },
           run: { name: "Run", description: "Stronger arm swing and airborne motion" },
           jump: { name: "Jump", description: "Takeoff, air, and landing key phases" },
-          death: { name: "Fall", description: "A non-looping loss of balance and fall" },
+          roll: { name: "Roll", description: "Complete an in-place roll and recover" },
         },
       },
       frames: {

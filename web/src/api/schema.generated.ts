@@ -764,7 +764,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "idle" | "walk" | "run" | "attack" | "cast" | "hit" | "jump" | "death";
+            action: "idle" | "walk" | "run" | "attack" | "cast" | "hit" | "jump" | "death" | "roll";
             /** Id */
             id: string;
             /**
@@ -896,11 +896,13 @@ export interface components {
         /** FrameSequenceManifest */
         FrameSequenceManifest: {
             /** Action */
-            action?: ("idle" | "walk" | "run" | "attack" | "cast" | "hit" | "jump" | "death") | null;
+            action?: ("idle" | "walk" | "run" | "attack" | "cast" | "hit" | "jump" | "death" | "roll") | null;
             /** Direction */
             direction?: ("n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw") | null;
             /** Frames */
             frames: string[];
+            /** Loop */
+            loop?: ("none" | "linear" | "pingpong") | null;
             /**
              * Schema
              * @default cooksprite.frame-sequence/v1
@@ -920,9 +922,9 @@ export interface components {
             sample_fps: number;
             /**
              * Source
-             * @constant
+             * @enum {string}
              */
-            source: "sampled_video";
+            source: "sampled_video" | "generated_video";
         };
         /** FrameSequenceView */
         FrameSequenceView: {
@@ -1335,7 +1337,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "idle" | "walk" | "run" | "attack" | "cast" | "hit" | "jump" | "death";
+            action: "idle" | "walk" | "run" | "attack" | "cast" | "hit" | "jump" | "death" | "roll";
             /**
              * Direction
              * @enum {string}

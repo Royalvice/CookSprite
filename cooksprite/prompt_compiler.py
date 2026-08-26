@@ -42,15 +42,24 @@ class PromptCompiler:
         template_key = "edit_template" if mode in {"i2i", "i2v"} and profile.get("edit_template") else "template"
         template = str(profile.get(template_key) or "{caption}")
         category = str(values.get("category") or "character")
+        action_id_value = str(values.get("action") or values.get("animation") or "idle")
+        action_prompts = profile.get("action_prompts") or {}
+        action_prompt = str(action_prompts.get(action_id_value) or "").strip()
+        custom_prompt = _clean(values.get("prompt") or "")
+        if action_prompt and custom_prompt:
+            action_prompt = f"{action_prompt} Additional requirements: {custom_prompt}."
+        elif not action_prompt:
+            action_prompt = custom_prompt
         style_id = self._style_id(action_id, category, str(values.get("style") or ""), profile)
         style = self._option_description(action_id, "style", style_id)
         contract = str((profile.get("contracts") or {}).get(category) or "Show one complete asset")
         bindings = {
             "caption": caption,
+            "action_prompt": action_prompt,
             "category": category,
             "style": style or style_id,
             "contract": contract,
-            "action": str(values.get("action") or "idle").replace("_", " "),
+            "action": action_id_value.replace("_", " "),
             "view": str(values.get("view") or "level").replace("_", " "),
             "direction": str(values.get("direction") or "s").replace("_", " "),
         }

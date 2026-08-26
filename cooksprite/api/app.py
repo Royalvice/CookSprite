@@ -1127,10 +1127,19 @@ def create_app(
         target_action = target_value(values, "action")
         view = target_value(values, "view")
         direction = target_value(values, "direction")
-        temporal_source = registry.execution(action_id).get("temporal_source")
+        policy = registry.execution(action_id)
+        provenance = json.loads(record.get("provenance") or "{}") if record else {}
+        recipe_metadata = provenance.get("recipe_metadata") or {}
+        temporal_source = recipe_metadata.get("temporal_source")
         temporal = (
             FrameSequenceTemporal(
-                source=temporal_source, sample_fps=float(values.get("sample_fps", 12))
+                source=temporal_source,
+                sample_fps=float(
+                    values.get(
+                        "sample_fps",
+                        recipe_metadata.get("fps", policy.get("temporal_fps", 12)),
+                    )
+                ),
             )
             if temporal_source
             else None
@@ -1140,6 +1149,7 @@ def create_app(
             view=view,
             direction=direction,
             frames=frames,
+            loop=(str(values.get("loop") or recipe_metadata.get("loop")) if recipe_metadata.get("loop") else None),
             temporal=temporal,
         )
         payload = manifest.model_dump_json(by_alias=True, exclude_none=False).encode()
@@ -1165,6 +1175,52 @@ def create_app(
         )
         store.set_run_artifacts(run_id, [sequence.id])
         return sequence
+
+    def finalize_view_batch(
+        run_id: str,
+        action_id: str,
+        project_id: str,
+        values: dict[str, Any],
+    ) -> None:
+        """Expose a sealed ImageBatch as three ordered view Artifacts."""
+
+        record = store.run(run_id)
+        output_ids = json.loads(record.get("artifacts") or "[]") if record else []
+        rows = store.artifacts_by_ids(output_ids)
+        images = [
+            artifact_id
+            for artifact_id in output_ids
+            if rows.get(artifact_id, {}).get("kind") == "Image"
+        ]
+        images.sort(
+            key=lambda artifact_id: int(
+                json.loads(rows[artifact_id].get("meta") or "{}").get("output_index", 0)
+            )
+        )
+        if len(images) != 3:
+            raise RuntimeError(f"ComfyUI view workflow returned {len(images)} images; expected 3")
+        method = str(values.get("method") or "multi_angles_klein9b")
+        yaws = (0, 90, 180)
+        updates: dict[str, dict[str, Any]] = {}
+        for index, (artifact_id, view, yaw) in enumerate(zip(images, ("front", "side", "back"), yaws, strict=True)):
+            row = rows[artifact_id]
+            meta = json.loads(row.get("meta") or "{}")
+            meta.update(
+                {
+                    "view": view,
+                    "view_index": index,
+                    "method": method,
+                    "camera": {
+                        "projection": "orthographic",
+                        "yaw_deg": yaw,
+                        "pitch_deg": 0,
+                        "roll_deg": 0,
+                    },
+                }
+            )
+            updates[artifact_id] = meta
+        store.update_artifact_meta_many(updates)
+        store.set_run_artifacts(run_id, images)
 
     def order_normal_outputs(run_id: str, source_ids: list[str]) -> None:
         record = store.run(run_id)
@@ -1549,6 +1605,15 @@ def create_app(
     ) -> Callable[[], None]:
         return lambda: finalize_frame_sequence(run_id, action_id, project_id, values)
 
+    def view_batch_finalizer(
+        run_id: str,
+        action_id: str,
+        inputs: dict[str, list[str]],
+        values: dict[str, Any],
+        project_id: str,
+    ) -> Callable[[], None]:
+        return lambda: finalize_view_batch(run_id, action_id, project_id, values)
+
     def sprite_pair_finalizer(
         run_id: str,
         action_id: str,
@@ -1619,6 +1684,7 @@ def create_app(
         ],
     ] = {
         "frame_sequence": frame_sequence_finalizer,
+        "view_batch": view_batch_finalizer,
         "sprite_pair": sprite_pair_finalizer,
         "pixelize_sequence": pixelize_sequence_finalizer,
         "normal": normal_finalizer,
@@ -1866,6 +1932,21 @@ def create_app(
                 ),
             )
         action_mode = registry.mode(action_id, compile_inputs)
+        selector_value = None
+        selector_name = str(policy.get("recipe_selector") or "")
+        if selector_name:
+            raw_selector = values.get(selector_name)
+            selector_value = str(raw_selector) if raw_selector is not None else None
+        if not values.get("model") and descriptor.models and policy.get("model_optional"):
+            candidates = [
+                recipe
+                for recipe in runtime_recipes
+                if supports(recipe, action_id, compile_inputs, mode=action_mode)
+                and (selector_value is None or recipe.provenance.get("method") == selector_value)
+            ]
+            selected = max(candidates, key=lambda item: item.priority, default=None)
+            if selected:
+                values["model"] = f"{runtime['id']}:{selected.checkpoint or selected.id}"
         if not values.get("model") and descriptor.models:
             binding = runtime_mode_defaults(runtime, runtime_recipes).get(action_id, {}).get(
                 action_mode
@@ -1909,7 +1990,12 @@ def create_app(
                 ),
             )
         selected_recipe = recipe_for_model(
-            runtime_recipes, model_id, action_id, compile_inputs, mode=action_mode
+            runtime_recipes,
+            model_id,
+            action_id,
+            compile_inputs,
+            mode=action_mode,
+            selector_value=selector_value,
         )
         if not selected_recipe:
             raise HTTPException(
@@ -1975,6 +2061,7 @@ def create_app(
         provenance = {
             "action": action_id,
             "recipe": selected_recipe.id,
+            "recipe_metadata": selected_recipe.provenance,
             "task": {"id": task_revision.id, "revision": task_revision.revision},
             "workflows": [
                 {"id": workflow.id, "revision": workflow.revision}

@@ -90,6 +90,25 @@ class CookSpriteRegistry:
     def execution(self, action_id: str) -> dict[str, Any]:
         return dict(self._policies.get(action_id) or {})
 
+    def recipe_binding(self, action_id: str, values: dict[str, Any]) -> str | None:
+        """Return a declared Recipe id for a selector control, if any.
+
+        Recipe selection stays declarative in ``actions.yaml``.  API callers
+        do not need model-family branches when a stable Action exposes
+        multiple private workflow implementations.
+        """
+
+        policy = self.execution(action_id)
+        selector = str(policy.get("recipe_selector") or "")
+        bindings = policy.get("recipe_bindings") or {}
+        if not selector or not isinstance(bindings, dict):
+            return None
+        selected = values.get(selector)
+        if selected is None:
+            return None
+        recipe_id = bindings.get(str(selected))
+        return str(recipe_id) if recipe_id else None
+
     def mode(self, action_id: str, inputs: dict[str, list[str]]) -> str:
         for rule in self.execution(action_id).get("modes", []):
             if not isinstance(rule, dict) or not rule.get("mode"):
@@ -165,6 +184,13 @@ class CookSpriteRegistry:
                     )
         ready = bool(runtime and runtime.get("snapshot"))
         compatible = [recipe for recipe in recipes if supports(recipe, action.id)]
+        # Prefer a real reference-video adapter whenever the runtime exposes
+        # one.  Legacy text/image fallbacks remain visible only on runtimes
+        # that have no i2v-capable Recipe at all.
+        if action.id == "animation.generate":
+            i2v = [recipe for recipe in compatible if "i2v" in recipe.modes]
+            if i2v:
+                compatible = i2v
         available = ready and bool(compatible)
         if not ready:
             reason = "runtime_not_ready"

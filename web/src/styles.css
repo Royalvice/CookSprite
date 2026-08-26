@@ -951,6 +951,9 @@ h2 { font-size: 21px; }
 .animation-source-confirm > span { display: grid; gap: 2px; padding: 0 3px; }
 .animation-source-confirm small { color: var(--muted); }
 .animation-task-grid { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.animation-method-select { display: grid; gap: 6px; margin-top: 12px; max-width: 420px; }
+.animation-method-select span { color: var(--aux); font: 9px "Fusion Pixel", monospace; text-transform: uppercase; letter-spacing: .08em; }
+.animation-method-select select { min-height: 42px; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 0 12px; font: inherit; }
 .animation-task-card { position: relative; min-width: 0; min-height: 92px; display: grid; grid-template-columns: 42px minmax(0, 1fr); align-items: center; gap: 10px; overflow: hidden; border: 1px solid var(--line); background: var(--bg); color: var(--muted); padding: 12px; text-align: left; }
 .animation-task-card:first-child { grid-column: 1 / -1; min-height: 84px; }
 .animation-task-card::after { position: absolute; inset: auto 0 0; height: 3px; content: ""; background: var(--aux); opacity: 0; transform: scaleX(.25); transform-origin: left; transition: opacity .14s ease, transform .14s ease; }
@@ -967,7 +970,7 @@ h2 { font-size: 21px; }
 .animation-task-card.motion-walk:hover .animation-task-icon svg { animation: example-walk .62s steps(4) infinite; }
 .animation-task-card.motion-run:hover .animation-task-icon svg { animation: example-walk .42s steps(4) infinite; }
 .animation-task-card.motion-jump:hover .animation-task-icon svg { animation: example-jump .8s steps(4) infinite; }
-.animation-task-card.motion-death:hover .animation-task-icon svg { animation: example-death 1.15s steps(4) infinite; }
+.animation-task-card.motion-roll:hover .animation-task-icon svg { animation: example-roll 1.15s steps(4) infinite; }
 .animation-run-bar { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(250px, 420px); align-items: stretch; border-top: 1px solid var(--line-strong); background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
 .animation-run-bar > div { min-width: 0; display: grid; align-content: center; gap: 4px; padding: 14px 20px; }
 .animation-run-bar small { color: var(--muted); }
@@ -1096,14 +1099,14 @@ h2 { font-size: 21px; }
 .hover-example.motion-run .hover-example-stage img { animation-duration: .42s; }
 .hover-example.motion-attack .hover-example-stage img, .hover-example.motion-hit .hover-example-stage img, .hover-example.motion-utensil_attack .hover-example-stage img { animation-name: example-attack; animation-duration: .7s; }
 .hover-example.motion-jump .hover-example-stage img { animation-name: example-jump; animation-duration: .8s; }
-.hover-example.motion-death .hover-example-stage img { animation-name: example-death; animation-duration: 1.15s; }
+.hover-example.motion-roll .hover-example-stage img { animation-name: example-roll; animation-duration: 1.15s; }
 .hover-example.motion-cast .hover-example-stage img, .hover-example.motion-cooking_vfx .hover-example-stage img { animation-name: example-cast; animation-duration: .75s; }
 @keyframes hover-example-in { from { opacity: 0; transform: translateY(5px) scale(.98); } }
 @keyframes example-idle { 0%, 100% { transform: translateY(0) scaleY(1); } 50% { transform: translateY(-5px) scaleY(1.025); } }
 @keyframes example-walk { 0%, 100% { transform: translate(-8px, 0) rotate(-1deg); } 50% { transform: translate(8px, -5px) rotate(1deg); } }
 @keyframes example-attack { 0%, 35% { transform: translateX(-9px) rotate(-3deg); } 55%, 75% { transform: translateX(12px) rotate(4deg) scale(1.04); } 100% { transform: translateX(-9px) rotate(-3deg); } }
 @keyframes example-jump { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-28px) rotate(2deg); } }
-@keyframes example-death { 0%, 55% { transform: rotate(0); } 85%, 100% { transform: translateY(16px) rotate(82deg); } }
+@keyframes example-roll { 0%, 20% { transform: rotate(0); } 60% { transform: translateX(8px) rotate(180deg); } 100% { transform: rotate(360deg); } }
 @keyframes example-cast { 0%, 100% { transform: scale(1) rotate(-2deg); filter: drop-shadow(0 0 0 var(--aux)); } 50% { transform: scale(1.08) rotate(2deg); filter: drop-shadow(0 0 12px var(--aux)); } }
 @keyframes example-shadow { 50% { width: 40%; opacity: .55; } }
 

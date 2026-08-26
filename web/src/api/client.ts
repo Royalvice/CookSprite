@@ -55,11 +55,12 @@ export interface FrameSequenceManifest {
   action?: AnimationClip["action"];
   view?: "level" | "top45";
   direction?: Direction;
+  loop?: "none" | "linear" | "pingpong";
   frames: string[];
   temporal?: FrameSequenceTemporal;
 }
 export interface FrameSequenceTemporal {
-  source: "sampled_video";
+  source: "sampled_video" | "generated_video";
   sample_fps: number;
 }
 export interface PixelGeometryPlanFrame {
@@ -159,7 +160,7 @@ export interface ViewTrack { id: "level" | "top45"; enabled: boolean; tracks: Di
 export interface AnimationClip {
   id: string;
   name: string;
-  action: "idle" | "walk" | "run" | "attack" | "cast" | "hit" | "jump" | "death";
+  action: "idle" | "walk" | "run" | "attack" | "cast" | "hit" | "jump" | "death" | "roll";
   loop: "none" | "linear" | "pingpong";
   views: ViewTrack[];
 }
