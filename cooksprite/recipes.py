@@ -626,7 +626,7 @@ def _view_recipes(report: dict[str, Any]) -> list[Recipe]:
         recipe_id="views-tripview-klein9b",
         label="Klein 9B · TripView LoRA",
         workflow=tripview_graph(),
-        required_nodes=VIEW_COMMON_NODES | {"LoraLoaderModelOnly"},
+        required_nodes=VIEW_COMMON_NODES | {"LoraLoaderModelOnly", "ImageCrop"},
         required_choices=common_choices
         + (("LoraLoaderModelOnly", "lora_name", "charactersheet_tripleview_klein9b_v1.safetensors"),),
         provenance={"method": "tripview_klein9b", "lora": "charactersheet_tripleview_klein9b_v1.safetensors"},
@@ -655,6 +655,7 @@ def _view_recipes(report: dict[str, Any]) -> list[Recipe]:
             "CS_SliceSpriteSheet",
             "ImageFromBatch",
             "ImageScale",
+            "ImageCrop",
             "ImagePadForOutpaint",
             "ImageBatch",
         },
