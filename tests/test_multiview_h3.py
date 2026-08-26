@@ -41,20 +41,28 @@ def test_registry_exposes_four_view_methods_and_five_h3_actions():
 
 
 def test_klein_view_graphs_use_three_independent_512_square_branches():
-    for graph in (klein_multi_angles_graph(), pure_prompt_graph()):
+    multi = klein_multi_angles_graph()
+    pure = pure_prompt_graph()
+    for graph in (multi, pure):
         assert graph["latent"]["inputs"] == {"width": 512, "height": 512, "batch_size": 1}
         for index in (1, 2, 3):
             assert graph[f"noise_{index}"]["class_type"] == "RandomNoise"
             assert graph[f"decode_{index}"]["class_type"] == "VAEDecode"
         assert graph["batch_123"]["class_type"] == "ImageBatch"
 
-    assert "lora" in klein_multi_angles_graph()
-    assert not any(node["class_type"].startswith("LoraLoader") for node in pure_prompt_graph().values())
+    assert "lora" in multi
+    assert "<sks>" in multi["positive_2"]["inputs"]["text"]
+    assert "strict right-side profile" in multi["positive_2"]["inputs"]["text"]
+    assert "exactly perpendicular" in multi["positive_2"]["inputs"]["text"]
+    assert not any(node["class_type"].startswith("LoraLoader") for node in pure.values())
+    assert "strict right-side profile" in pure["positive_2"]["inputs"]["text"]
 
 
 def test_tripview_slices_three_columns_and_normalizes_to_512_square():
     graph = tripview_graph()
     assert graph["latent"]["inputs"] == {"width": 1536, "height": 1024, "batch_size": 1}
+    assert "strict right-side profile" in graph["positive"]["inputs"]["text"]
+    assert "exactly 90 degrees" in graph["positive"]["inputs"]["text"]
     assert graph["slice"]["inputs"]["columns"] == 3
     assert [graph[f"panel_{index}"]["inputs"]["batch_index"] for index in (1, 2, 3)] == [0, 1, 2]
     for index in (1, 2, 3):
@@ -67,6 +75,8 @@ def test_tripview_slices_three_columns_and_normalizes_to_512_square():
 def test_quadview_discards_closeup_and_normalizes_three_full_body_panels():
     graph = quadview_krea_graph()
     assert graph["latent"]["inputs"] == {"width": 1536, "height": 1024, "batch_size": 1}
+    assert "strict right-side profile" in graph["positive"]["inputs"]["prompt"]
+    assert "exactly 90 degrees" in graph["positive"]["inputs"]["prompt"]
     assert graph["slice"]["inputs"]["columns"] == 4
     assert [graph[f"panel_{index}"]["inputs"]["batch_index"] for index in (1, 2, 3)] == [1, 2, 3]
     for index in (1, 2, 3):

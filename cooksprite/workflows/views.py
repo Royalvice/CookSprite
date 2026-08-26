@@ -23,10 +23,27 @@ _IDENTITY = (
 
 def _camera_prompt(view: str, *, pure_prompt: bool = False) -> str:
     yaw = VIEW_YAWS[view]
-    prefix = "Use the reference image as the single identity source. Change only the camera viewpoint. " if pure_prompt else ""
+    prefix = (
+        "Use the reference image as the single identity source. Change only the camera viewpoint. "
+        if pure_prompt
+        else "<sks> "
+    )
+    viewpoint = {
+        "front": (
+            "strict front orthographic view, shoulders and hips facing the camera symmetrically"
+        ),
+        "side": (
+            "strict right-side profile, facing screen right, camera exactly perpendicular to the "
+            "character; show only one side of the face and body, never a front or three-quarter view"
+        ),
+        "back": (
+            "strict rear orthographic view; show only the back of the head and rear outfit, with no "
+            "face, eyes or front armor"
+        ),
+    }[view]
     return (
         f"{prefix}Camera contract: orthographic projection, yaw={yaw} degrees, pitch=+0 degrees, "
-        f"roll=0 degrees; {view} view, eye-level camera, fixed camera. {_IDENTITY}"
+        f"roll=0 degrees; {viewpoint}, eye-level camera, fixed camera. {_IDENTITY}"
     )
 
 
@@ -116,7 +133,7 @@ def tripview_graph() -> dict[str, dict[str, Any]]:
         "source_scale": {"class_type": "ImageScale", "inputs": {"image": "", "upscale_method": "nearest-exact", "width": 512, "height": 512, "crop": "disabled"}},
         "source_encode": {"class_type": "VAEEncode", "inputs": {"pixels": ["source_scale", 0], "vae": ["vae", 0]}},
         "lora": {"class_type": "LoraLoaderModelOnly", "inputs": {"model": ["model", 0], "lora_name": "charactersheet_tripleview_klein9b_v1.safetensors", "strength_model": 1.0}},
-        "positive": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["clip", 0], "text": "Convert the character in the image to a Character Sheet showing front, strict side profile and rear full-body views. Preserve the character identity, proportions, materials and distinctive features exactly. Preserve the eye-level orthographic camera height across all views. Use one plain light gray background, no floor, no cast shadow, no scenery, no text, no logo and no border."}},
+        "positive": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["clip", 0], "text": "Convert the character in the image to a Character Sheet showing a strict front view, a strict right-side profile facing screen right, and a strict rear full-body view. The side panel must be exactly 90 degrees to the camera, with only one side of the face and body visible, never a front or three-quarter angle. Preserve the character identity, proportions, materials and distinctive features exactly. Preserve the eye-level orthographic camera height across all views. Use one plain light gray background, no floor, no cast shadow, no scenery, no text, no logo and no border."}},
         "negative": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["clip", 0], "text": "bad quality, noise, blurry, distortion, unnatural blending"}},
         "positive_ref": {"class_type": "ReferenceLatent", "inputs": {"conditioning": ["positive", 0], "latent": ["source_encode", 0]}},
         "negative_ref": {"class_type": "ReferenceLatent", "inputs": {"conditioning": ["negative", 0], "latent": ["source_encode", 0]}},
@@ -138,7 +155,7 @@ def quadview_krea_graph() -> dict[str, dict[str, Any]]:
         "clip": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen3vl_4b_bf16.safetensors", "type": "krea2", "device": "default"}},
         "vae": {"class_type": "VAELoader", "inputs": {"vae_name": "qwen_image_vae.safetensors"}},
         "source_scale": {"class_type": "FluxKontextImageScale", "inputs": {"image": ""}},
-        "positive": {"class_type": "TextEncodeKrea2OstrisEdit", "inputs": {"clip": ["clip", 0], "prompt": "Convert the character in the image to a Character Sheet showing a face close-up, front full body, side full body and back full body views. Preserve the character identity, proportions, materials and distinctive features exactly. Preserve the eye-level orthographic camera height across all views. Use one plain light gray background, no floor, no cast shadow, no scenery, no text, no logo and no border.", "vae": ["vae", 0], "image1": ["source_scale", 0]}},
+        "positive": {"class_type": "TextEncodeKrea2OstrisEdit", "inputs": {"clip": ["clip", 0], "prompt": "Convert the character in the image to a Character Sheet showing a face close-up, a strict front full-body view, a strict right-side profile facing screen right, and a strict rear full-body view. The side panel must be exactly 90 degrees to the camera, with only one side of the face and body visible, never a front or three-quarter angle. Preserve the character identity, proportions, materials and distinctive features exactly. Preserve the eye-level orthographic camera height across all views. Use one plain light gray background, no floor, no cast shadow, no scenery, no text, no logo and no border.", "vae": ["vae", 0], "image1": ["source_scale", 0]}},
         "positive_ref": {"class_type": "FluxKontextMultiReferenceLatentMethod", "inputs": {"conditioning": ["positive", 0], "reference_latents_method": "index_timestep_zero"}},
         "negative": {"class_type": "TextEncodeKrea2OstrisEdit", "inputs": {"clip": ["clip", 0], "prompt": "", "vae": ["vae", 0], "image1": ["source_scale", 0]}},
         "negative_ref": {"class_type": "FluxKontextMultiReferenceLatentMethod", "inputs": {"conditioning": ["negative", 0], "reference_latents_method": "index_timestep_zero"}},
